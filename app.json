@@ -1,0 +1,77 @@
+{
+  "expo": {
+    "name": "CityDropTaxi",
+    "slug": "cabtaxi-mobile",
+    "scheme": "citydroptaxi",
+    "version": "1.0.1",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.citydroptaxi.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "CityDropTaxi needs your location to show nearby drivers and track your ride.",
+        "NSLocationAlwaysUsageDescription": "CityDropTaxi needs your location to provide live driver tracking.",
+        "NSCameraUsageDescription": "CityDropTaxi needs camera access for profile avatar and document verification.",
+        "NSPhotoLibraryUsageDescription": "CityDropTaxi needs photo library access for profile avatar upload."
+      }
+    },
+    "android": {
+      "package": "com.citydroptaxi.app",
+      "versionCode": 2,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F172A"
+      },
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "CAMERA",
+        "POST_NOTIFICATIONS"
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBZhUreM7E2U5krpAMizvpj2qoqgcQuuWc"
+        }
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow CityDropTaxi to use your location for real-time live navigation and booking tracking."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow CityDropTaxi to access your photos for profile and vehicle document uploads."
+        }
+      ],
+      "expo-secure-store",
+      "expo-font",
+      "expo-status-bar"
+    ],
+    "extra": {
+      "apiBaseUrl": "https://taxi-backend.toptechsoftwaresolutions.in/api",
+      "backendUrl": "https://taxi-backend.toptechsoftwaresolutions.in",
+      "googleMapsApiKey": "AIzaSyBZhUreM7E2U5krpAMizvpj2qoqgcQuuWc",
+      "eas": {
+        "projectId": "5dde2293-94b7-4ed6-9477-696d5134d2bb"
+      }
+    },
+    "owner": "ramsanthoshr"
+  }
+}
