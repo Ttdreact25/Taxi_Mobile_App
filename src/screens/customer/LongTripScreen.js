@@ -281,13 +281,20 @@ export default function LongTripScreen({ navigation }) {
   }
 
   // Open Interactive Map Location Picker
-  const handleSelectOnMap = (targetMode = 'pickup') => {
-    setMapTargetMode(targetMode)
+  const handleSelectOnMap = (targetMode) => {
+    let mode = 'pickup'
+    if (typeof targetMode === 'string') {
+      mode = targetMode
+    } else if (activeInput === 'dest') {
+      mode = 'destination'
+    }
+
+    setMapTargetMode(mode)
     let initLat = 13.0382
     let initLng = 80.2315
     let initAddr = ''
 
-    if (targetMode === 'pickup') {
+    if (mode === 'pickup') {
       if (pickupCoords?.lat && pickupCoords?.lng) {
         initLat = parseFloat(pickupCoords.lat)
         initLng = parseFloat(pickupCoords.lng)

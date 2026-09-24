@@ -574,20 +574,29 @@ const BookingScreen = ({ navigation, route }) => {
   }
 
   // Open Interactive Map Location Picker
-  const handleSelectOnMap = (targetMode = 'pickup') => {
-    setMapTargetMode(targetMode)
+  const handleSelectOnMap = (targetMode) => {
+    let mode = 'pickup'
+    if (typeof targetMode === 'string') {
+      mode = targetMode
+    } else if (activeInput === 'dest') {
+      mode = 'destination'
+    } else if (typeof activeInput === 'string' && activeInput.startsWith('stop-')) {
+      mode = activeInput
+    }
+
+    setMapTargetMode(mode)
     let initLat = 13.0382
     let initLng = 80.2315
     let initAddr = ''
 
-    if (targetMode === 'pickup') {
+    if (mode === 'pickup') {
       if (pickupCoords?.lat && pickupCoords?.lng) {
         initLat = parseFloat(pickupCoords.lat)
         initLng = parseFloat(pickupCoords.lng)
       }
       initAddr = pickup || 'Chennai, Tamil Nadu'
-    } else if (targetMode?.startsWith('stop-')) {
-      const stopId = targetMode.replace('stop-', '')
+    } else if (typeof mode === 'string' && mode.startsWith('stop-')) {
+      const stopId = mode.replace('stop-', '')
       const currStop = stops.find(s => s.id === stopId)
       if (currStop?.lat && currStop?.lng) {
         initLat = parseFloat(currStop.lat)
@@ -663,7 +672,7 @@ const BookingScreen = ({ navigation, route }) => {
     const finalAddr = mapSelectedAddress.trim() || `${mapRegion.latitude.toFixed(4)}, ${mapRegion.longitude.toFixed(4)}`
     const finalCoords = { lat: mapRegion.latitude, lng: mapRegion.longitude }
 
-    if (mapTargetMode?.startsWith('stop-')) {
+    if (typeof mapTargetMode === 'string' && mapTargetMode.startsWith('stop-')) {
       const stopId = mapTargetMode.replace('stop-', '')
       const updatedStops = stops.map(s => s.id === stopId ? { ...s, address: finalAddr, lat: finalCoords.lat, lng: finalCoords.lng } : s)
       setStops(updatedStops)
@@ -845,7 +854,7 @@ const BookingScreen = ({ navigation, route }) => {
         <View style={styles.actionPillRow}>
           <TouchableOpacity
             style={styles.actionPillBtn}
-            onPress={handleSelectOnMap}
+            onPress={() => handleSelectOnMap(activeInput === 'dest' ? 'destination' : (typeof activeInput === 'string' && activeInput.startsWith('stop-') ? activeInput : 'pickup'))}
             activeOpacity={0.8}
           >
             <Ionicons name="location" size={16} color={COLORS.primary} />
