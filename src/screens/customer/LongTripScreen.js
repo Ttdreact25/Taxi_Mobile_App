@@ -1237,11 +1237,16 @@ export default function LongTripScreen({ navigation }) {
           <View style={styles.mapCanvasWrap}>
             <MapView
               ref={mapRef}
-              style={StyleSheet.absoluteFillObject}
+              style={[StyleSheet.absoluteFillObject, { width: '100%', height: '100%' }]}
               initialRegion={mapRegion}
+              onMapReady={() => {
+                mapRef.current?.animateToRegion(mapRegion, 300)
+              }}
               onRegionChangeComplete={handleRegionChangeComplete}
-              showsUserLocation
+              showsUserLocation={true}
               showsMyLocationButton={false}
+              showsCompass={false}
+              toolbarEnabled={false}
             />
 
             {/* Central Animated Pin Pointer */}

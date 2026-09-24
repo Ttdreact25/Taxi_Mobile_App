@@ -578,10 +578,10 @@ const BookingScreen = ({ navigation, route }) => {
     let mode = 'pickup'
     if (typeof targetMode === 'string') {
       mode = targetMode
-    } else if (activeInput === 'dest') {
+    } else if (activeInputTarget === 'destination' || activeInputTarget === 'dest') {
       mode = 'destination'
-    } else if (typeof activeInput === 'string' && activeInput.startsWith('stop-')) {
-      mode = activeInput
+    } else if (typeof activeInputTarget === 'string' && activeInputTarget.startsWith('stop-')) {
+      mode = activeInputTarget
     }
 
     setMapTargetMode(mode)
@@ -854,7 +854,7 @@ const BookingScreen = ({ navigation, route }) => {
         <View style={styles.actionPillRow}>
           <TouchableOpacity
             style={styles.actionPillBtn}
-            onPress={() => handleSelectOnMap(activeInput === 'dest' ? 'destination' : (typeof activeInput === 'string' && activeInput.startsWith('stop-') ? activeInput : 'pickup'))}
+            onPress={() => handleSelectOnMap(activeInputTarget === 'destination' || activeInputTarget === 'dest' ? 'destination' : (typeof activeInputTarget === 'string' && activeInputTarget.startsWith('stop-') ? activeInputTarget : 'pickup'))}
             activeOpacity={0.8}
           >
             <Ionicons name="location" size={16} color={COLORS.primary} />
@@ -1224,13 +1224,15 @@ const BookingScreen = ({ navigation, route }) => {
               style={[styles.mapModeBtn, mapTargetMode === 'pickup' && styles.mapModeBtnActiveGreen]}
               onPress={() => {
                 setMapTargetMode('pickup')
-                if (pickupCoords) {
-                  mapRef.current?.animateToRegion({
-                    latitude: pickupCoords.lat,
-                    longitude: pickupCoords.lng,
+                if (pickupCoords?.lat && pickupCoords?.lng) {
+                  const reg = {
+                    latitude: parseFloat(pickupCoords.lat),
+                    longitude: parseFloat(pickupCoords.lng),
                     latitudeDelta: 0.012,
                     longitudeDelta: 0.012,
-                  }, 400)
+                  }
+                  mapRef.current?.animateToRegion(reg, 400)
+                  setMapSelectedAddress(pickup || 'Chennai, Tamil Nadu')
                 }
               }}
               activeOpacity={0.8}
@@ -1245,13 +1247,15 @@ const BookingScreen = ({ navigation, route }) => {
               style={[styles.mapModeBtn, mapTargetMode === 'destination' && styles.mapModeBtnActiveRed]}
               onPress={() => {
                 setMapTargetMode('destination')
-                if (destCoords) {
-                  mapRef.current?.animateToRegion({
-                    latitude: destCoords.lat,
-                    longitude: destCoords.lng,
+                if (destCoords?.lat && destCoords?.lng) {
+                  const reg = {
+                    latitude: parseFloat(destCoords.lat),
+                    longitude: parseFloat(destCoords.lng),
                     latitudeDelta: 0.012,
                     longitudeDelta: 0.012,
-                  }, 400)
+                  }
+                  mapRef.current?.animateToRegion(reg, 400)
+                  setMapSelectedAddress(destination || 'Marina Beach, Chennai')
                 }
               }}
               activeOpacity={0.8}
@@ -1267,11 +1271,16 @@ const BookingScreen = ({ navigation, route }) => {
           <View style={styles.mapCanvasWrap}>
             <MapView
               ref={mapRef}
-              style={StyleSheet.absoluteFillObject}
+              style={[StyleSheet.absoluteFillObject, { width: '100%', height: '100%' }]}
               initialRegion={mapRegion}
+              onMapReady={() => {
+                mapRef.current?.animateToRegion(mapRegion, 300)
+              }}
               onRegionChangeComplete={handleRegionChangeComplete}
-              showsUserLocation
+              showsUserLocation={true}
               showsMyLocationButton={false}
+              showsCompass={false}
+              toolbarEnabled={false}
             />
 
             {/* Central Animated Pin Pointer */}
