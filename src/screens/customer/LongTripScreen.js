@@ -504,9 +504,7 @@ export default function LongTripScreen({ navigation }) {
         setPickupCoords(null)
         setDestCoords(null)
         setFareEst(null)
-        setTotalFare(0)
-        setDistanceKm(0)
-        setDurationMins(0)
+        isSubmittingRef.current = false
 
         Alert.alert(
           'Booking Successful 🎉',
