@@ -3,12 +3,19 @@ node_modules/
 dist/
 npm-debug.*
 *.jks
+credentials.json
+KEYSTORE_INFO.txt
 *.p8
 *.p12
 *.key
 *.mobileprovision
 *.orig.*
 web-build/
+
+# Android & iOS Build Artifacts
+*.aab
+*.apk
+*.apks
 
 # macOS
 .DS_Store
