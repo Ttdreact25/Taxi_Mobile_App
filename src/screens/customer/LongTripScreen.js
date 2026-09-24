@@ -9,6 +9,7 @@ import * as Location from 'expo-location'
 import MapView, { Marker } from 'react-native-maps'
 import { COLORS } from '../../constants/theme'
 import { vehicleTypesAPI, bookingAPI, longTripAPI, settingsAPI } from '../../api/api'
+import { searchPlacesService, reverseGeocodeService } from '../../services/locationSearchService'
 
 const VEHICLE_ICONS = {
   'Bike': 'bicycle',
@@ -136,15 +137,8 @@ export default function LongTripScreen({ navigation }) {
       const lng = pos.coords.longitude
       setPickupCoords({ lat, lng })
 
-      try {
-        const r = await bookingAPI.reverseGeocode(lat, lng)
-        const addr = r.data?.formatted_address || r.data?.address || `${lat.toFixed(4)}, ${lng.toFixed(4)}`
-        setPickup(addr)
-      } catch {
-        const r2 = await bookingAPI.autocomplete(`${lat},${lng}`, lat, lng, sessionToken.current)
-        const addr2 = r2.data?.predictions?.[0]?.description || `${lat.toFixed(4)}, ${lng.toFixed(4)}`
-        setPickup(addr2)
-      }
+      const addr = await reverseGeocodeService(lat, lng)
+      setPickup(addr)
     } catch { } finally {
       setIsLocating(false)
     }
@@ -155,36 +149,44 @@ export default function LongTripScreen({ navigation }) {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(async () => {
       try {
-        const r = await bookingAPI.autocomplete(q, pickupCoords?.lat, pickupCoords?.lng, sessionToken.current)
-        setPredictions(r.data?.predictions || [])
+        const results = await searchPlacesService(q, pickupCoords?.lat, pickupCoords?.lng, sessionToken.current)
+        setPredictions(results)
       } catch { setPredictions([]) }
-    }, 300)
+    }, 280)
   }
 
   const selectPrediction = async (pred) => {
     setPredictions([])
-    try {
-      const r = await bookingAPI.placeDetails(pred.place_id, sessionToken.current)
-      const resData = r.data || {}
+    let coordsObj = null
 
-      // Robust coordinate extraction matching Web & API format
-      const latVal = resData.latitude ?? resData.lat ?? resData.location?.lat ?? resData.geometry?.location?.lat ?? pred.latitude ?? pred.geometry?.location?.lat
-      const lngVal = resData.longitude ?? resData.lng ?? resData.location?.lng ?? resData.geometry?.location?.lng ?? pred.longitude ?? pred.geometry?.location?.lng
-
-      const coordsObj = (latVal !== undefined && lngVal !== undefined && !isNaN(parseFloat(latVal)) && !isNaN(parseFloat(lngVal)))
-        ? { lat: parseFloat(latVal), lng: parseFloat(lngVal) }
-        : null
-
-      if (activeInput === 'pickup') {
-        setPickup(pred.description)
-        if (coordsObj) setPickupCoords(coordsObj)
-      } else {
-        setDestination(pred.description)
-        if (coordsObj) setDestCoords(coordsObj)
+    // Direct coordinates if available on prediction
+    const pLat = pred.latitude ?? pred.geometry?.location?.lat
+    const pLng = pred.longitude ?? pred.geometry?.location?.lng
+    if (pLat && pLng && !isNaN(parseFloat(pLat)) && !isNaN(parseFloat(pLng))) {
+      coordsObj = { lat: parseFloat(pLat), lng: parseFloat(pLng) }
+    } else if (pred.place_id) {
+      const parts = pred.place_id.split('_')
+      if (parts.length >= 3 && !isNaN(parseFloat(parts[1])) && !isNaN(parseFloat(parts[2]))) {
+        coordsObj = { lat: parseFloat(parts[1]), lng: parseFloat(parts[2]) }
+      } else if (!pred.place_id.startsWith('local_')) {
+        try {
+          const r = await bookingAPI.placeDetails(pred.place_id, sessionToken.current)
+          const resData = r.data || {}
+          const latVal = resData.latitude ?? resData.lat ?? resData.location?.lat ?? resData.geometry?.location?.lat
+          const lngVal = resData.longitude ?? resData.lng ?? resData.location?.lng ?? resData.geometry?.location?.lng
+          if (latVal !== undefined && lngVal !== undefined && !isNaN(parseFloat(latVal)) && !isNaN(parseFloat(lngVal))) {
+            coordsObj = { lat: parseFloat(latVal), lng: parseFloat(lngVal) }
+          }
+        } catch { }
       }
-    } catch {
-      if (activeInput === 'pickup') setPickup(pred.description)
-      else setDestination(pred.description)
+    }
+
+    if (activeInput === 'pickup') {
+      setPickup(pred.description)
+      if (coordsObj) setPickupCoords(coordsObj)
+    } else {
+      setDestination(pred.description)
+      if (coordsObj) setDestCoords(coordsObj)
     }
     setActiveInput(null)
   }
@@ -314,7 +316,7 @@ export default function LongTripScreen({ navigation }) {
     }, 300)
   }
 
-  // Reverse geocode on map pan via backend
+  // Reverse geocode on map pan via multi-engine service
   const handleRegionChangeComplete = (region) => {
     setMapRegion(region)
     setGeocodingAddress(true)
@@ -322,29 +324,14 @@ export default function LongTripScreen({ navigation }) {
 
     geocodeTimerRef.current = setTimeout(async () => {
       try {
-        const r = await bookingAPI.reverseGeocode(region.latitude, region.longitude)
-        const addr = r.data?.formatted_address || r.data?.address || `${region.latitude.toFixed(4)}, ${region.longitude.toFixed(4)}`
+        const addr = await reverseGeocodeService(region.latitude, region.longitude)
         setMapSelectedAddress(addr)
       } catch {
-        try {
-          const results = await Location.reverseGeocodeAsync({
-            latitude: region.latitude,
-            longitude: region.longitude,
-          })
-          if (results && results.length > 0) {
-            const r = results[0]
-            const parts = [r.name || r.streetNumber, r.street, r.subregion || r.district, r.city].filter(Boolean)
-            setMapSelectedAddress(parts.join(', ') || `${region.latitude.toFixed(4)}, ${region.longitude.toFixed(4)}`)
-          } else {
-            setMapSelectedAddress(`${region.latitude.toFixed(4)}, ${region.longitude.toFixed(4)}`)
-          }
-        } catch {
-          setMapSelectedAddress(`${region.latitude.toFixed(4)}, ${region.longitude.toFixed(4)}`)
-        }
+        setMapSelectedAddress(`${region.latitude.toFixed(4)}, ${region.longitude.toFixed(4)}`)
       } finally {
         setGeocodingAddress(false)
       }
-    }, 450)
+    }, 300)
   }
 
   // GPS Floating Button Re-center

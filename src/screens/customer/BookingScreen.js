@@ -10,6 +10,7 @@ import * as Location from 'expo-location'
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps'
 import Constants from 'expo-constants'
 import { vehicleTypesAPI, bookingsAPI, customerAPI, paymentAPI } from '../../api/api'
+import { searchPlacesService, reverseGeocodeService } from '../../services/locationSearchService'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import { formatDuration } from '../../utils/formatters'
 
@@ -146,7 +147,7 @@ const BookingScreen = ({ navigation, route }) => {
     }).catch(() => { })
   }
 
-  // Auto detect user's current live GPS location
+  // Auto detect user's current live GPS location with multi-engine reverse geocoding
   const getCurrentLocation = async () => {
     setIsLocating(true)
     try {
@@ -159,15 +160,11 @@ const BookingScreen = ({ navigation, route }) => {
       const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude }
       setPickupCoords(coords)
 
-      const addr = await Location.reverseGeocodeAsync(loc.coords)
-      if (addr[0]) {
-        const formatted = `${addr[0].name || addr[0].street || ''}, ${addr[0].subregion || addr[0].city || ''}, ${addr[0].region || ''}`.replace(/^,\s*/, '').replace(/,\s*,/g, ',')
-        const finalAddr = formatted || `GPS (${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)})`
-        setPickup(finalAddr)
+      const finalAddr = await reverseGeocodeService(coords.lat, coords.lng)
+      setPickup(finalAddr)
 
-        if (destination && selectedType) {
-          getEstimateWithCoords(finalAddr, coords, destination, destCoords, selectedType)
-        }
+      if (destination && selectedType) {
+        getEstimateWithCoords(finalAddr, coords, destination, destCoords, selectedType)
       }
     } catch (e) {
       setPickupCoords({ lat: 13.0382, lng: 80.2315 })
@@ -177,10 +174,13 @@ const BookingScreen = ({ navigation, route }) => {
     }
   }
 
-  // Real-time Google Places Autocomplete API with 300ms Debounce & Distance Ranking
-  const handleDestinationChange = (text) => {
-    setDestination(text)
-    if (fareEst) setFareEst(null)
+  // Unified Multi-Engine Autocomplete for Destination, Pickup & Stops
+  const searchPlaces = (text, target = activeInputTarget) => {
+    if (target) setActiveInputTarget(target)
+    if (target === 'destination') {
+      setDestination(text)
+      if (fareEst) setFareEst(null)
+    }
 
     if (debounceTimer.current) clearTimeout(debounceTimer.current)
 
@@ -193,67 +193,53 @@ const BookingScreen = ({ navigation, route }) => {
     setLoadingPlaces(true)
     debounceTimer.current = setTimeout(async () => {
       const queryStr = text.trim()
-
       try {
-        const proxyRes = await bookingsAPI.placesAutocomplete(queryStr, pickupCoords?.lat, pickupCoords?.lng, sessionTokenRef.current)
-        if (proxyRes.data?.status === 'success' && proxyRes.data?.predictions?.length > 0) {
-          setPredictions(proxyRes.data.predictions)
-          setLoadingPlaces(false)
-          return
-        }
-      } catch (proxyErr) { }
-
-      // Fallback
-      try {
-        const geoResults = await Location.geocodeAsync(queryStr)
-        if (geoResults && geoResults.length > 0) {
-          const geoPredictions = geoResults.slice(0, 5).map((g, idx) => ({
-            place_id: `geo_${idx}_${g.latitude}_${g.longitude}`,
-            structured_formatting: {
-              main_text: queryStr,
-              secondary_text: `Coordinates: ${g.latitude.toFixed(4)}, ${g.longitude.toFixed(4)}`
-            },
-            description: `${queryStr} (${g.latitude.toFixed(4)}, ${g.longitude.toFixed(4)})`,
-            geometry: { location: { lat: g.latitude, lng: g.longitude } },
-            distance_km: 3.5 + idx * 0.2
-          }))
-          setPredictions(geoPredictions)
-        } else {
-          setPredictions([])
-        }
-      } catch (geoErr) {
+        const results = await searchPlacesService(queryStr, pickupCoords?.lat, pickupCoords?.lng, sessionTokenRef.current)
+        setPredictions(results)
+      } catch (err) {
         setPredictions([])
       } finally {
         setLoadingPlaces(false)
       }
-    }, 300)
+    }, 280)
   }
 
-  // Handle selecting a place prediction item (Fetch Place Details if needed)
+  const handleDestinationChange = (text) => {
+    searchPlaces(text, 'destination')
+  }
+
+  // Handle selecting a place prediction item (Resolves coordinates from Google, Photon, OSM, Hubs)
   const handleSelectPrediction = async (prediction) => {
     const mainText = prediction.structured_formatting?.main_text || prediction.description
     const fullAddress = prediction.description || mainText
-    const placeId = prediction.place_id
+    const placeId = prediction.place_id || ''
 
-    let lat = prediction.latitude || (prediction.geometry?.location?.lat)
-    let lng = prediction.longitude || (prediction.geometry?.location?.lng)
+    let lat = prediction.latitude ?? prediction.lat ?? prediction.geometry?.location?.lat
+    let lng = prediction.longitude ?? prediction.lng ?? prediction.geometry?.location?.lng
 
-    if ((!lat || !lng) && placeId && !placeId.startsWith('osm_')) {
-      try {
-        const detailsRes = await bookingsAPI.placeDetails(placeId, sessionTokenRef.current)
-        if (detailsRes.data?.status === 'success') {
-          lat = detailsRes.data.latitude
-          lng = detailsRes.data.longitude
-        }
-      } catch (e) { }
+    // If coordinates encoded directly in place_id (e.g. photon_11.64_78.21_... or osm_11.64_78.21_... or hub_11.64_78.21_...)
+    if ((!lat || !lng) && placeId) {
+      const parts = placeId.split('_')
+      if (parts.length >= 3 && !isNaN(parseFloat(parts[1])) && !isNaN(parseFloat(parts[2]))) {
+        lat = parseFloat(parts[1])
+        lng = parseFloat(parts[2])
+      } else if (!placeId.startsWith('local_')) {
+        try {
+          const detailsRes = await bookingsAPI.placeDetails(placeId, sessionTokenRef.current)
+          if (detailsRes.data?.status === 'success') {
+            lat = detailsRes.data.latitude ?? detailsRes.data.lat
+            lng = detailsRes.data.longitude ?? detailsRes.data.lng
+          }
+        } catch (e) { }
+      }
     }
 
     if (!lat || !lng) {
-      lat = 13.0418
-      lng = 80.2341
+      lat = 13.0382
+      lng = 80.2315
     }
 
-    handleSelectPlace(mainText, fullAddress, lat, lng, placeId)
+    handleSelectPlace(mainText, fullAddress, parseFloat(lat), parseFloat(lng), placeId)
   }
 
   // Handle selecting any place (pickup, destination, or intermediate stop)
@@ -642,29 +628,14 @@ const BookingScreen = ({ navigation, route }) => {
 
     geocodeTimerRef.current = setTimeout(async () => {
       try {
-        const results = await Location.reverseGeocodeAsync({
-          latitude: region.latitude,
-          longitude: region.longitude,
-        })
-        if (results && results.length > 0) {
-          const r = results[0]
-          const parts = [
-            r.name || r.streetNumber,
-            r.street,
-            r.subregion || r.district,
-            r.city,
-          ].filter(Boolean)
-          const addr = parts.join(', ') || `${region.latitude.toFixed(4)}, ${region.longitude.toFixed(4)}`
-          setMapSelectedAddress(addr)
-        } else {
-          setMapSelectedAddress(`${region.latitude.toFixed(4)}, ${region.longitude.toFixed(4)}`)
-        }
+        const addr = await reverseGeocodeService(region.latitude, region.longitude)
+        setMapSelectedAddress(addr)
       } catch {
         setMapSelectedAddress(`${region.latitude.toFixed(4)}, ${region.longitude.toFixed(4)}`)
       } finally {
         setGeocodingAddress(false)
       }
-    }, 350)
+    }, 300)
   }
 
   // Re-center Map to User's live GPS coordinates

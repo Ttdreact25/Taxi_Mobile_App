@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as Location from 'expo-location'
 import { customerAPI, bookingsAPI } from '../../api/api'
+import { searchPlacesService, reverseGeocodeService } from '../../services/locationSearchService'
 import { COLORS, RADIUS, SHADOW } from '../../constants/theme'
 
 const PRESET_CATEGORIES = [
@@ -102,7 +103,7 @@ const SavedPlacesScreen = ({ navigation }) => {
     setModalVisible(true)
   }
 
-  // Real-time Google Places Autocomplete
+  // Real-time Multi-Engine Location Search
   const handleSearchPlaces = (query) => {
     setSearchQuery(query)
     if (debounceTimer.current) clearTimeout(debounceTimer.current)
@@ -114,32 +115,44 @@ const SavedPlacesScreen = ({ navigation }) => {
     setSearchingPlaces(true)
     debounceTimer.current = setTimeout(async () => {
       try {
-        const res = await bookingsAPI.placesAutocomplete(query)
-        setPredictions(res.data?.predictions || [])
+        const results = await searchPlacesService(query, lat, lng)
+        setPredictions(results)
       } catch {
         setPredictions([])
       } finally {
         setSearchingPlaces(false)
       }
-    }, 300)
+    }, 280)
   }
 
   // Select Prediction & Resolve Coordinates
   const handleSelectPrediction = async (p) => {
     const mainText = p.structured_formatting?.main_text || p.description || ''
     const fullText = p.description || mainText
-    let itemLat = p.geometry?.location?.lat || 12.9716
-    let itemLng = p.geometry?.location?.lng || 77.5946
+    let itemLat = p.latitude ?? p.geometry?.location?.lat
+    let itemLng = p.longitude ?? p.geometry?.location?.lng
 
-    if (p.place_id && (!p.geometry || !p.geometry.location)) {
-      try {
-        const det = await bookingsAPI.placeDetails(p.place_id)
-        if (det.data?.result?.geometry?.location) {
-          itemLat = det.data.result.geometry.location.lat
-          itemLng = det.data.result.geometry.location.lng
-        }
-      } catch {}
+    if ((!itemLat || !itemLng) && p.place_id) {
+      const parts = p.place_id.split('_')
+      if (parts.length >= 3 && !isNaN(parseFloat(parts[1])) && !isNaN(parseFloat(parts[2]))) {
+        itemLat = parseFloat(parts[1])
+        itemLng = parseFloat(parts[2])
+      } else if (!p.place_id.startsWith('local_')) {
+        try {
+          const det = await bookingsAPI.placeDetails(p.place_id)
+          if (det.data?.latitude && det.data?.longitude) {
+            itemLat = det.data.latitude
+            itemLng = det.data.longitude
+          } else if (det.data?.result?.geometry?.location) {
+            itemLat = det.data.result.geometry.location.lat
+            itemLng = det.data.result.geometry.location.lng
+          }
+        } catch {}
+      }
     }
+
+    itemLat = itemLat ? parseFloat(itemLat) : 13.0382
+    itemLng = itemLng ? parseFloat(itemLng) : 80.2315
 
     setAddress(fullText)
     setSearchQuery(fullText)
@@ -166,17 +179,10 @@ const SavedPlacesScreen = ({ navigation }) => {
       setLat(gpsLat)
       setLng(gpsLng)
 
-      // Reverse geocode
-      try {
-        const rev = await bookingsAPI.reverseGeocode(gpsLat, gpsLng)
-        const addr = rev.data?.address || `GPS Location (${gpsLat.toFixed(4)}, ${gpsLng.toFixed(4)})`
-        setAddress(addr)
-        setSearchQuery(addr)
-      } catch {
-        const fallback = `GPS Location (${gpsLat.toFixed(4)}, ${gpsLng.toFixed(4)})`
-        setAddress(fallback)
-        setSearchQuery(fallback)
-      }
+      // Multi-engine Reverse geocode
+      const addr = await reverseGeocodeService(gpsLat, gpsLng)
+      setAddress(addr)
+      setSearchQuery(addr)
       setPredictions([])
     } catch {
       Alert.alert('GPS Error', 'Could not detect current location.')
