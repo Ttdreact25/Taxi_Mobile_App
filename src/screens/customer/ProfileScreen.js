@@ -301,10 +301,9 @@ const ProfileScreen = ({ navigation }) => {
   const avatarUri = resolveAssetUrl(user?.avatar_url || user?.avatar)
 
   const menuItems = [
-    { icon: 'shield-checkmark-outline', label: 'Driver Partner KYC & Documents', color: '#4F46E5', onPress: () => navigation.navigate('DriverDocuments') },
+    { icon: 'person-circle-outline', label: 'Customer Identity KYC', color: '#059669', onPress: () => navigation.navigate('IdentityVerification') },
     { icon: 'bookmark-outline', label: 'Saved Destinations', color: '#10B981', onPress: () => navigation.navigate('SavedPlaces') },
     { icon: 'create-outline', label: 'Edit Profile Information', color: '#7C3AED', onPress: () => setEditModalVisible(true) },
-    { icon: 'person-circle-outline', label: 'Customer Identity KYC', color: '#059669', onPress: () => navigation.navigate('IdentityVerification') },
     { icon: 'time-outline', label: 'My Trip History', color: '#2563EB', onPress: () => navigation.navigate('TripsList') },
     { icon: 'key-outline', label: 'Change Security Password', color: '#6366F1', onPress: () => setPwModalVisible(true) },
     { icon: 'notifications-outline', label: 'Notifications & Alerts', color: '#D97706', onPress: () => navigation.navigate('Notifications') },
@@ -361,16 +360,39 @@ const ProfileScreen = ({ navigation }) => {
           <Text style={styles.phone}>{user?.phone || '—'}</Text>
 
           {/* Verified Status Badge */}
-          <View style={[styles.verifiedBadge, !user?.is_verified && { backgroundColor: '#FEF3C7' }]}>
-            <Ionicons
-              name={user?.is_verified ? 'checkmark-circle' : 'shield-outline'}
-              size={14}
-              color={user?.is_verified ? '#15803D' : '#B45309'}
-            />
-            <Text style={[styles.verifiedText, !user?.is_verified && { color: '#B45309' }]}>
-              {user?.is_verified ? 'Verified Customer' : 'Standard Customer'}
-            </Text>
-          </View>
+          {(() => {
+            const isKycVerified = user?.is_verified && user?.verification_status === 'verified'
+            const isKycPending  = user?.verification_status === 'pending'
+            const isKycRejected = user?.verification_status === 'rejected'
+
+            return (
+              <TouchableOpacity
+                style={[
+                  styles.verifiedBadge,
+                  isKycVerified ? { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' } :
+                  isKycPending ? { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' } :
+                  isKycRejected ? { backgroundColor: '#FEF2F2', borderColor: '#FECACA' } :
+                  { backgroundColor: '#F1F5F9', borderColor: '#CBD5E1' }
+                ]}
+                onPress={() => navigation.navigate('IdentityVerification')}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={isKycVerified ? 'checkmark-circle' : isKycPending ? 'time' : isKycRejected ? 'alert-circle' : 'shield-outline'}
+                  size={14}
+                  color={isKycVerified ? '#15803D' : isKycPending ? '#B45309' : isKycRejected ? '#DC2626' : '#64748B'}
+                />
+                <Text style={[
+                  styles.verifiedText,
+                  { color: isKycVerified ? '#15803D' : isKycPending ? '#B45309' : isKycRejected ? '#DC2626' : '#64748B' }
+                ]}>
+                  {isKycVerified ? 'KYC Verified Customer ✓' :
+                   isKycPending ? 'KYC In Review ⏳' :
+                   isKycRejected ? 'KYC Rejected ❌ (Re-upload)' : 'KYC Not Verified (Tap to Upload)'}
+                </Text>
+              </TouchableOpacity>
+            )
+          })()}
         </View>
 
         {/* Customer Dynamic Stats Bar */}

@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../context/AuthContext'
-import { vehicleTypesAPI, bookingsAPI, adsAPI, notifAPI, customerAPI, couponsAPI, resolveAssetUrl } from '../../api/api'
+import { vehicleTypesAPI, bookingsAPI, adsAPI, notifAPI, customerAPI, couponsAPI, longTripAPI, resolveAssetUrl } from '../../api/api'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import AdCarousel from '../../components/ui/AdCarousel'
 
@@ -27,6 +27,8 @@ const HomeScreen = ({ navigation }) => {
   const [unreadNotifCount, setUnreadNotifCount] = useState(0)
   const [upcomingBooking,  setUpcomingBooking]  = useState(null)
   const [savedPlaces,      setSavedPlaces]      = useState([])
+  const [kycData,          setKycData]          = useState(null)
+  const [kycStatus,        setKycStatus]        = useState('none')
   const [loading,          setLoading]          = useState(true)
 
   const getPlaceIcon = (name = '', type = '') => {
@@ -41,19 +43,27 @@ const HomeScreen = ({ navigation }) => {
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
-      const [typeRes, tripRes, adsRes, notifRes, savedRes, couponRes] = await Promise.allSettled([
+      const [typeRes, tripRes, adsRes, notifRes, savedRes, couponRes, kycRes] = await Promise.allSettled([
         vehicleTypesAPI.list(),
         bookingsAPI.myTrips({ per_page: 3 }),
         adsAPI.list({ target_audience: 'customer' }),
         notifAPI.list(),
         customerAPI.getSavedLocations(),
         couponsAPI.active(),
+        longTripAPI.myVerification(),
       ])
 
       if (typeRes.status === 'fulfilled') setTypes(typeRes.value.data?.types || [])
       if (adsRes.status === 'fulfilled') setAds(adsRes.value.data?.ads || [])
       if (couponRes.status === 'fulfilled') setCoupons(couponRes.value.data?.coupons || [])
       if (notifRes.status === 'fulfilled') setUnreadNotifCount(notifRes.value.data?.unread || 0)
+      if (kycRes.status === 'fulfilled' && kycRes.value.data?.data) {
+        const v = kycRes.value.data.data
+        setKycData(v)
+        setKycStatus(v.verification_status || v.status || 'none')
+      } else {
+        setKycStatus('none')
+      }
       
       if (savedRes.status === 'fulfilled') {
         const list = savedRes.value.data?.saved_locations || savedRes.value.data?.locations || []
@@ -202,6 +212,50 @@ const HomeScreen = ({ navigation }) => {
           </TouchableOpacity>
         )}
 
+        {/* KYC Status Action Banner (shown if not verified) */}
+        {kycStatus !== 'verified' && (
+          <TouchableOpacity
+            style={[
+              styles.kycBanner,
+              kycStatus === 'pending' ? styles.kycBannerPending :
+              kycStatus === 'rejected' ? styles.kycBannerRejected : styles.kycBannerRequired
+            ]}
+            onPress={() => navigation.navigate('IdentityVerification')}
+            activeOpacity={0.88}
+          >
+            <View style={styles.kycBannerIconWrap}>
+              <Ionicons
+                name={kycStatus === 'pending' ? 'time' : kycStatus === 'rejected' ? 'alert-circle' : 'shield-checkmark'}
+                size={22}
+                color={kycStatus === 'pending' ? '#D97706' : kycStatus === 'rejected' ? '#DC2626' : '#4F46E5'}
+              />
+            </View>
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <Text style={[
+                styles.kycBannerTitle,
+                { color: kycStatus === 'pending' ? '#92400E' : kycStatus === 'rejected' ? '#991B1B' : '#3730A3' }
+              ]}>
+                {kycStatus === 'pending' ? 'KYC Under Admin Review ⏳' :
+                 kycStatus === 'rejected' ? 'KYC Verification Rejected ❌' : 'Identity KYC Required 🛡️'}
+              </Text>
+              <Text style={styles.kycBannerSub} numberOfLines={2}>
+                {kycStatus === 'pending' ? 'Admin is reviewing your Aadhaar documents. You can join shared rides once approved.' :
+                 kycStatus === 'rejected' ? (kycData?.rejection_reason || 'Correction needed. Tap to re-upload clear photos.') :
+                 'Upload Aadhaar Card & Selfie to unlock 50/50 Shared Rides and verified badge.'}
+              </Text>
+            </View>
+            <View style={[
+              styles.kycBannerBtn,
+              { backgroundColor: kycStatus === 'pending' ? '#D97706' : kycStatus === 'rejected' ? '#DC2626' : '#4F46E5' }
+            ]}>
+              <Text style={styles.kycBannerBtnText}>
+                {kycStatus === 'pending' ? 'Status' : kycStatus === 'rejected' ? 'Fix' : 'Upload'}
+              </Text>
+              <Ionicons name="arrow-forward" size={12} color="#fff" />
+            </View>
+          </TouchableOpacity>
+        )}
+
         {/* 4. Ride Services Grid (2x2 High-End Cards) */}
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Ride Services</Text>
@@ -242,18 +296,31 @@ const HomeScreen = ({ navigation }) => {
               tagColor: '#059669',
               iconBg: '#D1FAE5',
               iconColor: '#059669',
-              action: () => navigation.navigate('SharedTrips'),
+              action: () => {
+                if (kycStatus !== 'verified') {
+                  Alert.alert(
+                    'Identity Verification Required 🛡️',
+                    'Aadhaar KYC verification by Admin is mandatory to join or publish 50/50 Shared Long Trips. Please submit your verification documents.',
+                    [
+                      { text: 'Verify Identity', onPress: () => navigation.navigate('IdentityVerification') },
+                      { text: 'Cancel', style: 'cancel' }
+                    ]
+                  )
+                  return
+                }
+                navigation.navigate('SharedTrips')
+              },
             },
             {
               id: 'kyc',
               icon: 'shield-checkmark',
               title: 'Aadhaar KYC',
-              sub: 'Govt ID Proof',
-              tag: '🛡️ Safety Pass',
-              tagBg: '#FFFBEB',
-              tagColor: '#D97706',
-              iconBg: '#FEF3C7',
-              iconColor: '#D97706',
+              sub: kycStatus === 'verified' ? 'Identity Verified' : 'Govt ID Proof',
+              tag: kycStatus === 'verified' ? '✓ Verified' : kycStatus === 'pending' ? '⏳ In Review' : kycStatus === 'rejected' ? '❌ Rejected' : '🛡️ Required',
+              tagBg: kycStatus === 'verified' ? '#ECFDF5' : kycStatus === 'pending' ? '#FFFBEB' : kycStatus === 'rejected' ? '#FEF2F2' : '#FEF3C7',
+              tagColor: kycStatus === 'verified' ? '#059669' : kycStatus === 'pending' ? '#D97706' : kycStatus === 'rejected' ? '#DC2626' : '#B45309',
+              iconBg: kycStatus === 'verified' ? '#D1FAE5' : kycStatus === 'pending' ? '#FEF3C7' : kycStatus === 'rejected' ? '#FEE2E2' : '#FEF3C7',
+              iconColor: kycStatus === 'verified' ? '#059669' : kycStatus === 'pending' ? '#D97706' : kycStatus === 'rejected' ? '#DC2626' : '#D97706',
               action: () => navigation.navigate('IdentityVerification'),
             },
           ].map((item) => (
@@ -742,6 +809,53 @@ const styles = StyleSheet.create({
   refSub:           { fontSize: 11, color: '#B45309', marginTop: 2 },
   refBtn:           { backgroundColor: COLORS.secondary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: RADIUS.lg },
   refBtnText:       { color: '#1E293B', fontWeight: '800', fontSize: FONTS.sizes.xs },
+  kycBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: RADIUS.xl,
+    marginBottom: SPACING.md,
+    borderWidth: 1,
+    ...SHADOW.sm,
+  },
+  kycBannerRequired: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#C7D2FE',
+  },
+  kycBannerPending: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  kycBannerRejected: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  kycBannerIconWrap: {
+    marginRight: 10,
+  },
+  kycBannerTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  kycBannerSub: {
+    fontSize: 11,
+    color: '#4B5563',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  kycBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: RADIUS.md,
+  },
+  kycBannerBtnText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800',
+  },
 })
 
 export default HomeScreen

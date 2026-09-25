@@ -9,6 +9,7 @@ import * as Location from 'expo-location'
 import MapView, { Marker } from 'react-native-maps'
 import { COLORS } from '../../constants/theme'
 import { vehicleTypesAPI, bookingAPI, longTripAPI, settingsAPI } from '../../api/api'
+import { useAuth } from '../../context/AuthContext'
 import { searchPlacesService, reverseGeocodeService } from '../../services/locationSearchService'
 
 const VEHICLE_ICONS = {
@@ -34,6 +35,7 @@ const QUICK_PRESETS = [
 ]
 
 export default function LongTripScreen({ navigation }) {
+  const { user } = useAuth()
   const sessionToken = useRef(Math.random().toString(36).substring(2))
   const debounceRef = useRef(null)
   const isSubmittingRef = useRef(false)
@@ -466,8 +468,19 @@ export default function LongTripScreen({ navigation }) {
       return
     }
 
+    if (isSharingEnabled && user?.verification_status !== 'verified') {
+      Alert.alert(
+        'Identity Verification Required 🛡️',
+        'You cannot publish a shared ride without KYC approval by Admin. Please submit your Aadhaar KYC verification.',
+        [
+          { text: 'Verify Identity', onPress: () => navigation.navigate('IdentityVerification') },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      )
+      return
+    }
+
     if (isSubmittingRef.current || scheduling) return
-    isSubmittingRef.current = true
     setScheduling(true)
     try {
       const payload = {
@@ -862,7 +875,20 @@ export default function LongTripScreen({ navigation }) {
               </View>
               <Switch
                 value={isSharingEnabled}
-                onValueChange={setIsSharingEnabled}
+                onValueChange={(val) => {
+                  if (val && user?.verification_status !== 'verified') {
+                    Alert.alert(
+                      'Identity Verification Required 🛡️',
+                      'Only Admin-verified passengers can publish a 50/50 Shared Trip. Please complete your Aadhaar KYC verification.',
+                      [
+                        { text: 'Verify Identity', onPress: () => navigation.navigate('IdentityVerification') },
+                        { text: 'Cancel', style: 'cancel' }
+                      ]
+                    )
+                    return
+                  }
+                  setIsSharingEnabled(val)
+                }}
                 trackColor={{ false: '#CBD5E1', true: COLORS.primary }}
                 thumbColor="#FFFFFF"
               />

@@ -47,12 +47,18 @@ export const resolveAssetUrl = (path) => {
   if (!path) return null
   if (typeof path !== 'string') return null
   if (
-    path.startsWith('http://') ||
-    path.startsWith('https://') ||
     path.startsWith('file://') ||
     path.startsWith('blob:') ||
     path.startsWith('data:')
   ) {
+    return path
+  }
+  if (path.startsWith('http://') || path.startsWith('https://')) {
+    if (path.includes('/uploads/')) {
+      const parts = path.split('/uploads/')
+      const cleanSub = parts[parts.length - 1].replace(/^\//, '')
+      return `${BACKEND_URL}/uploads/${cleanSub}`
+    }
     return path
   }
   const clean = path.replace(/^(\.\.\/|\/)/, '')
