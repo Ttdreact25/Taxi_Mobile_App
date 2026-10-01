@@ -72,6 +72,9 @@ export default function BookingTrackScreen({ route, navigation }) {
           setShowRatingModal(true)
         } else if (['cancelled', 'CANCELLED'].includes(b?.status)) {
           clearInterval(pollTimerRef.current)
+          Alert.alert('Booking Cancelled', 'This ride has been cancelled.', [
+            { text: 'OK', onPress: () => navigation.navigate('Home') }
+          ])
         }
       }
     } catch (err) {
@@ -306,13 +309,17 @@ export default function BookingTrackScreen({ route, navigation }) {
         style: 'destructive',
         onPress: async () => {
           try {
-            await bookingsAPI.cancel(bookingId, { reason: 'Customer cancelled' })
+            const res = await bookingsAPI.cancel(bookingId, { reason: 'Customer cancelled' })
+            if (res.data?.status === 'error') {
+              Alert.alert('Notice', res.data?.message || 'Could not cancel booking.')
+              return
+            }
             clearInterval(pollTimerRef.current)
             Alert.alert('Ride Cancelled', 'Your booking has been cancelled.', [
               { text: 'OK', onPress: () => navigation.navigate('Home') },
             ])
-          } catch {
-            Alert.alert('Error', 'Failed to cancel booking.')
+          } catch (err) {
+            Alert.alert('Error', err.response?.data?.message || 'Failed to cancel booking.')
           }
         },
       },
