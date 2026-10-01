@@ -1160,7 +1160,7 @@ const DriverHomeScreen = ({ navigation }) => {
           const isReturnStarted = ['return_started', 'return_in_progress'].includes(activeRide.status)
           const isOnwardTripStarted = ['trip_started', 'in_progress'].includes(activeRide.status)
           const isTripStarted = isOnwardTripStarted || isReturnStarted || isReturnPickup
-          const isArrived = activeRide.status === 'driver_arrived'
+          const isArrived = ['driver_arrived', 'driver_reached', 'pickup_reached', 'arrived'].includes(activeRide.status)
           const isShared = Boolean(
             activeRide.trip_type === 'shared' ||
             activeRide.is_shared == 1 ||
@@ -1628,7 +1628,7 @@ const DriverHomeScreen = ({ navigation }) => {
                 {/* 1. Normal Single / Multi-Stop Ride Actions */}
                 {!isShared && (
                   <>
-                    {activeRide.status === 'driver_assigned' && (
+                    {['driver_assigned', 'driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way'].includes(activeRide.status) && (
                       <TouchableOpacity
                         style={[styles.primaryActionBtn, { backgroundColor: '#F59E0B' }]}
                         onPress={() => handleUpdateRideStatus('driver_arrived')}
@@ -1638,7 +1638,7 @@ const DriverHomeScreen = ({ navigation }) => {
                       </TouchableOpacity>
                     )}
 
-                    {activeRide.status === 'driver_arrived' && (
+                    {['driver_arrived', 'driver_reached', 'pickup_reached', 'arrived'].includes(activeRide.status) && (
                       <TouchableOpacity
                         style={[styles.primaryActionBtn, { backgroundColor: '#7C3AED' }]}
                         onPress={() => {
