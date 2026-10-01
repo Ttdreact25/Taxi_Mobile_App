@@ -1,11 +1,66 @@
 import axios from 'axios'
 import * as SecureStore from 'expo-secure-store'
+import { Platform } from 'react-native'
+import Constants from 'expo-constants'
 import { API_BASE_URL, BACKEND_URL, resolveAssetUrl } from '../config/api'
 
 export { API_BASE_URL, BACKEND_URL, resolveAssetUrl }
 export const BASE_URL = API_BASE_URL
 
 const TOKEN_KEY = 'cabtaxi_token'
+const DEVICE_ID_KEY = 'cabtaxi_device_id'
+const FCM_TOKEN_KEY = 'cabtaxi_fcm_token'
+
+let cachedDeviceId = null
+
+export const getOrCreateDeviceId = async () => {
+  if (cachedDeviceId) return cachedDeviceId
+  try {
+    let id = await SecureStore.getItemAsync(DEVICE_ID_KEY)
+    if (!id) {
+      const rand = Math.random().toString(36).substring(2, 12)
+      const ts = Date.now().toString(36)
+      id = `dev_${Platform.OS}_${ts}_${rand}`
+      await SecureStore.setItemAsync(DEVICE_ID_KEY, id)
+    }
+    cachedDeviceId = id
+    return id
+  } catch {
+    return `dev_${Platform.OS}_fallback`
+  }
+}
+
+export const getDeviceMetadata = async () => {
+  const deviceId = await getOrCreateDeviceId()
+  const deviceName = Constants.deviceName || `${Platform.OS === 'android' ? 'Android' : 'iOS'} Device`
+  const platform = Platform.OS === 'ios' ? 'iOS' : 'Android'
+  const appVersion = Constants.expoConfig?.version || '1.0.0'
+  let fcmToken = null
+  try {
+    fcmToken = await SecureStore.getItemAsync(FCM_TOKEN_KEY)
+  } catch {}
+
+  return {
+    device_id: deviceId,
+    device_name: deviceName,
+    platform,
+    app_version: appVersion,
+    fcm_token: fcmToken || null,
+  }
+}
+
+export const saveFcmToken = async (fcmToken) => {
+  if (!fcmToken) return
+  try {
+    await SecureStore.setItemAsync(FCM_TOKEN_KEY, fcmToken)
+  } catch {}
+}
+
+export const clearFcmToken = async () => {
+  try {
+    await SecureStore.deleteItemAsync(FCM_TOKEN_KEY)
+  } catch {}
+}
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
@@ -13,7 +68,7 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-// Attach JWT with multi-header fallback for strict FastCGI/Hostinger servers
+// Attach JWT & Device ID with multi-header fallback for strict FastCGI/Hostinger servers
 api.interceptors.request.use(async (config) => {
   try {
     const token = await SecureStore.getItemAsync(TOKEN_KEY)
@@ -21,6 +76,15 @@ api.interceptors.request.use(async (config) => {
       config.headers.Authorization = `Bearer ${token}`
       config.headers['X-Auth-Token'] = token
       config.headers['X-Access-Token'] = token
+    }
+    const deviceId = await getOrCreateDeviceId()
+    if (deviceId) {
+      config.headers['X-Device-Id'] = deviceId
+    }
+    config.headers['X-Platform'] = Platform.OS === 'ios' ? 'iOS' : 'Android'
+    config.headers['X-App-Version'] = Constants.expoConfig?.version || '1.0.0'
+    if (Constants.deviceName) {
+      config.headers['X-Device-Name'] = Constants.deviceName
     }
   } catch {}
   return config
@@ -33,11 +97,16 @@ export const setOnUnauthorized = (handler) => {
   unauthorizedHandler = handler
 }
 
-// Response interceptor — handle 401 auth failures gracefully
+// Response interceptor — handle 401 single-device invalidation gracefully
 api.interceptors.response.use(
   (res) => res,
   async (err) => {
     const isUnauthorized = err.response?.status === 401
+    const resData = err.response?.data || {}
+    const isSessionTerminated = resData.code === 'SESSION_TERMINATED' ||
+      resData.data?.code === 'SESSION_TERMINATED' ||
+      String(resData.message || '').includes('another device')
+    const message = resData.message || 'Your account has been logged in from another device. Please login again.'
     const url = err.config?.url || ''
     const isAuthLoginOrOtp = url.includes('action=login') || url.includes('action=verify_otp') || url.includes('action=register')
 
@@ -47,7 +116,7 @@ api.interceptors.response.use(
       } catch {}
       if (typeof unauthorizedHandler === 'function') {
         try {
-          unauthorizedHandler()
+          unauthorizedHandler({ isSessionTerminated, message })
         } catch {}
       }
     }
@@ -64,12 +133,28 @@ export const tokenManager = {
 
 // ── Auth ──────────────────────────────────────────────────────
 export const authAPI = {
-  login:         (data) => api.post('/?endpoint=auth&action=login', data),
-  register:      (data) => api.post('/?endpoint=auth&action=register', data),
-  registerDriver:(data) => api.post('/?endpoint=auth&action=register_driver', data),
-  verifyOTP:     (data) => api.post('/?endpoint=auth&action=verify_otp', data),
+  login: async (data) => {
+    const meta = await getDeviceMetadata()
+    return api.post('/?endpoint=auth&action=login', { ...meta, ...data })
+  },
+  register: async (data) => {
+    const meta = await getDeviceMetadata()
+    return api.post('/?endpoint=auth&action=register', { ...meta, ...data })
+  },
+  registerDriver: async (data) => {
+    const meta = await getDeviceMetadata()
+    return api.post('/?endpoint=auth&action=register_driver', { ...meta, ...data })
+  },
+  verifyOTP: async (data) => {
+    const meta = await getDeviceMetadata()
+    return api.post('/?endpoint=auth&action=verify_otp', { ...meta, ...data })
+  },
   resendOTP:     (data) => api.post('/?endpoint=auth&action=resend_otp', data),
   verify:        ()     => api.get('/?endpoint=auth&action=verify'),
+  logout: async () => {
+    const meta = await getDeviceMetadata()
+    return api.post('/?endpoint=auth&action=logout', meta)
+  },
   updateProfile: (data) => api.post('/?endpoint=auth&action=update_profile', data),
   changePassword:(data) => api.post('/?endpoint=auth&action=change_password', data),
   deleteAccount: (data) => api.post('/?endpoint=auth&action=delete_account', data),
@@ -117,6 +202,7 @@ export const driverAPI = {
   earnings:       (period) => api.get(`/?endpoint=driver&action=earnings&period=${period || 'today'}`),
   dashboard:      () => api.get('/?endpoint=driver&action=dashboard'),
   pendingRides:   () => api.get('/?endpoint=driver&action=pending_rides'),
+  dismissCancelledTrip: (tripId) => api.post('/?endpoint=driver&action=dismiss_cancellation', { trip_id: tripId }),
   respondLongTrip:(id, action, reason) => api.post('/?endpoint=long_trips&action=respond_long_trip', { id, action, reason }),
   getDocuments: async () => {
     try {
@@ -286,7 +372,16 @@ export const longTripAPI = {
   submitVerification:     (data) => api.post('/?endpoint=long_trips&action=submit_verification', data),
   getManifest:            (id) => api.get(`/?endpoint=long_trips&action=manifest&booking_id=${id}`),
   getTicket:              (id, ref) => api.get(`/?endpoint=long_trips&action=get_ticket${id ? `&id=${id}` : ''}${ref ? `&booking_ref=${encodeURIComponent(ref)}` : ''}`),
-  verifyPassengerOTP:     (data) => api.post('/?endpoint=long_trips&action=verify_passenger_otp', data),
+  verifyPassengerOTP:     (data, passengerId, otp) => {
+    if (typeof data === 'object' && data !== null) {
+      return api.post('/?endpoint=long_trips&action=verify_passenger_otp', data)
+    }
+    return api.post('/?endpoint=long_trips&action=verify_passenger_otp', {
+      booking_id: data,
+      passenger_id: passengerId,
+      otp: otp,
+    })
+  },
   scanTicketQR:           (data) => api.post('/?endpoint=long_trips&action=scan_ticket_qr', data),
   completeDrop:           (data) => api.post('/?endpoint=long_trips&action=complete_passenger_drop', data),
   assignedScheduledTrips: () => api.get('/?endpoint=driver&action=assigned_scheduled_trips'),
@@ -311,25 +406,138 @@ export const settingsAPI = {
   list: () => api.get('/?endpoint=settings&action=list'),
 }
 
-// ── File Uploads ──────────────────────────────────────────────
+// ── File Uploads & Multipart Helpers ──────────────────────────
+export const createUploadFormData = (localUri, options = {}) => {
+  const {
+    prefix = 'file',
+    type = 'profile',
+    asset = null,
+  } = options
+
+  // 1. Determine safe extension
+  let ext = 'jpg'
+  const assetMime = (asset?.mimeType || '').toLowerCase()
+  if (assetMime.includes('png')) ext = 'png'
+  else if (assetMime.includes('webp')) ext = 'webp'
+  else if (assetMime.includes('pdf')) ext = 'pdf'
+  else if (assetMime.includes('jpeg') || assetMime.includes('jpg')) ext = 'jpg'
+  else {
+    const rawTarget = (asset?.fileName || localUri || '').split('?')[0]
+    const match = /\.(jpg|jpeg|png|webp|pdf)$/i.exec(rawTarget)
+    if (match) {
+      ext = match[1].toLowerCase()
+      if (ext === 'jpeg') ext = 'jpg'
+    }
+  }
+
+  // 2. Determine MIME type
+  let mimeType = 'image/jpeg'
+  if (ext === 'png') mimeType = 'image/png'
+  else if (ext === 'webp') mimeType = 'image/webp'
+  else if (ext === 'pdf') mimeType = 'application/pdf'
+
+  // 3. Guarantee filename ALWAYS has the extension
+  const safeFilename = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`
+
+  // 4. Safe URI: on Android, if asset has base64, using a data: URI allows React Native's
+  // RequestBodyUtil to stream directly from in-memory bytes without filesystem permissions
+  let safeUri = localUri
+  if (asset?.base64) {
+    safeUri = `data:${mimeType};base64,${asset.base64}`
+  } else if (Platform.OS === 'android') {
+    try {
+      safeUri = decodeURI(localUri)
+    } catch {
+      safeUri = localUri
+    }
+  } else {
+    safeUri = localUri.replace('file://', '')
+  }
+
+  const formData = new FormData()
+  formData.append('file', {
+    uri: safeUri,
+    name: safeFilename,
+    type: mimeType,
+  })
+  formData.append('type', type)
+
+  // Attach metadata for fallback
+  formData._rawBase64 = asset?.base64 || null
+  formData._mimeType = mimeType
+
+  return formData
+}
+
 export const uploadAPI = {
   upload: async (formData, type = 'profile') => {
     try {
       const token = await SecureStore.getItemAsync(TOKEN_KEY)
-      const url = `${BASE_URL}/?endpoint=upload&type=${type}`
+      let url = `${BASE_URL}/?endpoint=upload&type=${encodeURIComponent(type)}`
+      if (token) {
+        url += `&token=${encodeURIComponent(token)}`
+      }
       const headers = {
         'Accept': 'application/json',
       }
       if (token) {
         headers['Authorization'] = `Bearer ${token}`
+        headers['X-Auth-Token'] = token
+        headers['X-Access-Token'] = token
       }
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: headers,
-        body: formData,
+
+      // Use native XMLHttpRequest to avoid Expo 57 fetch "Unsupported FormDataPart implementation"
+      return await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', url)
+        xhr.timeout = 60000
+
+        for (const [key, value] of Object.entries(headers)) {
+          xhr.setRequestHeader(key, value)
+        }
+
+        xhr.onload = () => {
+          let data
+          try {
+            data = JSON.parse(xhr.responseText)
+          } catch {
+            console.log('Upload non-JSON response status:', xhr.status, 'body:', xhr.responseText)
+            return reject(new Error(`Server error (HTTP ${xhr.status})`))
+          }
+
+          if (xhr.status >= 200 && xhr.status < 300 && data.status !== 'error' && data.status !== false) {
+            resolve({ data })
+          } else {
+            const errMsg = data?.message || `Upload failed (HTTP ${xhr.status})`
+            reject(new Error(errMsg))
+          }
+        }
+
+        xhr.onerror = async () => {
+          // If multipart XHR fails on Android file uri, fallback to base64 JSON upload
+          if (formData?._rawBase64) {
+            try {
+              console.log('Multipart upload failed, falling back to base64 JSON upload...')
+              const jsonRes = await api.post(`/?endpoint=upload&type=${encodeURIComponent(type)}`, {
+                base64: `data:${formData._mimeType || 'image/jpeg'};base64,${formData._rawBase64}`,
+                type: type,
+              })
+              if (jsonRes.data?.status === 'success' || jsonRes.data?.url || jsonRes.data?.path) {
+                return resolve(jsonRes)
+              }
+            } catch (fbErr) {
+              console.log('Base64 upload fallback error:', fbErr)
+            }
+          }
+          reject(new Error('Network error during file upload. Please check connection.'))
+        }
+
+        xhr.ontimeout = () => {
+          reject(new Error('Upload request timed out. Please try again.'))
+        }
+
+        xhr.send(formData)
       })
-      const data = await response.json()
-      return { data }
     } catch (err) {
       console.log('Mobile file upload error:', err)
       throw err

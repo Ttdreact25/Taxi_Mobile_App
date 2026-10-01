@@ -70,6 +70,7 @@ export default function BookingTrackScreen({ route, navigation }) {
   const [selectedCancelReason, setSelectedCancelReason] = useState(CUSTOMER_CANCEL_REASONS[0].id)
   const [customCancelText, setCustomCancelText] = useState('')
   const [cancelling, setCancelling] = useState(false)
+  const isCancelledAlertShownRef = useRef(false)
 
   // Poll Live Tracking Data every 3 seconds
   const fetchLiveTracking = useCallback(async () => {
@@ -86,9 +87,12 @@ export default function BookingTrackScreen({ route, navigation }) {
           setShowRatingModal(true)
         } else if (['cancelled', 'CANCELLED'].includes(b?.status)) {
           clearInterval(pollTimerRef.current)
-          Alert.alert('Booking Cancelled', 'This ride has been cancelled.', [
-            { text: 'OK', onPress: () => navigation.navigate('Home') }
-          ])
+          if (!isCancelledAlertShownRef.current) {
+            isCancelledAlertShownRef.current = true
+            Alert.alert('Booking Cancelled', 'This ride has been cancelled.', [
+              { text: 'OK', onPress: () => navigation.navigate('Home') }
+            ])
+          }
         }
       }
     } catch (err) {
@@ -348,6 +352,7 @@ export default function BookingTrackScreen({ route, navigation }) {
         return
       }
       clearInterval(pollTimerRef.current)
+      isCancelledAlertShownRef.current = true
       setShowCancelModal(false)
       Alert.alert('Ride Cancelled', 'Your booking has been cancelled successfully.', [
         { text: 'OK', onPress: () => navigation.navigate('Home') },

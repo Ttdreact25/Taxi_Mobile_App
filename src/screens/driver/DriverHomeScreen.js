@@ -19,9 +19,12 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import * as Location from 'expo-location'
-import * as ImagePicker from 'expo-image-picker'
+import * as SecureStore from 'expo-secure-store'
 import { driverAPI, adsAPI, longTripAPI, notifAPI, uploadAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
+
+// Module-level persistent cache of dismissed cancelled trip IDs (guarantees alert shows exactly ONCE across screens/tabs)
+const acknowledgedCancelledTripIds = new Set()
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import AdCarousel from '../../components/ui/AdCarousel'
 import LiveTripMap from '../../components/common/LiveTripMap'
@@ -214,9 +217,13 @@ const DriverHomeScreen = ({ navigation }) => {
         ? activeRes.value.data.cancelled_trip
         : (dashRes.status === 'fulfilled' && dashRes.value.data?.cancelled_trip ? dashRes.value.data.cancelled_trip : null)
 
-      // Automatic Trip Cancellation Detection for Driver
-      if (serverCancelledTrip?.id && acknowledgedCancelledTripIdRef.current !== serverCancelledTrip.id) {
-        acknowledgedCancelledTripIdRef.current = serverCancelledTrip.id
+      // Automatic Trip Cancellation Detection for Driver (Strictly ONCE per cancelled trip)
+      const serverCancId = serverCancelledTrip?.id ? Number(serverCancelledTrip.id) : null
+      if (serverCancId && !acknowledgedCancelledTripIds.has(serverCancId)) {
+        acknowledgedCancelledTripIds.add(serverCancId)
+        try {
+          SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
+        } catch {}
         prevActiveRideRef.current = null
         setActiveRide(null)
         setOtpModalVisible(false)
@@ -226,8 +233,8 @@ const DriverHomeScreen = ({ navigation }) => {
           Vibration.vibrate([0, 400, 200, 400])
         } catch {}
         setCancelledNotice({
-          id: serverCancelledTrip.id,
-          bookingRef: serverCancelledTrip.booking_ref || `CTB#${serverCancelledTrip.id}`,
+          id: serverCancId,
+          bookingRef: serverCancelledTrip.booking_ref || `CTB#${serverCancId}`,
           pickup: serverCancelledTrip.pickup_address,
           dest: serverCancelledTrip.dest_address,
           reason: serverCancelledTrip.cancellation_reason || 'Rider cancelled the ride.',
@@ -235,8 +242,12 @@ const DriverHomeScreen = ({ navigation }) => {
       } else if (!act && prevActiveRideRef.current?.id) {
         const oldRide = prevActiveRideRef.current
         prevActiveRideRef.current = null
-        if (acknowledgedCancelledTripIdRef.current !== oldRide.id) {
-          acknowledgedCancelledTripIdRef.current = oldRide.id
+        const oldRideId = Number(oldRide.id)
+        if (oldRideId && !acknowledgedCancelledTripIds.has(oldRideId)) {
+          acknowledgedCancelledTripIds.add(oldRideId)
+          try {
+            SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
+          } catch {}
           setActiveRide(null)
           setOtpModalVisible(false)
           setPassOtpModal(null)
@@ -245,8 +256,8 @@ const DriverHomeScreen = ({ navigation }) => {
             Vibration.vibrate([0, 400, 200, 400])
           } catch {}
           setCancelledNotice({
-            id: oldRide.id,
-            bookingRef: oldRide.booking_ref || `CTB#${oldRide.id}`,
+            id: oldRideId,
+            bookingRef: oldRide.booking_ref || `CTB#${oldRideId}`,
             pickup: oldRide.pickup_address,
             dest: oldRide.dest_address,
             reason: 'Rider cancelled this booking.',
@@ -302,6 +313,20 @@ const DriverHomeScreen = ({ navigation }) => {
     } finally {
       if (isPull) setRefreshing(false)
     }
+  }, [])
+
+  // Restore acknowledged cancelled trip IDs on mount
+  useEffect(() => {
+    SecureStore.getItemAsync('@ack_cancelled_trip_ids').then(saved => {
+      if (saved) {
+        try {
+          const arr = JSON.parse(saved)
+          if (Array.isArray(arr)) {
+            arr.forEach(id => acknowledgedCancelledTripIds.add(Number(id)))
+          }
+        } catch {}
+      }
+    }).catch(() => {})
   }, [])
 
   // High Frequency Polling for Real-Time Dispatch & Location updates
@@ -813,6 +838,27 @@ const DriverHomeScreen = ({ navigation }) => {
       ]
     )
   }
+
+  // Dismiss Cancelled Trip Notice strictly once & prepare for next incoming trips
+  const handleDismissCancelledNotice = useCallback(() => {
+    if (cancelledNotice?.id) {
+      const id = Number(cancelledNotice.id)
+      acknowledgedCancelledTripIds.add(id)
+      try {
+        SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
+      } catch {}
+      // Notify backend so it clears from active query and frees the driver for new trips
+      driverAPI.dismissCancelledTrip?.(id)?.catch(() => {})
+    }
+    setCancelledNotice(null)
+    setActiveRide(null)
+    prevActiveRideRef.current = null
+    setOtpModalVisible(false)
+    setPassOtpModal(null)
+    setDetailModalTrip(null)
+    // Instantly refresh dashboard so driver is clean and ready for new rides!
+    loadDashboardData()
+  }, [cancelledNotice, loadDashboardData])
 
   // Performance calculations
   const completedCount = stats?.trips ?? stats?.completed_today ?? 0
@@ -2306,7 +2352,7 @@ const DriverHomeScreen = ({ navigation }) => {
         visible={Boolean(cancelledNotice)}
         animationType="fade"
         transparent={true}
-        onRequestClose={() => setCancelledNotice(null)}
+        onRequestClose={handleDismissCancelledNotice}
       >
         <View style={styles.modalOverlay}>
           <View style={[styles.dialogCard, { padding: 22, alignItems: 'center' }]}>
@@ -2418,10 +2464,7 @@ const DriverHomeScreen = ({ navigation }) => {
                 justifyContent: 'center',
                 ...SHADOW.small,
               }}
-              onPress={() => {
-                setCancelledNotice(null)
-                loadDashboardData()
-              }}
+              onPress={handleDismissCancelledNotice}
               activeOpacity={0.88}
             >
               <Text style={{ fontSize: 15, fontWeight: '900', color: '#000000' }}>
