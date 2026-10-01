@@ -13,13 +13,14 @@ import {
   Linking,
   Image,
   RefreshControl,
+  Vibration,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import * as Location from 'expo-location'
 import * as ImagePicker from 'expo-image-picker'
-import { driverAPI, adsAPI, longTripAPI, notifAPI, uploadAPI, resolveAssetUrl } from '../../api/api'
+import { driverAPI, adsAPI, longTripAPI, notifAPI, uploadAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import AdCarousel from '../../components/ui/AdCarousel'
@@ -35,7 +36,7 @@ const REJECT_REASONS = [
 ]
 
 const getScheduleCountdown = (pickupDate, pickupTime, nowTime = Date.now()) => {
-  if (!pickupDate) return { text: 'Scheduled', isBufferTime: false, badgeColor: '#6366F1', badgeBg: '#EEF2FF' }
+  if (!pickupDate) return { text: 'Scheduled', isBufferTime: false, badgeColor: '#D97706', badgeBg: '#FEF3C7' }
 
   const dateParts = pickupDate.split('-').map(Number)
   const pYear = dateParts[0]
@@ -57,10 +58,10 @@ const getScheduleCountdown = (pickupDate, pickupTime, nowTime = Date.now()) => {
   const calendarDayDiff = Math.round((pickupDateOnly.getTime() - nowDateOnly.getTime()) / (1000 * 60 * 60 * 24))
 
   if (calendarDayDiff >= 2) {
-    return { text: `Starts in ${calendarDayDiff} Days`, badgeColor: '#4338CA', badgeBg: '#EEF2FF', isBufferTime: false }
+    return { text: `Starts in ${calendarDayDiff} Days`, badgeColor: '#B45309', badgeBg: '#FEF3C7', isBufferTime: false }
   }
   if (calendarDayDiff === 1) {
-    return { text: 'Starts Tomorrow', badgeColor: '#4F46E5', badgeBg: '#EEF2FF', isBufferTime: false }
+    return { text: 'Starts Tomorrow', badgeColor: '#D97706', badgeBg: '#FEF3C7', isBufferTime: false }
   }
   if (calendarDayDiff === 0) {
     if (diffMinutes > 60) {
@@ -117,10 +118,14 @@ const DriverHomeScreen = ({ navigation }) => {
 
   // Full Trip Details Modal Sheet
   const [detailModalTrip, setDetailModalTrip] = useState(null)
+  const [cancelledNotice, setCancelledNotice] = useState(null)
 
   const pollRef = useRef(null)
   const timerRef = useRef(null)
   const incomingIdRef = useRef(null)
+  const alertedAssignedTripIdRef = useRef(null)
+  const prevActiveRideRef = useRef(null)
+  const acknowledgedCancelledTripIdRef = useRef(null)
   const lastGeoRef = useRef({ lat: 0, lng: 0, area: '', address: '', timestamp: 0 })
 
   // Reverse Geocoding with memory caching to extract readable Area (e.g. KK Nagar, Chennai)
@@ -204,9 +209,71 @@ const DriverHomeScreen = ({ navigation }) => {
         ? activeRes.value.data.booking
         : (dashRes.status === 'fulfilled' && dashRes.value.data?.active_booking ? dashRes.value.data.active_booking : null)
 
+      const serverCancelledTrip = (activeRes.status === 'fulfilled' && activeRes.value.data?.cancelled_trip)
+        ? activeRes.value.data.cancelled_trip
+        : (dashRes.status === 'fulfilled' && dashRes.value.data?.cancelled_trip ? dashRes.value.data.cancelled_trip : null)
+
+      // Automatic Trip Cancellation Detection for Driver
+      if (serverCancelledTrip?.id && acknowledgedCancelledTripIdRef.current !== serverCancelledTrip.id) {
+        acknowledgedCancelledTripIdRef.current = serverCancelledTrip.id
+        prevActiveRideRef.current = null
+        setActiveRide(null)
+        setOtpModalVisible(false)
+        setPassOtpModal(null)
+        setDetailModalTrip(null)
+        try {
+          Vibration.vibrate([0, 400, 200, 400])
+        } catch {}
+        setCancelledNotice({
+          id: serverCancelledTrip.id,
+          bookingRef: serverCancelledTrip.booking_ref || `CTB#${serverCancelledTrip.id}`,
+          pickup: serverCancelledTrip.pickup_address,
+          dest: serverCancelledTrip.dest_address,
+          reason: serverCancelledTrip.cancellation_reason || 'Rider cancelled the ride.',
+        })
+      } else if (!act && prevActiveRideRef.current?.id) {
+        const oldRide = prevActiveRideRef.current
+        prevActiveRideRef.current = null
+        if (acknowledgedCancelledTripIdRef.current !== oldRide.id) {
+          acknowledgedCancelledTripIdRef.current = oldRide.id
+          setActiveRide(null)
+          setOtpModalVisible(false)
+          setPassOtpModal(null)
+          setDetailModalTrip(null)
+          try {
+            Vibration.vibrate([0, 400, 200, 400])
+          } catch {}
+          setCancelledNotice({
+            id: oldRide.id,
+            bookingRef: oldRide.booking_ref || `CTB#${oldRide.id}`,
+            pickup: oldRide.pickup_address,
+            dest: oldRide.dest_address,
+            reason: 'Rider cancelled this booking.',
+          })
+        }
+      }
+
+      if (act?.id) {
+        prevActiveRideRef.current = act
+      }
+
       setActiveRide(act)
       if (act?.id) {
         setPendingRides([])
+
+        // Immediate Audio/Haptic Alert when driver is assigned to a ride!
+        if (act.status === 'driver_assigned' && alertedAssignedTripIdRef.current !== act.id) {
+          alertedAssignedTripIdRef.current = act.id
+          try {
+            Vibration.vibrate([0, 500, 200, 500])
+          } catch {}
+          Alert.alert(
+            '🚨 New Local Ride Assigned!',
+            `A new ride has been assigned to you!\n\n📍 Pickup: ${act.pickup_address}\n🏁 Drop: ${act.dest_address}\n💵 Fare: ₹${Math.round(act.final_fare || act.fare || 0)}\n\nPlease proceed to pickup location!`,
+            [{ text: 'View & Proceed to Pickup', style: 'default' }]
+          )
+        }
+
         if (act.trip_type === 'shared' || act.is_shared == 1 || act.is_shared === '1') {
           longTripAPI.getManifest(act.id).then(mRes => {
             setManifest(mRes.data?.passengers || mRes.data?.manifest || [])
@@ -300,6 +367,9 @@ const DriverHomeScreen = ({ navigation }) => {
     if (currentId) {
       if (incomingIdRef.current !== currentId) {
         incomingIdRef.current = currentId
+        try {
+          Vibration.vibrate([0, 500, 200, 500])
+        } catch {}
         setCountdown(30)
         if (timerRef.current) clearInterval(timerRef.current)
         timerRef.current = setInterval(() => {
@@ -435,16 +505,11 @@ const DriverHomeScreen = ({ navigation }) => {
       const localUri = selfieAsset.uri
       if (localUri) {
         try {
-          const filename = localUri.split('/').pop() || `online_selfie_${Date.now()}.jpg`
-          const match = /\.(\w+)$/.exec(filename)
-          const mimeType = match ? `image/${match[1].toLowerCase()}` : 'image/jpeg'
-          const formData = new FormData()
-          formData.append('file', {
-            uri: Platform.OS === 'android' ? localUri : localUri.replace('file://', ''),
-            name: filename,
-            type: mimeType,
+          const formData = createUploadFormData(localUri, {
+            prefix: 'online_selfie',
+            type: 'kyc',
+            asset: selfieAsset,
           })
-          formData.append('type', 'kyc')
 
           const uploadRes = await uploadAPI.upload(formData, 'kyc')
           const uData = uploadRes.data || {}
@@ -604,7 +669,7 @@ const DriverHomeScreen = ({ navigation }) => {
   // Verify Start OTP (Normal Trip)
   const handleVerifyStartOtp = async () => {
     if (!enteredOtp.trim() || enteredOtp.trim().length < 4) {
-      Alert.alert('Invalid OTP', 'Please enter the 4-digit ride start OTP provided by the customer.')
+      Alert.alert('Invalid OTP', 'Please enter the 4 to 6-digit ride start OTP provided by the customer.')
       return
     }
     setVerifyingOtp(true)
@@ -628,13 +693,17 @@ const DriverHomeScreen = ({ navigation }) => {
   // Verify Passenger OTP (Shared Trip Multi-Passenger)
   const handleVerifyPassengerOtp = async () => {
     if (!passEnteredOtp.trim() || passEnteredOtp.trim().length < 4) {
-      Alert.alert('Invalid OTP', 'Please enter the 4-digit boarding OTP provided by the passenger.')
+      Alert.alert('Invalid OTP', 'Please enter the 4 to 6-digit boarding OTP provided by the passenger.')
       return
     }
     setVerifyingPassOtp(true)
     try {
       const passengerId = passOtpModal?.passenger_id || passOtpModal?.id || 0
-      const res = await longTripAPI.verifyPassengerOTP(activeRide.id, passengerId, passEnteredOtp.trim())
+      const res = await longTripAPI.verifyPassengerOTP({
+        booking_id: activeRide.id,
+        passenger_id: passengerId,
+        otp: passEnteredOtp.trim(),
+      })
       if (res.data?.status === 'success') {
         Alert.alert('Boarding Verified ✅', `Passenger ${passOtpModal?.customer_name || 'Passenger'} has successfully boarded!`)
         setPassOtpModal(null)
@@ -671,7 +740,7 @@ const DriverHomeScreen = ({ navigation }) => {
     if (!activeRide || !passenger) return
     Alert.alert(
       'Confirm Passenger Drop',
-      `Has passenger ${passenger.customer_name} arrived at their destination?`,
+      `Has passenger ${passenger.customer_name || 'Passenger'} arrived at their destination?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -679,14 +748,47 @@ const DriverHomeScreen = ({ navigation }) => {
           onPress: async () => {
             try {
               const pId = passenger.passenger_id || passenger.id || 0
+              const mId = passenger.id || 0
               const res = await longTripAPI.completeDrop({
                 booking_id: activeRide.id,
                 passenger_id: pId,
+                manifest_id: mId,
+                id: mId,
                 payment_method: 'cash',
               })
               if (res.data?.status === 'success') {
-                Alert.alert('Drop Completed 🎉', `Passenger ${passenger.customer_name} has arrived and is marked as dropped!`)
+                // Optimistically mark passenger dropped locally so UI updates instantly
+                setManifest(prev =>
+                  prev.map(p => {
+                    const match = (mId && p.id === mId) || (pId && (p.passenger_id === pId || p.id === pId))
+                    return match ? { ...p, is_dropped: true } : p
+                  })
+                )
+
+                // Sync fresh dashboard data from server
                 loadDashboardData()
+
+                // Check if this was the last passenger or all passengers are dropped
+                const remaining = manifest.filter(p => {
+                  const isCurrent = (mId && p.id === mId) || (pId && (p.passenger_id === pId || p.id === pId))
+                  return !isCurrent && !p.is_dropped
+                })
+
+                if (res.data?.all_dropped || remaining.length === 0) {
+                  Alert.alert(
+                    'All Drops Completed! 🎉',
+                    `Passenger ${passenger.customer_name || 'Passenger'} has arrived! All passenger drops are now complete. Do you want to complete the shared journey and settle payments?`,
+                    [
+                      { text: 'Later', style: 'cancel' },
+                      {
+                        text: 'Complete Journey & Settle ✅',
+                        onPress: () => handleUpdateRideStatus('completed')
+                      }
+                    ]
+                  )
+                } else {
+                  Alert.alert('Drop Completed 🎉', `Passenger ${passenger.customer_name || 'Passenger'} has arrived and is marked as dropped!`)
+                }
               } else {
                 Alert.alert('Error', res.data?.message || 'Could not complete passenger drop.')
               }
@@ -785,12 +887,12 @@ const DriverHomeScreen = ({ navigation }) => {
           const isRej = (driver?.approval_status || '').toLowerCase() === 'rejected'
           const hasSubmitted = Boolean(driver?.has_kyc_submitted || driver?.license_front_image || driver?.profile_selfie)
           
-          const bannerBg = isRej ? '#FEF2F2' : hasSubmitted ? '#FFFBEB' : '#EFF6FF'
-          const borderColor = isRej ? '#FECACA' : hasSubmitted ? '#FDE68A' : '#BFDBFE'
+          const bannerBg = isRej ? '#FEF2F2' : hasSubmitted ? '#FFFBEB' : '#FFF8E7'
+          const borderColor = isRej ? '#FECACA' : hasSubmitted ? '#FDE68A' : '#FDE68A'
           const iconName = isRej ? 'alert-circle' : hasSubmitted ? 'time' : 'shield-half'
-          const iconColor = isRej ? '#DC2626' : hasSubmitted ? '#D97706' : '#2563EB'
-          const titleColor = isRej ? '#991B1B' : hasSubmitted ? '#92400E' : '#1E40AF'
-          const subColor = isRej ? '#B91C1C' : hasSubmitted ? '#B45309' : '#1D4ED8'
+          const iconColor = isRej ? '#DC2626' : hasSubmitted ? '#D97706' : '#D97706'
+          const titleColor = isRej ? '#991B1B' : hasSubmitted ? '#92400E' : '#0F172A'
+          const subColor = isRej ? '#B91C1C' : hasSubmitted ? '#B45309' : '#B45309'
           
           const title = isRej
             ? 'KYC Verification Rejected'
@@ -837,7 +939,7 @@ const DriverHomeScreen = ({ navigation }) => {
                 </View>
               </View>
               <View style={{
-                backgroundColor: isRej ? '#FEE2E2' : hasSubmitted ? '#FEF3C7' : '#DBEAFE',
+                backgroundColor: isRej ? '#FEE2E2' : hasSubmitted ? '#FEF3C7' : '#FEF3C7',
                 paddingHorizontal: 8,
                 paddingVertical: 5,
                 borderRadius: 8,
@@ -1046,7 +1148,18 @@ const DriverHomeScreen = ({ navigation }) => {
           }
           const currIdx = activeRide.current_stop_index || 0
           const totalStops = rawStops.length
-          const isTripStarted = ['trip_started', 'in_progress'].includes(activeRide.status)
+          const isRoundTrip = Boolean(
+            Number(activeRide.is_round_trip) === 1 ||
+            activeRide.is_round_trip === true ||
+            activeRide.is_round_trip === '1' ||
+            (activeRide.trip_type && activeRide.trip_type.toLowerCase().includes('round_trip')) ||
+            (activeRide.booking_type && activeRide.booking_type.toLowerCase().includes('round_trip')) ||
+            Boolean(activeRide.return_date)
+          )
+          const isReturnPickup = activeRide.status === 'return_pickup'
+          const isReturnStarted = ['return_started', 'return_in_progress'].includes(activeRide.status)
+          const isOnwardTripStarted = ['trip_started', 'in_progress'].includes(activeRide.status)
+          const isTripStarted = isOnwardTripStarted || isReturnStarted || isReturnPickup
           const isArrived = activeRide.status === 'driver_arrived'
           const isShared = Boolean(
             activeRide.trip_type === 'shared' ||
@@ -1069,15 +1182,25 @@ const DriverHomeScreen = ({ navigation }) => {
           let activeTargetLat = activeRide.pickup_lat || 12.9716
           let activeTargetLng = activeRide.pickup_lng || 77.5946
 
-          if (isShared && !isTripStarted && nextUnboardedPassenger) {
+          if (isShared && !isOnwardTripStarted && nextUnboardedPassenger) {
             activeTargetName = `Pickup ${nextUnboardedPassenger.customer_name}: ${nextUnboardedPassenger.pickup_address}`
             activeTargetLat = nextUnboardedPassenger.pickup_lat || activeRide.pickup_lat || 12.9716
             activeTargetLng = nextUnboardedPassenger.pickup_lng || activeRide.pickup_lng || 77.5946
-          } else if (isShared && isTripStarted && nextUndroppedPassenger) {
+          } else if (isShared && isOnwardTripStarted && nextUndroppedPassenger) {
             activeTargetName = `Drop ${nextUndroppedPassenger.customer_name}: ${nextUndroppedPassenger.dest_address}`
             activeTargetLat = nextUndroppedPassenger.dest_lat || activeRide.dest_lat || 12.9716
             activeTargetLng = nextUndroppedPassenger.dest_lng || activeRide.dest_lng || 77.5946
-          } else if (isTripStarted) {
+          } else if (isRoundTrip && isReturnPickup) {
+            // Round Trip Return Leg: Driver navigating to 1st drop location for pickup
+            activeTargetName = `Return Pickup (1st Drop): ${activeRide.dest_address}`
+            activeTargetLat = activeRide.dest_lat || 12.9716
+            activeTargetLng = activeRide.dest_lng || 77.5946
+          } else if (isRoundTrip && isReturnStarted) {
+            // Round Trip Return Leg: Driver navigating back to original starting pickup location
+            activeTargetName = `Return Drop (Origin): ${activeRide.pickup_address}`
+            activeTargetLat = activeRide.pickup_lat || 12.9716
+            activeTargetLng = activeRide.pickup_lng || 77.5946
+          } else if (isOnwardTripStarted) {
             if (currIdx < totalStops && rawStops[currIdx]) {
               activeTargetName = `Stop ${currIdx + 1}: ${rawStops[currIdx].address}`
               activeTargetLat = rawStops[currIdx].lat || activeRide.dest_lat || 12.9716
@@ -1089,18 +1212,60 @@ const DriverHomeScreen = ({ navigation }) => {
             }
           }
 
+          const mapOrigin = isReturnStarted
+            ? {
+                latitude: parseFloat(activeRide.dest_lat) || 12.9716,
+                longitude: parseFloat(activeRide.dest_lng) || 77.5946,
+                address: activeRide.dest_address,
+              }
+            : {
+                latitude: parseFloat(activeRide.pickup_lat) || 12.9716,
+                longitude: parseFloat(activeRide.pickup_lng) || 77.5946,
+                address: activeRide.pickup_address,
+              }
+
+          const mapDestination = isReturnStarted
+            ? {
+                latitude: parseFloat(activeRide.pickup_lat) || 12.9716,
+                longitude: parseFloat(activeRide.pickup_lng) || 77.5946,
+                address: activeRide.pickup_address,
+              }
+            : {
+                latitude: parseFloat(activeRide.dest_lat) || 12.9716,
+                longitude: parseFloat(activeRide.dest_lng) || 77.5946,
+                address: activeRide.dest_address,
+              }
+
           return (
             <View style={styles.activeCard}>
               <View style={styles.activeHeader}>
                 <View>
                   <Text style={styles.bookingRef}>{activeRide.booking_ref}</Text>
                   <Text style={styles.tripTypeBadge}>
-                    {isShared ? '🤝 SHARED MULTI-PASSENGER TRIP' : (activeRide.trip_type ? activeRide.trip_type.replace(/_/g, ' ').toUpperCase() : 'ACTIVE RIDE')}
+                    {isShared ? '🤝 SHARED MULTI-PASSENGER TRIP' : (isRoundTrip ? '🔁 ROUND TRIP' : (activeRide.trip_type ? activeRide.trip_type.replace(/_/g, ' ').toUpperCase() : 'ACTIVE RIDE'))}
                   </Text>
                 </View>
-                <View style={[styles.statusBadge, { backgroundColor: isTripStarted ? '#EDE9FE' : (isArrived ? '#FEF3C7' : '#DCFCE7') }]}>
-                  <Text style={[styles.statusBadgeText, { color: isTripStarted ? '#7C3AED' : (isArrived ? '#B45309' : '#15803D') }]}>
-                    {activeRide.status === 'driver_arrived' ? 'DRIVER ARRIVED' : (isTripStarted ? 'IN PROGRESS' : activeRide.status?.replace(/_/g, ' ').toUpperCase())}
+                <View style={[styles.statusBadge, {
+                  backgroundColor: isReturnStarted
+                    ? '#DCFCE7'
+                    : (isReturnPickup
+                      ? '#FEF3C7'
+                      : (isOnwardTripStarted ? '#EDE9FE' : (isArrived ? '#FEF3C7' : '#DCFCE7')))
+                }]}>
+                  <Text style={[styles.statusBadgeText, {
+                    color: isReturnStarted
+                      ? '#15803D'
+                      : (isReturnPickup
+                        ? '#B45309'
+                        : (isOnwardTripStarted ? '#7C3AED' : (isArrived ? '#B45309' : '#15803D')))
+                  }]}>
+                    {isReturnStarted
+                      ? 'RETURN IN PROGRESS 🔁'
+                      : (isReturnPickup
+                        ? 'RETURN PICKUP 📍'
+                        : (activeRide.status === 'driver_arrived'
+                          ? 'DRIVER ARRIVED'
+                          : (isOnwardTripStarted ? (isRoundTrip ? 'ONWARD TRIP ➡️' : 'IN PROGRESS') : activeRide.status?.replace(/_/g, ' ').toUpperCase())))}
                   </Text>
                 </View>
               </View>
@@ -1108,18 +1273,10 @@ const DriverHomeScreen = ({ navigation }) => {
               {/* Live Interactive Road Directions & Turn-by-Turn GPS Map */}
               <View style={{ borderRadius: RADIUS.lg, overflow: 'hidden', marginVertical: 10 }}>
                 <LiveTripMap
-                  origin={{
-                    latitude: parseFloat(activeRide.pickup_lat) || 12.9716,
-                    longitude: parseFloat(activeRide.pickup_lng) || 77.5946,
-                    address: activeRide.pickup_address,
-                  }}
-                  destination={{
-                    latitude: parseFloat(activeRide.dest_lat) || 12.9716,
-                    longitude: parseFloat(activeRide.dest_lng) || 77.5946,
-                    address: activeRide.dest_address,
-                  }}
+                  origin={mapOrigin}
+                  destination={mapDestination}
                   driverLocation={driverLocation || (driver?.lat && driver?.lng ? { latitude: parseFloat(driver.lat), longitude: parseFloat(driver.lng) } : null)}
-                  waypoints={rawStops}
+                  waypoints={isReturnStarted ? [] : rawStops}
                   role="driver"
                   status={activeRide.status}
                   driverInfo={driver}
@@ -1183,21 +1340,90 @@ const DriverHomeScreen = ({ navigation }) => {
               {/* Full Route Details for Single Ride */}
               {!isShared && (
                 <View style={styles.routeBox}>
-                  <View style={styles.routeItem}>
-                    <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 9, fontWeight: '800', color: '#059669', letterSpacing: 0.5 }}>PICKUP LOCATION</Text>
-                      <Text style={styles.routeText} numberOfLines={2}>{activeRide.pickup_address || 'Customer Pickup'}</Text>
-                    </View>
-                  </View>
-                  <View style={{ width: 1, height: 12, backgroundColor: '#CBD5E1', marginLeft: 3 }} />
-                  <View style={styles.routeItem}>
-                    <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 9, fontWeight: '800', color: '#DC2626', letterSpacing: 0.5 }}>DESTINATION</Text>
-                      <Text style={styles.routeText} numberOfLines={2}>{activeRide.dest_address || 'Customer Destination'}</Text>
-                    </View>
-                  </View>
+                  {isRoundTrip ? (
+                    <>
+                      {/* Round Trip Leg 1 */}
+                      <View style={{ marginBottom: 6 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                          <Text style={{ fontSize: 10, fontWeight: '800', color: isOnwardTripStarted && !isReturnPickup && !isReturnStarted ? '#2563EB' : '#64748B' }}>
+                            LEG 1: ONWARD JOURNEY ➡️
+                          </Text>
+                          {(isReturnPickup || isReturnStarted) && (
+                            <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
+                              <Text style={{ fontSize: 9, fontWeight: '800', color: '#166534' }}>REACHED ✓</Text>
+                            </View>
+                          )}
+                        </View>
+                        <View style={styles.routeItem}>
+                          <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 9, fontWeight: '800', color: '#059669' }}>ORIGIN PICKUP</Text>
+                            <Text style={styles.routeText} numberOfLines={1}>{activeRide.pickup_address || 'Customer Pickup'}</Text>
+                          </View>
+                        </View>
+                        <View style={{ width: 1, height: 8, backgroundColor: '#CBD5E1', marginLeft: 3 }} />
+                        <View style={styles.routeItem}>
+                          <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 9, fontWeight: '800', color: '#DC2626' }}>1ST DROP DESTINATION</Text>
+                            <Text style={styles.routeText} numberOfLines={1}>{activeRide.dest_address || 'Customer Destination'}</Text>
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* Round Trip Leg 2 */}
+                      <View style={{ marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#E2E8F0' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                          <Text style={{ fontSize: 10, fontWeight: '800', color: (isReturnPickup || isReturnStarted) ? '#2563EB' : '#94A3B8' }}>
+                            LEG 2: RETURN JOURNEY 🔁
+                          </Text>
+                          {isReturnStarted && (
+                            <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
+                              <Text style={{ fontSize: 9, fontWeight: '800', color: '#166534' }}>IN PROGRESS 🚀</Text>
+                            </View>
+                          )}
+                          {isReturnPickup && (
+                            <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
+                              <Text style={{ fontSize: 9, fontWeight: '800', color: '#92400E' }}>PICKUP READY 📍</Text>
+                            </View>
+                          )}
+                        </View>
+                        <View style={styles.routeItem}>
+                          <View style={[styles.routeDot, { backgroundColor: '#3B82F6' }]} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 9, fontWeight: '800', color: '#2563EB' }}>RETURN PICKUP</Text>
+                            <Text style={styles.routeText} numberOfLines={1}>{activeRide.dest_address || 'Customer Destination'}</Text>
+                          </View>
+                        </View>
+                        <View style={{ width: 1, height: 8, backgroundColor: '#CBD5E1', marginLeft: 3 }} />
+                        <View style={styles.routeItem}>
+                          <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 9, fontWeight: '800', color: '#059669' }}>FINAL DROP (ORIGIN)</Text>
+                            <Text style={styles.routeText} numberOfLines={1}>{activeRide.pickup_address || 'Customer Pickup'}</Text>
+                          </View>
+                        </View>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.routeItem}>
+                        <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: '#059669', letterSpacing: 0.5 }}>PICKUP LOCATION</Text>
+                          <Text style={styles.routeText} numberOfLines={2}>{activeRide.pickup_address || 'Customer Pickup'}</Text>
+                        </View>
+                      </View>
+                      <View style={{ width: 1, height: 12, backgroundColor: '#CBD5E1', marginLeft: 3 }} />
+                      <View style={styles.routeItem}>
+                        <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: '#DC2626', letterSpacing: 0.5 }}>DESTINATION</Text>
+                          <Text style={styles.routeText} numberOfLines={2}>{activeRide.dest_address || 'Customer Destination'}</Text>
+                        </View>
+                      </View>
+                    </>
+                  )}
 
                   {/* Route Metrics: Distance, Fare & Payment Method */}
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: COLORS.white, padding: 8, borderRadius: RADIUS.md, marginTop: 6, borderWidth: 1, borderColor: '#E2E8F0' }}>
@@ -1228,29 +1454,33 @@ const DriverHomeScreen = ({ navigation }) => {
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: 6,
-                  backgroundColor: isTripStarted ? '#D1FAE5' : (isArrived ? '#FEF3C7' : '#EDE9FE'),
+                  backgroundColor: isReturnStarted ? '#DCFCE7' : (isReturnPickup ? '#FEF3C7' : (isOnwardTripStarted ? '#D1FAE5' : (isArrived ? '#FEF3C7' : '#EDE9FE'))),
                   padding: 8,
                   borderRadius: RADIUS.md,
                   marginBottom: 10,
                   borderWidth: 1,
-                  borderColor: isTripStarted ? '#A7F3D0' : (isArrived ? '#FDE68A' : '#DDD6FE')
+                  borderColor: isReturnStarted ? '#A7F3D0' : (isReturnPickup ? '#FDE68A' : (isOnwardTripStarted ? '#A7F3D0' : (isArrived ? '#FDE68A' : '#DDD6FE')))
                 }}>
                   <Ionicons
-                    name={isTripStarted ? 'checkmark-circle' : (isArrived ? 'key' : 'shield-checkmark')}
+                    name={isReturnStarted ? 'repeat' : (isReturnPickup ? 'location' : (isOnwardTripStarted ? 'checkmark-circle' : (isArrived ? 'key' : 'shield-checkmark')))}
                     size={15}
-                    color={isTripStarted ? '#059669' : (isArrived ? '#B45309' : '#7C3AED')}
+                    color={isReturnStarted ? '#059669' : (isReturnPickup ? '#B45309' : (isOnwardTripStarted ? '#059669' : (isArrived ? '#B45309' : '#7C3AED')))}
                   />
                   <Text style={{
                     fontSize: 11,
                     fontWeight: '800',
-                    color: isTripStarted ? '#065F46' : (isArrived ? '#92400E' : '#5B21B6'),
+                    color: isReturnStarted ? '#065F46' : (isReturnPickup ? '#92400E' : (isOnwardTripStarted ? '#065F46' : (isArrived ? '#92400E' : '#5B21B6'))),
                     flex: 1
                   }}>
-                    {isTripStarted
-                      ? 'OTP Verified ✓ • Navigating to Destination'
-                      : (isArrived
-                        ? 'Driver Arrived • Ask Customer for 4-Digit Start PIN'
-                        : 'En Route to Pickup • Start PIN Required upon Arrival')}
+                    {isReturnStarted
+                      ? '🔁 Return Journey Active • Returning to Starting Point'
+                      : (isReturnPickup
+                        ? '📍 Return Pickup • Heading to 1st Drop Location to Pick Up Customer'
+                        : (isOnwardTripStarted
+                          ? (isRoundTrip ? '🔁 Round Trip (Leg 1) • Navigating to Destination' : 'OTP Verified ✓ • Navigating to Destination')
+                          : (isArrived
+                            ? 'Driver Arrived • Ask Customer for 4-Digit Start PIN'
+                            : 'En Route to Pickup • Start PIN Required upon Arrival')))}
                   </Text>
                 </View>
               )}
@@ -1303,7 +1533,7 @@ const DriverHomeScreen = ({ navigation }) => {
                       <View key={p.id || idx} style={[styles.sharedPassCard, (isD || (isB && !isTripStarted)) && styles.sharedPassCardBoarded]}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                            <View style={[styles.seatPill, { backgroundColor: isD ? '#059669' : (isB ? '#10B981' : '#6366F1') }]}>
+                            <View style={[styles.seatPill, { backgroundColor: isD ? '#059669' : (isB ? '#10B981' : '#D97706') }]}>
                               <Text style={styles.seatPillText}>{p.seat_no || `Seat ${idx + 1}`}</Text>
                             </View>
                             <View style={{ flex: 1 }}>
@@ -1421,7 +1651,8 @@ const DriverHomeScreen = ({ navigation }) => {
                       </TouchableOpacity>
                     )}
 
-                    {isTripStarted && (() => {
+                    {/* 1. Onward Leg Actions */}
+                    {isOnwardTripStarted && !isReturnPickup && !isReturnStarted && (() => {
                       if (currIdx < totalStops && rawStops[currIdx]) {
                         return (
                           <TouchableOpacity
@@ -1440,6 +1671,41 @@ const DriverHomeScreen = ({ navigation }) => {
                           </TouchableOpacity>
                         )
                       }
+
+                      // FOR ROUND TRIPS: Do NOT complete trip at destination! Start return pickup instead
+                      if (isRoundTrip) {
+                        return (
+                          <View style={{ gap: 8 }}>
+                            <View style={{ backgroundColor: '#FEF3C7', padding: 10, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: '#FDE68A' }}>
+                              <Ionicons name="repeat" size={16} color="#B45309" />
+                              <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400E', flex: 1 }}>
+                                Round Trip: 1st drop destination reached. When picking up passenger for return journey, tap below.
+                              </Text>
+                            </View>
+                            <TouchableOpacity
+                              style={[styles.primaryActionBtn, { backgroundColor: '#2563EB' }]}
+                              onPress={() => {
+                                Alert.alert(
+                                  'Start Return Pickup? 🔄',
+                                  `Are you ready for the return journey? This will navigate you to pick up the passenger at ${activeRide.dest_address}.`,
+                                  [
+                                    { text: 'Wait', style: 'cancel' },
+                                    {
+                                      text: 'Yes, Start Return Pickup',
+                                      onPress: () => handleUpdateRideStatus('return_pickup')
+                                    }
+                                  ]
+                                )
+                              }}
+                            >
+                              <Ionicons name="return-down-forward" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
+                              <Text style={styles.primaryActionText}>Arrived at Destination • Return Pickup</Text>
+                            </TouchableOpacity>
+                          </View>
+                        )
+                      }
+
+                      // One-Way Normal Trip: Complete Trip & Settle
                       return (
                         <TouchableOpacity
                           style={[styles.primaryActionBtn, { backgroundColor: '#10B981' }]}
@@ -1450,6 +1716,68 @@ const DriverHomeScreen = ({ navigation }) => {
                         </TouchableOpacity>
                       )
                     })()}
+
+                    {/* 2. Round Trip Return Pickup Stage */}
+                    {isRoundTrip && isReturnPickup && (
+                      <View style={{ gap: 8 }}>
+                        <View style={{ backgroundColor: '#EFF6FF', padding: 10, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: '#BFDBFE' }}>
+                          <Ionicons name="navigate-circle" size={18} color="#1D4ED8" />
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E40AF', flex: 1 }}>
+                            Heading to 1st drop point ({activeRide.dest_address}) to pick up passenger. When passenger has boarded, tap below to start return journey.
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={[styles.primaryActionBtn, { backgroundColor: '#7C3AED' }]}
+                          onPress={() => {
+                            Alert.alert(
+                              'Start Return Trip? 🚀',
+                              `Has the passenger boarded for the return journey back to ${activeRide.pickup_address}?`,
+                              [
+                                { text: 'Not Yet', style: 'cancel' },
+                                {
+                                  text: 'Yes, Start Return Trip',
+                                  onPress: () => handleUpdateRideStatus('return_started')
+                                }
+                              ]
+                            )
+                          }}
+                        >
+                          <Ionicons name="play-circle" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
+                          <Text style={styles.primaryActionText}>Passenger Boarded • Start Return Trip 🚀</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+
+                    {/* 3. Round Trip Return Journey in Progress */}
+                    {isRoundTrip && isReturnStarted && (
+                      <View style={{ gap: 8 }}>
+                        <View style={{ backgroundColor: '#ECFDF5', padding: 10, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: '#A7F3D0' }}>
+                          <Ionicons name="repeat" size={18} color="#059669" />
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#065F46', flex: 1 }}>
+                            Return Journey In Progress: Navigating back to starting point ({activeRide.pickup_address}). Complete trip only after dropping customer at origin!
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={[styles.primaryActionBtn, { backgroundColor: '#10B981' }]}
+                          onPress={() => {
+                            Alert.alert(
+                              'Complete Round Trip? 🏁',
+                              `Have you reached back to the starting location (${activeRide.pickup_address}) and safely dropped the customer?`,
+                              [
+                                { text: 'Not Yet', style: 'cancel' },
+                                {
+                                  text: 'Yes, Complete Trip',
+                                  onPress: () => handleUpdateRideStatus('completed')
+                                }
+                              ]
+                            )
+                          }}
+                        >
+                          <Ionicons name="checkmark-done-circle" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
+                          <Text style={styles.primaryActionText}>Reached Origin • Complete Round Trip ✓</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </>
                 )}
 
@@ -1492,7 +1820,7 @@ const DriverHomeScreen = ({ navigation }) => {
                       <TouchableOpacity
                         style={[
                           styles.primaryActionBtn,
-                          { backgroundColor: allPassengersDropped ? '#10B981' : '#6366F1' }
+                          { backgroundColor: allPassengersDropped ? '#10B981' : COLORS.primary }
                         ]}
                         onPress={() => {
                           if (!allPassengersDropped) {
@@ -1598,8 +1926,8 @@ const DriverHomeScreen = ({ navigation }) => {
             <Text style={styles.statLbl}>Earned Today</Text>
           </View>
           <View style={styles.statBox}>
-            <View style={[styles.statIconBadge, { backgroundColor: '#DBEAFE' }]}>
-              <Ionicons name="time" size={18} color="#2563EB" />
+            <View style={[styles.statIconBadge, { backgroundColor: '#FEF3C7' }]}>
+              <Ionicons name="time" size={18} color="#D97706" />
             </View>
             <Text style={styles.statVal}>{stats?.hours ? `${stats.hours}h` : '—'}</Text>
             <Text style={styles.statLbl}>Hours Online</Text>
@@ -1621,7 +1949,7 @@ const DriverHomeScreen = ({ navigation }) => {
           {[
             { icon: 'time-outline', label: 'My Trips', color: '#7C3AED', bg: '#EDE9FE', action: () => navigation.navigate('Trips') },
             { icon: 'cash-outline', label: 'Earnings', color: '#10B981', bg: '#D1FAE5', action: () => navigation.navigate('Earnings') },
-            { icon: 'document-text-outline', label: 'Documents', color: '#2563EB', bg: '#DBEAFE', action: () => navigation.navigate('DriverDocuments') },
+            { icon: 'document-text-outline', label: 'Documents', color: '#D97706', bg: '#FFF8E7', action: () => navigation.navigate('DriverDocuments') },
             { icon: 'headset-outline', label: 'Support', color: '#EA580C', bg: '#FFEDD5', action: () => navigation.navigate('DriverSupport') },
             { icon: 'alert-circle-outline', label: 'Safety SOS', color: '#EF4444', bg: '#FEE2E2', action: handleSOS },
           ].map((item, idx) => (
@@ -1887,15 +2215,17 @@ const DriverHomeScreen = ({ navigation }) => {
               <Ionicons name="key" size={28} color={COLORS.primary} />
             </View>
             <Text style={styles.dialogTitle}>Enter Ride Start OTP</Text>
-            <Text style={styles.dialogSub}>Ask the customer for their 4-digit start OTP to begin trip:</Text>
+            <Text style={styles.dialogSub}>Ask the customer for the start OTP (4 or 6 digits) from their ticket / app:</Text>
             <TextInput
               style={styles.otpInput}
-              placeholder="••••"
+              placeholder="••••••"
+              placeholderTextColor="#CBD5E1"
               value={enteredOtp}
               onChangeText={setEnteredOtp}
               keyboardType="number-pad"
-              maxLength={4}
+              maxLength={6}
               textAlign="center"
+              autoFocus={true}
             />
             <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
               <TouchableOpacity
@@ -1934,16 +2264,18 @@ const DriverHomeScreen = ({ navigation }) => {
             </View>
             <Text style={styles.dialogTitle}>Verify Passenger Boarding</Text>
             <Text style={styles.dialogSub}>
-              Enter boarding OTP for <Text style={{ fontWeight: '800', color: COLORS.textPrimary }}>{passOtpModal?.customer_name}</Text> ({passOtpModal?.seat_no}):
+              Enter boarding OTP (4 or 6 digits) for <Text style={{ fontWeight: '800', color: COLORS.textPrimary }}>{passOtpModal?.customer_name}</Text> ({passOtpModal?.seat_no}):
             </Text>
             <TextInput
               style={[styles.otpInput, { borderColor: '#7C3AED', color: '#7C3AED' }]}
-              placeholder="••••"
+              placeholder="••••••"
+              placeholderTextColor="#CBD5E1"
               value={passEnteredOtp}
               onChangeText={setPassEnteredOtp}
               keyboardType="number-pad"
-              maxLength={4}
+              maxLength={6}
               textAlign="center"
+              autoFocus={true}
             />
             <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
               <TouchableOpacity
@@ -1964,6 +2296,137 @@ const DriverHomeScreen = ({ navigation }) => {
                 )}
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Enterprise Ride Cancelled by Customer Alert Modal ── */}
+      <Modal
+        visible={Boolean(cancelledNotice)}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setCancelledNotice(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.dialogCard, { padding: 22, alignItems: 'center' }]}>
+            <View style={{
+              width: 68,
+              height: 68,
+              borderRadius: 34,
+              backgroundColor: '#FEE2E2',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: 14,
+              borderWidth: 3,
+              borderColor: '#FECACA'
+            }}>
+              <Ionicons name="close-circle" size={44} color="#DC2626" />
+            </View>
+
+            <View style={{
+              backgroundColor: '#FEF2F2',
+              borderColor: '#FCA5A5',
+              borderWidth: 1,
+              paddingHorizontal: 10,
+              paddingVertical: 4,
+              borderRadius: 20,
+              marginBottom: 8,
+            }}>
+              <Text style={{ fontSize: 11, fontWeight: '800', color: '#B91C1C', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                Trip Cancelled by Rider
+              </Text>
+            </View>
+
+            <Text style={{ fontSize: 19, fontWeight: '900', color: '#0F172A', textAlign: 'center', marginBottom: 4 }}>
+              Ride Has Been Cancelled
+            </Text>
+
+            <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '600', marginBottom: 16 }}>
+              Booking Ref: <Text style={{ fontFamily: 'monospace', fontWeight: '800', color: '#0F172A' }}>{cancelledNotice?.bookingRef || 'CTB'}</Text>
+            </Text>
+
+            {/* Route Box */}
+            <View style={{
+              width: '100%',
+              backgroundColor: '#F8FAFC',
+              borderRadius: 14,
+              padding: 12,
+              borderWidth: 1,
+              borderColor: '#E2E8F0',
+              marginBottom: 12,
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                <Ionicons name="navigate-circle" size={16} color="#10B981" />
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', flex: 1 }} numberOfLines={1}>
+                  {cancelledNotice?.pickup || 'Pickup location'}
+                </Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="location" size={16} color="#EF4444" />
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#1E293B', flex: 1 }} numberOfLines={1}>
+                  {cancelledNotice?.dest || 'Destination'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Reason Box */}
+            <View style={{
+              width: '100%',
+              backgroundColor: '#FFFBEB',
+              borderRadius: 12,
+              padding: 12,
+              borderWidth: 1,
+              borderColor: '#FDE68A',
+              marginBottom: 16,
+            }}>
+              <Text style={{ fontSize: 11, fontWeight: '800', color: '#92400E', marginBottom: 2 }}>
+                Cancellation Reason:
+              </Text>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: '#78350F' }}>
+                "{cancelledNotice?.reason || 'Customer cancelled this booking.'}"
+              </Text>
+            </View>
+
+            {/* Driver Reassurance Banner */}
+            <View style={{
+              width: '100%',
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+              backgroundColor: '#F0FDF4',
+              borderRadius: 10,
+              padding: 10,
+              borderWidth: 1,
+              borderColor: '#BBF7D0',
+              marginBottom: 18,
+            }}>
+              <Ionicons name="checkmark-circle" size={18} color="#16A34A" />
+              <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534', flex: 1 }}>
+                You are Online & Available. New requests will appear automatically.
+              </Text>
+            </View>
+
+            {/* Got It Button */}
+            <TouchableOpacity
+              style={{
+                width: '100%',
+                backgroundColor: COLORS.primary || '#FBBF24',
+                paddingVertical: 14,
+                borderRadius: 14,
+                alignItems: 'center',
+                justifyContent: 'center',
+                ...SHADOW.small,
+              }}
+              onPress={() => {
+                setCancelledNotice(null)
+                loadDashboardData()
+              }}
+              activeOpacity={0.88}
+            >
+              <Text style={{ fontSize: 15, fontWeight: '900', color: '#000000' }}>
+                Got It · Continue Driving 🚕
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -2177,7 +2640,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: RADIUS.xxl,
     borderWidth: 1.5,
-    borderColor: '#C7D2FE',
+    borderColor: '#FDE68A',
     ...SHADOW.small,
   },
   assignedCardTop: {
@@ -2225,7 +2688,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
@@ -2248,7 +2711,7 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -2297,7 +2760,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderRadius: RADIUS.lg,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
   },
   detailsBtnText: {
     fontSize: 12,
@@ -2705,7 +3168,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     paddingVertical: 8,
     borderRadius: RADIUS.md,
   },
@@ -2884,7 +3347,7 @@ const styles = StyleSheet.create({
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
@@ -2896,10 +3359,12 @@ const styles = StyleSheet.create({
     borderColor: COLORS.primary,
     borderRadius: RADIUS.xl,
     paddingVertical: 14,
-    fontSize: 28,
+    paddingHorizontal: 16,
+    fontSize: 24,
     fontWeight: '900',
     color: COLORS.primary,
-    letterSpacing: 10,
+    letterSpacing: 6,
+    textAlign: 'center',
     marginBottom: 8,
   },
 })

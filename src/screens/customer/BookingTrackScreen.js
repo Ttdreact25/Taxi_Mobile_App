@@ -14,6 +14,7 @@ import {
   StatusBar,
   Modal,
   Platform,
+  TextInput,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -24,6 +25,15 @@ import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import ModernBottomSheet from '../../components/common/ModernBottomSheet'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
+
+const CUSTOMER_CANCEL_REASONS = [
+  { id: 'too_long', label: 'Driver is taking too long to arrive', icon: 'time-outline' },
+  { id: 'wrong_loc', label: 'Selected wrong pickup location', icon: 'location-outline' },
+  { id: 'driver_asked', label: 'Driver requested cancellation', icon: 'call-outline' },
+  { id: 'changed_mind', label: 'Change of plans / No longer travelling', icon: 'walk-outline' },
+  { id: 'found_alt', label: 'Found another vehicle / cab', icon: 'car-outline' },
+  { id: 'other', label: 'Other reason', icon: 'chatbox-ellipses-outline' },
+]
 
 const formatDurationHours = (mins) => {
   if (!mins || mins <= 0) return '0 min'
@@ -56,6 +66,10 @@ export default function BookingTrackScreen({ route, navigation }) {
   const [showRatingModal, setShowRatingModal] = useState(false)
   const [ratingScore, setRatingScore] = useState(5)
   const [ratingComment, setRatingComment] = useState('')
+  const [showCancelModal, setShowCancelModal] = useState(false)
+  const [selectedCancelReason, setSelectedCancelReason] = useState(CUSTOMER_CANCEL_REASONS[0].id)
+  const [customCancelText, setCustomCancelText] = useState('')
+  const [cancelling, setCancelling] = useState(false)
 
   // Poll Live Tracking Data every 3 seconds
   const fetchLiveTracking = useCallback(async () => {
@@ -301,29 +315,36 @@ export default function BookingTrackScreen({ route, navigation }) {
   }
 
   // Cancel Ride
+  // Cancel Ride - Opens Professional Cancellation Sheet
   const handleCancelRide = () => {
-    Alert.alert('Cancel Ride?', 'Are you sure you want to cancel this booking?', [
-      { text: 'No, Keep Ride', style: 'cancel' },
-      {
-        text: 'Yes, Cancel',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            const res = await bookingsAPI.cancel(bookingId, { reason: 'Customer cancelled' })
-            if (res.data?.status === 'error') {
-              Alert.alert('Notice', res.data?.message || 'Could not cancel booking.')
-              return
-            }
-            clearInterval(pollTimerRef.current)
-            Alert.alert('Ride Cancelled', 'Your booking has been cancelled.', [
-              { text: 'OK', onPress: () => navigation.navigate('Home') },
-            ])
-          } catch (err) {
-            Alert.alert('Error', err.response?.data?.message || 'Failed to cancel booking.')
-          }
-        },
-      },
-    ])
+    setShowCancelModal(true)
+  }
+
+  const handleConfirmCancel = async () => {
+    setCancelling(true)
+    const reasonObj = CUSTOMER_CANCEL_REASONS.find(r => r.id === selectedCancelReason)
+    let finalReason = reasonObj?.label || 'Customer cancelled'
+    if (selectedCancelReason === 'other' && customCancelText.trim()) {
+      finalReason = customCancelText.trim()
+    }
+
+    try {
+      const res = await bookingsAPI.cancel(bookingId, { reason: finalReason })
+      if (res.data?.status === 'error') {
+        Alert.alert('Notice', res.data?.message || 'Could not cancel booking.')
+        setCancelling(false)
+        return
+      }
+      clearInterval(pollTimerRef.current)
+      setShowCancelModal(false)
+      Alert.alert('Ride Cancelled', 'Your booking has been cancelled successfully.', [
+        { text: 'OK', onPress: () => navigation.navigate('Home') },
+      ])
+    } catch (err) {
+      Alert.alert('Error', err.response?.data?.message || 'Failed to cancel booking.')
+    } finally {
+      setCancelling(false)
+    }
   }
 
   // SOS Emergency Alert
@@ -750,6 +771,165 @@ export default function BookingTrackScreen({ route, navigation }) {
             >
               <Text style={styles.modalDoneBtnText}>Done · Back to Home</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── 5. Professional Ride Cancellation Modal ── */}
+      <Modal visible={showCancelModal} transparent animationType="slide">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContentCard, { maxHeight: '88%', padding: 20 }]}>
+            <View style={{
+              width: 56,
+              height: 56,
+              borderRadius: 28,
+              backgroundColor: '#FEF2F2',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: 12,
+              borderWidth: 2,
+              borderColor: '#FECACA',
+            }}>
+              <Ionicons name="alert-circle" size={32} color="#DC2626" />
+            </View>
+
+            <Text style={{ fontSize: 18, fontWeight: '900', color: '#0F172A', textAlign: 'center' }}>
+              Cancel Your Ride?
+            </Text>
+            <Text style={{ fontSize: 12, color: '#64748B', textAlign: 'center', marginTop: 4, marginBottom: 14 }}>
+              Please let us know the reason. This helps us improve our service.
+            </Text>
+
+            {/* Free Cancellation Guarantee Note */}
+            <View style={{
+              width: '100%',
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+              backgroundColor: '#F0FDF4',
+              borderRadius: 10,
+              padding: 10,
+              borderWidth: 1,
+              borderColor: '#BBF7D0',
+              marginBottom: 14,
+            }}>
+              <Ionicons name="shield-checkmark" size={16} color="#16A34A" />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: '#166534', flex: 1 }}>
+                Free Cancellation: No cancellation fee applies before trip starts.
+              </Text>
+            </View>
+
+            {/* Reasons List */}
+            <ScrollView style={{ width: '100%', maxHeight: 230 }} showsVerticalScrollIndicator={false}>
+              {CUSTOMER_CANCEL_REASONS.map(r => {
+                const isSelected = selectedCancelReason === r.id
+                return (
+                  <TouchableOpacity
+                    key={r.id}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingVertical: 10,
+                      paddingHorizontal: 12,
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: isSelected ? '#D97706' : '#E2E8F0',
+                      backgroundColor: isSelected ? '#FFFBEB' : '#FFFFFF',
+                      marginBottom: 8,
+                    }}
+                    onPress={() => setSelectedCancelReason(r.id)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name={r.icon}
+                      size={18}
+                      color={isSelected ? '#D97706' : '#64748B'}
+                      style={{ marginRight: 10 }}
+                    />
+                    <Text style={{
+                      flex: 1,
+                      fontSize: 13,
+                      fontWeight: isSelected ? '800' : '600',
+                      color: isSelected ? '#92400E' : '#334155',
+                    }}>
+                      {r.label}
+                    </Text>
+                    <Ionicons
+                      name={isSelected ? 'radio-button-on' : 'radio-button-off'}
+                      size={20}
+                      color={isSelected ? '#D97706' : '#CBD5E1'}
+                    />
+                  </TouchableOpacity>
+                )
+              })}
+
+              {selectedCancelReason === 'other' && (
+                <TextInput
+                  style={{
+                    backgroundColor: '#F8FAFC',
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: '#CBD5E1',
+                    padding: 10,
+                    fontSize: 13,
+                    color: '#0F172A',
+                    minHeight: 50,
+                    marginBottom: 10,
+                  }}
+                  placeholder="Explain briefly (optional)..."
+                  placeholderTextColor="#94A3B8"
+                  value={customCancelText}
+                  onChangeText={setCustomCancelText}
+                  multiline
+                />
+              )}
+            </ScrollView>
+
+            {/* Action Buttons */}
+            <View style={{ width: '100%', marginTop: 14, gap: 10 }}>
+              <TouchableOpacity
+                style={{
+                  width: '100%',
+                  backgroundColor: COLORS.primary || '#FBBF24',
+                  borderRadius: 14,
+                  paddingVertical: 13,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  ...SHADOW.small,
+                }}
+                onPress={() => setShowCancelModal(false)}
+                activeOpacity={0.88}
+                disabled={cancelling}
+              >
+                <Text style={{ fontSize: 15, fontWeight: '900', color: '#000000' }}>
+                  Keep My Ride
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={{
+                  width: '100%',
+                  backgroundColor: '#FEE2E2',
+                  borderRadius: 14,
+                  paddingVertical: 12,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderWidth: 1,
+                  borderColor: '#FECACA',
+                }}
+                onPress={handleConfirmCancel}
+                activeOpacity={0.88}
+                disabled={cancelling}
+              >
+                {cancelling ? (
+                  <ActivityIndicator size="small" color="#DC2626" />
+                ) : (
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: '#DC2626' }}>
+                    Confirm Cancellation
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
