@@ -16,11 +16,14 @@ import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { driverAPI } from '../../api/api'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
+import { SkeletonList } from '../../components/common/Skeleton'
+import EmptyState from '../../components/common/EmptyState'
+import { formatDateTime12Hr } from '../../utils/formatters'
 
 const STATUS_CONFIG = {
   driver_assigned: { label: 'Assigned',    color: '#F59E0B', bg: '#FEF3C7' },
   driver_accepted: { label: 'Accepted',    color: '#10B981', bg: '#D1FAE5' },
-  waiting_pickup:  { label: 'Waiting',     color: '#6366F1', bg: '#EEF2FF' },
+  waiting_pickup:  { label: 'Waiting',     color: '#D97706', bg: '#FEF3C7' },
   driver_arrived:  { label: 'Arrived',     color: '#F97316', bg: '#FFEDD5' },
   trip_started:    { label: 'In Progress', color: '#7C3AED', bg: '#EDE9FE' },
   in_progress:     { label: 'In Progress', color: '#7C3AED', bg: '#EDE9FE' },
@@ -106,7 +109,7 @@ const DriverTripsScreen = ({ navigation }) => {
           <View style={{ alignItems: 'flex-end' }}>
             <Text style={styles.fareText}>₹{fare}</Text>
             <Text style={styles.dateText}>
-              {item.created_at ? new Date(item.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : ''}
+              {formatDateTime12Hr(item.scheduled_at || (item.pickup_date ? `${item.pickup_date} ${item.pickup_time || ''}` : item.created_at))}
             </Text>
           </View>
         </View>
@@ -171,11 +174,10 @@ const DriverTripsScreen = ({ navigation }) => {
         </ScrollView>
       </View>
 
-      {/* Trip List */}
+      {/* Trips List */}
       {loading ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading trips...</Text>
+        <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
+          <SkeletonList count={4} />
         </View>
       ) : (
         <FlatList
@@ -194,15 +196,13 @@ const DriverTripsScreen = ({ navigation }) => {
             />
           }
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <View style={styles.emptyIconCircle}>
-                <Ionicons name="car-outline" size={36} color={COLORS.primary} />
-              </View>
-              <Text style={styles.emptyTitle}>No Trips Found</Text>
-              <Text style={styles.emptySub}>
-                {filter === 'all' ? 'You have no trips recorded yet. Go online to accept rides!' : `No ${filter.replace(/_/g, ' ')} trips found.`}
-              </Text>
-            </View>
+            <EmptyState
+              icon="car-outline"
+              title="No Trips Found"
+              subtitle={filter === 'all' ? 'You have no trips recorded yet. Go online on Dashboard to accept rides!' : `No ${filter.replace(/_/g, ' ')} trips found.`}
+              actionLabel="Go to Dashboard"
+              onAction={() => navigation.navigate('Dashboard')}
+            />
           }
         />
       )}
@@ -479,7 +479,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 14,

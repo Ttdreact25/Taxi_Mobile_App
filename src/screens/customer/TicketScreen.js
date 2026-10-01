@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { longTripAPI, reviewsAPI, paymentAPI } from '../../api/api'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
+import { formatTime12Hr, formatDateDisplay } from '../../utils/formatters'
 
 export default function TicketScreen({ route, navigation }) {
   const { bookingId, bookingRef } = route.params || {}
@@ -95,7 +96,7 @@ export default function TicketScreen({ route, navigation }) {
 
   const handleShare = async () => {
     if (!ticket) return
-    const message = `CabTaxi E-Ticket\nBooking ID: ${ticket.booking_ref}\nTrip ID: ${ticket.trip_id}\nFrom: ${ticket.journey.pickup_address}\nTo: ${ticket.journey.dest_address}\nDate: ${ticket.journey.travel_date} at ${ticket.journey.pickup_time}\nSeat: ${ticket.boarding.seat_no}\nOTP: ${ticket.boarding.otp}`
+    const message = `CabTaxi E-Ticket\nBooking ID: ${ticket.booking_ref}\nTrip ID: ${ticket.trip_id}\nFrom: ${ticket.journey.pickup_address}\nTo: ${ticket.journey.dest_address}\nDate: ${formatDateDisplay(ticket.journey.travel_date)} at ${formatTime12Hr(ticket.journey.pickup_time)}\nSeat: ${ticket.boarding.seat_no}\nOTP: ${ticket.boarding.otp}`
     try {
       await Share.share({ message, title: `CabTaxi Ticket - ${ticket.booking_ref}` })
     } catch (e) {
@@ -175,7 +176,7 @@ export default function TicketScreen({ route, navigation }) {
             <View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <Ionicons name="car-sport" size={18} color="#FFFFFF" />
-                <Text style={styles.bannerLogo}>CABTAXI INTERCITY</Text>
+                <Text style={styles.bannerLogo}>CITYDROPTAXI</Text>
               </View>
               <Text style={styles.bannerSub}>OFFICIAL BOARDING PASS</Text>
             </View>
@@ -245,10 +246,30 @@ export default function TicketScreen({ route, navigation }) {
                 <Ionicons name="time-outline" size={16} color="#059669" />
                 <View>
                   <Text style={styles.gridLabel}>Pickup Time</Text>
-                  <Text style={styles.gridVal}>{journey.pickup_time}</Text>
+                  <Text style={styles.gridVal}>{formatTime12Hr(journey.pickup_time)}</Text>
                 </View>
               </View>
             </View>
+
+            {/* Return Date & Time Grid for Round Trips */}
+            {(journey.return_date || journey.return_time) ? (
+              <View style={[styles.grid2, { marginTop: 8 }]}>
+                <View style={[styles.gridBox, { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }]}>
+                  <Ionicons name="swap-horizontal" size={16} color="#059669" />
+                  <View>
+                    <Text style={[styles.gridLabel, { color: '#059669' }]}>Return Date</Text>
+                    <Text style={[styles.gridVal, { color: '#065F46' }]}>{formatDateDisplay(journey.return_date || journey.travel_date)}</Text>
+                  </View>
+                </View>
+                <View style={[styles.gridBox, { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }]}>
+                  <Ionicons name="alarm-outline" size={16} color="#059669" />
+                  <View>
+                    <Text style={[styles.gridLabel, { color: '#059669' }]}>Return Time</Text>
+                    <Text style={[styles.gridVal, { color: '#065F46' }]}>{formatTime12Hr(journey.return_time)}</Text>
+                  </View>
+                </View>
+              </View>
+            ) : null}
 
             {/* Route Timeline */}
             <View style={styles.routeBox}>
@@ -287,7 +308,7 @@ export default function TicketScreen({ route, navigation }) {
             {/* OTP Security Strip */}
             <View style={styles.otpCard}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <Ionicons name="lock-closed" size={14} color="#38BDF8" />
+                <Ionicons name="lock-closed" size={14} color="#D97706" />
                 <Text style={styles.otpCardTitle}>BOARDING VERIFICATION OTP</Text>
               </View>
               <Text style={styles.otpCardSub}>Show this code to driver when cab arrives</Text>
@@ -429,13 +450,13 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 12
   },
   banner: {
-    backgroundColor: '#1E1B4B', padding: 18, flexDirection: 'row',
+    backgroundColor: COLORS.primary, padding: 18, flexDirection: 'row',
     justifyContent: 'space-between', alignItems: 'center'
   },
   bannerLogo: { fontSize: 15, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.5 },
-  bannerSub: { fontSize: 10, color: '#C7D2FE', fontWeight: '700', marginTop: 2 },
-  badge: { backgroundColor: 'rgba(56, 189, 248, 0.25)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
-  badgeText: { fontSize: 10, fontWeight: '800', color: '#38BDF8' },
+  bannerSub: { fontSize: 10, color: '#FEF3C7', fontWeight: '700', marginTop: 2 },
+  badge: { backgroundColor: '#FFFFFF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  badgeText: { fontSize: 10, fontWeight: '900', color: COLORS.primary },
   refBar: {
     backgroundColor: '#F8FAFC',
     paddingHorizontal: 16,
@@ -474,7 +495,7 @@ const styles = StyleSheet.create({
   refValPurple: {
     fontSize: 13,
     fontWeight: '900',
-    color: '#4338CA',
+    color: '#D97706',
   },
   seatRow: {
     flexDirection: 'row',
@@ -510,7 +531,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC', padding: 12, borderRadius: 14, marginBottom: 14
   },
   passAvatar: {
-    width: 40, height: 40, borderRadius: 20, backgroundColor: '#6366F1',
+    width: 40, height: 40, borderRadius: 20, backgroundColor: '#D97706',
     justifyContent: 'center', alignItems: 'center'
   },
   passAvatarText: { color: '#FFFFFF', fontWeight: '800', fontSize: 16 },
@@ -549,20 +570,21 @@ const styles = StyleSheet.create({
   dvDivider: { width: 1, backgroundColor: '#E2E8F0', marginHorizontal: 10 },
   dvTitle: { fontSize: 11, fontWeight: '800', color: '#475569', marginBottom: 2 },
   dvVal: { fontSize: 12, fontWeight: '800', color: '#0F172A' },
-  dvPlate: { fontSize: 11, fontWeight: '800', color: '#4338CA', marginTop: 2 },
+  dvPlate: { fontSize: 11, fontWeight: '800', color: '#B45309', marginTop: 2 },
   dvPhone: { fontSize: 11, color: '#64748B', marginTop: 2 },
   otpCard: {
-    backgroundColor: '#0F172A', borderRadius: 16, padding: 16,
-    alignItems: 'center', marginBottom: 14
+    backgroundColor: '#FFFBEB', borderRadius: 16, padding: 16,
+    alignItems: 'center', marginBottom: 14, borderWidth: 1.5, borderColor: '#FDE68A'
   },
-  otpCardTitle: { fontSize: 11, fontWeight: '900', color: '#38BDF8', letterSpacing: 0.5 },
-  otpCardSub: { fontSize: 11, color: '#94A3B8', marginBottom: 10, textAlign: 'center' },
+  otpCardTitle: { fontSize: 11, fontWeight: '900', color: '#D97706', letterSpacing: 0.5 },
+  otpCardSub: { fontSize: 11, color: '#92400E', marginBottom: 10, textAlign: 'center' },
   otpDigitsRow: { flexDirection: 'row', gap: 6, marginBottom: 8 },
   otpDigitBox: {
-    width: 36, height: 42, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', justifyContent: 'center', alignItems: 'center'
+    width: 36, height: 42, borderRadius: 8, backgroundColor: '#FFFFFF',
+    borderWidth: 1.5, borderColor: '#F59E0B', justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#D97706', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 1
   },
-  otpDigitText: { fontSize: 20, fontWeight: '900', color: '#4ADE80' },
+  otpDigitText: { fontSize: 20, fontWeight: '900', color: '#B45309' },
   boardStatus: { fontSize: 11, fontWeight: '700', marginTop: 4 },
   fareRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',

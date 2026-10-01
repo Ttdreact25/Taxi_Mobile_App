@@ -25,6 +25,7 @@ import { useAuth } from '../../context/AuthContext'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import AdCarousel from '../../components/ui/AdCarousel'
 import LiveTripMap from '../../components/common/LiveTripMap'
+import { formatTime12Hr, formatDateDisplay, formatDateTime12Hr } from '../../utils/formatters'
 
 const REJECT_REASONS = [
   'Pickup location too far away',
@@ -1041,7 +1042,7 @@ const DriverHomeScreen = ({ navigation }) => {
                     <View>
                       <Text style={styles.bookingRef}>{trip.booking_ref}</Text>
                       <Text style={styles.assignedMetaText}>
-                        🗓 {trip.pickup_date} · ⏱ {trip.pickup_time ? trip.pickup_time.slice(0, 5) : '08:30'}
+                        🗓 {formatDateDisplay(trip.pickup_date)} · ⏱ {formatTime12Hr(trip.pickup_time || '08:30')}
                       </Text>
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
@@ -1869,7 +1870,7 @@ const DriverHomeScreen = ({ navigation }) => {
                       <Text style={[styles.countdownPillText, { color: cd.badgeColor }]}>{cd.text}</Text>
                     </View>
                   </View>
-                  <Text style={styles.upcomingDateText}>🗓 {ut.pickup_date} at {ut.pickup_time ? ut.pickup_time.slice(0, 5) : '08:30'}</Text>
+                  <Text style={styles.upcomingDateText}>🗓 {formatDateDisplay(ut.pickup_date)} at {formatTime12Hr(ut.pickup_time || '08:30')}</Text>
                   <Text style={styles.schedAddr} numberOfLines={1}>🟢 {ut.pickup_address}</Text>
                   <Text style={styles.schedAddr} numberOfLines={1}>🔴 {ut.dest_address}</Text>
 
@@ -2038,8 +2039,8 @@ const DriverHomeScreen = ({ navigation }) => {
                     </View>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
-                    <Text style={styles.sheetLabel}>Travel Date: {detailModalTrip.pickup_date || 'Today'}</Text>
-                    <Text style={styles.sheetLabel}>Pickup Time: {detailModalTrip.pickup_time ? detailModalTrip.pickup_time.slice(0, 5) : '08:30'}</Text>
+                    <Text style={styles.sheetLabel}>Travel Date: {formatDateDisplay(detailModalTrip.pickup_date)}</Text>
+                    <Text style={styles.sheetLabel}>Pickup Time: {formatTime12Hr(detailModalTrip.pickup_time || '08:30')}</Text>
                   </View>
                 </View>
 

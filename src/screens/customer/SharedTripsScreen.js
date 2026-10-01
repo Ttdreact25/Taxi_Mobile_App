@@ -7,6 +7,9 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { COLORS } from '../../constants/theme'
 import { longTripAPI } from '../../api/api'
+import { SkeletonList } from '../../components/common/Skeleton'
+import EmptyState from '../../components/common/EmptyState'
+import { formatTime12Hr, formatDateDisplay } from '../../utils/formatters'
 
 export default function SharedTripsScreen({ navigation }) {
   const isSubmittingRef = useRef(false)
@@ -263,21 +266,15 @@ export default function SharedTripsScreen({ navigation }) {
         <Text style={[styles.sectionTitle, { marginVertical: 12 }]}>Explore Shared Corridors</Text>
 
         {loading ? (
-          <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 30 }} />
+          <SkeletonList count={3} height={180} />
         ) : trips.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Ionicons name="car-sport-outline" size={48} color={COLORS.gray400} />
-            <Text style={styles.emptyTitle}>No Shared Trips Available</Text>
-            <Text style={styles.emptyText}>
-              No scheduled long trips found. Schedule an outstation ride and share it from My Trips!
-            </Text>
-            <TouchableOpacity
-              onPress={() => navigation.navigate('LongTrip')}
-              style={styles.emptyBtn}
-            >
-              <Text style={styles.emptyBtnText}>Schedule Outstation Ride</Text>
-            </TouchableOpacity>
-          </View>
+          <EmptyState
+            icon="car-sport-outline"
+            title="No Shared Trips Available"
+            subtitle="No scheduled long trips found. Schedule an outstation ride and share it from My Trips!"
+            buttonText="Schedule Outstation Ride"
+            onPress={() => navigation.navigate('LongTrip')}
+          />
         ) : (
           trips.map(trip => {
             const splitFare = Math.round(Number(trip.final_fare || 0) / 2)
@@ -353,7 +350,7 @@ export default function SharedTripsScreen({ navigation }) {
                 <View style={styles.specsRow}>
                   <View style={styles.specItem}>
                     <Text style={styles.specLabel}>Date & Time</Text>
-                    <Text style={styles.specVal}>{trip.pickup_date} @ {trip.pickup_time?.substring(0, 5)}</Text>
+                    <Text style={styles.specVal}>{formatDateDisplay(trip.pickup_date)} @ {formatTime12Hr(trip.pickup_time)}</Text>
                   </View>
                   <View style={styles.specItem}>
                     <Text style={styles.specLabel}>Distance</Text>
@@ -544,7 +541,7 @@ const styles = StyleSheet.create({
   reqStatus: { fontSize: 10, fontWeight: '800', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
   statusGreen: { backgroundColor: '#DCFCE7', color: '#16A34A' },
   statusAmber: { backgroundColor: '#FEF3C7', color: '#D97706' },
-  statusBlue: { backgroundColor: '#DBEAFE', color: '#2563EB' },
+  statusBlue: { backgroundColor: '#FEF3C7', color: '#B45309' },
   reqRoute: { fontSize: 12, color: '#334155', fontWeight: '600' },
   reqDate: { fontSize: 11, color: '#64748B', marginTop: 2 },
   emptyCard: { backgroundColor: 'white', padding: 32, borderRadius: 18, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },

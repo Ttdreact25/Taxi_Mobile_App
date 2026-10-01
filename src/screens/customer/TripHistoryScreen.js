@@ -7,15 +7,18 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { bookingsAPI } from '../../api/api'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
+import { SkeletonList } from '../../components/common/Skeleton'
+import EmptyState from '../../components/common/EmptyState'
+import { formatDateTime12Hr } from '../../utils/formatters'
 
 const STATUS_CONFIG = {
   scheduled:        { label: 'Scheduled',          color: '#7C3AED', bg: '#EDE9FE' },
-  waiting_driver:   { label: 'Waiting for Driver', color: '#2563EB', bg: '#DBEAFE' },
-  searching:        { label: 'Searching Driver',   color: '#2563EB', bg: '#DBEAFE' },
+  waiting_driver:   { label: 'Waiting for Driver', color: '#D97706', bg: '#FEF3C7' },
+  searching:        { label: 'Searching Driver',   color: '#D97706', bg: '#FEF3C7' },
   driver_assigned:  { label: 'Driver Assigned',    color: '#D97706', bg: '#FEF3C7' },
   driver_arrived:   { label: 'On the Way',         color: '#EA580C', bg: '#FFEDD5' },
-  trip_started:     { label: 'Trip Started',       color: '#4F46E5', bg: '#E0E7FF' },
-  in_progress:      { label: 'Trip Started',       color: '#4F46E5', bg: '#E0E7FF' },
+  trip_started:     { label: 'Trip Started',       color: '#0F172A', bg: '#FEF3C7' },
+  in_progress:      { label: 'Trip Started',       color: '#0F172A', bg: '#FEF3C7' },
   completed:        { label: 'Completed',          color: '#16A34A', bg: '#DCFCE7' },
   cancelled:        { label: 'Cancelled',          color: '#DC2626', bg: '#FEE2E2' },
 }
@@ -129,13 +132,13 @@ export default function TripHistoryScreen({ navigation }) {
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
                     <TouchableOpacity
                       style={{
-                        flex: 1, backgroundColor: '#EEF2FF', paddingVertical: 8, borderRadius: 8,
-                        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, borderWidth: 1, borderColor: '#C7D2FE'
+                        flex: 1, backgroundColor: '#FEF3C7', paddingVertical: 8, borderRadius: 8,
+                        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, borderWidth: 1, borderColor: '#FDE68A'
                       }}
                       onPress={() => navigation.navigate('Ticket', { bookingId: trip.id, bookingRef: trip.booking_ref })}
                     >
-                      <Ionicons name="receipt-outline" size={14} color="#4338CA" />
-                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#4338CA' }}>View Ticket & OTP</Text>
+                      <Ionicons name="receipt-outline" size={14} color="#B45309" />
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#B45309' }}>View Ticket & OTP</Text>
                     </TouchableOpacity>
 
                     {['driver_assigned', 'driver_arrived', 'trip_started', 'in_progress'].includes(trip.status) && (
@@ -171,13 +174,15 @@ export default function TripHistoryScreen({ navigation }) {
 
         {/* All / Past Trips List */}
         {loading ? (
-          <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 40 }} />
+          <SkeletonList count={3} style={{ marginTop: 10 }} />
         ) : filteredTrips.length === 0 ? (
-          <View style={styles.emptyWrap}>
-            <Ionicons name="car-outline" size={44} color="#CBD5E1" />
-            <Text style={styles.emptyTitle}>No trips found</Text>
-            <Text style={styles.emptySub}>Your ride history will appear here.</Text>
-          </View>
+          <EmptyState
+            icon="car-outline"
+            title="No Trips Found"
+            subtitle="Your ride history and scheduled bookings will appear here."
+            actionLabel="Book a Ride Now"
+            onAction={() => navigation.navigate('Booking')}
+          />
         ) : (
           filteredTrips.map(item => {
             const conf = STATUS_CONFIG[item.status] || { label: item.status, color: '#64748B', bg: '#F1F5F9' }
@@ -202,7 +207,7 @@ export default function TripHistoryScreen({ navigation }) {
                 </View>
 
                 <View style={styles.historyBottom}>
-                  <Text style={styles.historyDate}>{item.scheduled_date || item.created_at?.substring(0, 10)}</Text>
+                  <Text style={styles.historyDate}>{formatDateTime12Hr(item.scheduled_at || (item.pickup_date ? `${item.pickup_date} ${item.pickup_time || ''}` : item.created_at))}</Text>
                   <Text style={styles.historyFare}>₹{Math.round(item.final_fare || item.fare_estimate || 0)}</Text>
                 </View>
 
@@ -273,15 +278,14 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   metaText: { fontSize: 11, color: '#64748B', fontWeight: '600' },
-  fareHighlight: { fontSize: 14, fontWeight: '900', color: '#10B981' },
   trackActionBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    backgroundColor: COLORS.primary, borderRadius: 10, paddingVertical: 10, marginTop: 10
+    backgroundColor: '#0F172A', borderRadius: 10, paddingVertical: 10, marginTop: 10
   },
   trackActionBtnText: { fontSize: 12.5, fontWeight: '800', color: '#FFFFFF' },
   filtersRow: { flexDirection: 'row', gap: 8, marginVertical: 12 },
   filterChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0' },
-  filterChipActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
+  filterChipActive: { backgroundColor: '#0F172A', borderColor: '#0F172A' },
   filterChipText: { fontSize: 11.5, fontWeight: '700', color: '#64748B' },
   filterChipTextActive: { color: '#FFFFFF', fontWeight: '800' },
   historyCard: {
