@@ -319,6 +319,8 @@ export default function BookingTrackScreen({ route, navigation }) {
   const plateNo = driver?.plate_no || booking?.plate_no || ''
   const otpCode = booking?.driver_otp || booking?.otp || ''
   const fareAmount = Math.round(parseFloat(booking?.final_fare || booking?.fare || booking?.fare_estimate || booking?.original_fare || 0))
+  const tripDistanceKm = parseFloat(booking?.distance_km || trackingData?.booking?.distance_km || 0)
+  const tripDurationMins = parseInt(booking?.duration_min || booking?.duration_minutes || trackingData?.booking?.duration_min || Math.round(tripDistanceKm * 2.4) || 0)
 
   // Share Live Trip Location
   const handleShareLocation = async () => {
@@ -542,7 +544,9 @@ export default function BookingTrackScreen({ route, navigation }) {
               <View style={{ marginLeft: 8 }}>
                 <Text style={styles.vehicleBannerTitle}>{vehicleName}</Text>
                 <Text style={styles.vehicleBannerSub}>
-                  ~{formatDurationHours(routeDurationMins)} · {routeDistanceKm.toFixed(1)} km
+                  {tripDistanceKm > 0
+                    ? `${tripDistanceKm.toFixed(1)} km · ~${formatDurationHours(tripDurationMins || Math.round(tripDistanceKm * 2.4))}`
+                    : (routeDistanceKm > 0 ? `${routeDistanceKm.toFixed(1)} km · ~${formatDurationHours(routeDurationMins)}` : 'Trip Route')}
                 </Text>
               </View>
             </View>
@@ -578,6 +582,30 @@ export default function BookingTrackScreen({ route, navigation }) {
                   <Text style={styles.vehiclePlateText}>
                     {[plateNo, vehicleModel].filter(Boolean).join(' · ')}
                   </Text>
+                ) : null}
+
+                {/* Driver Live Proximity / Arrival ETA */}
+                {!isDriverArrived && !isInTripNavigation && routeDistanceKm > 0 ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
+                    <Ionicons name="navigate-circle" size={13} color="#D97706" />
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#D97706' }}>
+                      Arriving in ~{formatDurationHours(routeDurationMins)} ({routeDistanceKm.toFixed(1)} km away)
+                    </Text>
+                  </View>
+                ) : isDriverArrived && !isInTripNavigation ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
+                    <Ionicons name="checkmark-done-circle" size={13} color="#10B981" />
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }}>
+                      Driver has reached your pickup point
+                    </Text>
+                  </View>
+                ) : isInTripNavigation && routeDistanceKm > 0 ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 }}>
+                    <Ionicons name="speedometer" size={13} color="#2563EB" />
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#2563EB' }}>
+                      Heading to destination · ~{formatDurationHours(routeDurationMins)} ({routeDistanceKm.toFixed(1)} km)
+                    </Text>
+                  </View>
                 ) : null}
               </View>
 

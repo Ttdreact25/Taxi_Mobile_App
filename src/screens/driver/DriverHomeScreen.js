@@ -1478,13 +1478,13 @@ const DriverHomeScreen = ({ navigation }) => {
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                       <Ionicons name="speedometer-outline" size={13} color={COLORS.gray500} />
                       <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.gray700 }}>
-                        {activeRide.distance_km ? `${activeRide.distance_km} KM` : '3.5 KM'}
+                        {activeRide.distance_km ? `${parseFloat(activeRide.distance_km).toFixed(1)} KM` : (activeRide.route_distance_km ? `${parseFloat(activeRide.route_distance_km).toFixed(1)} KM` : '—')}
                       </Text>
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                       <Ionicons name="wallet-outline" size={13} color={COLORS.primary} />
                       <Text style={{ fontSize: 12, fontWeight: '900', color: COLORS.primary }}>
-                        ₹{Math.round(activeRide.final_fare || activeRide.fare_estimate || 150)}
+                        ₹{Math.round(activeRide.final_fare || activeRide.fare || activeRide.fare_estimate || activeRide.original_fare || 0)}
                       </Text>
                     </View>
                     <View style={{ backgroundColor: '#ECFDF5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
@@ -2031,7 +2031,7 @@ const DriverHomeScreen = ({ navigation }) => {
               <ScrollView showsVerticalScrollIndicator={false}>
                 <View style={styles.sheetRefRow}>
                   <Text style={styles.sheetRefText}>{detailModalTrip.booking_ref}</Text>
-                  <Text style={styles.sheetFareText}>₹{Math.round(detailModalTrip.final_fare || detailModalTrip.fare_estimate || 0)}</Text>
+                  <Text style={styles.sheetFareText}>₹{Math.round(detailModalTrip.final_fare || detailModalTrip.fare || detailModalTrip.fare_estimate || detailModalTrip.original_fare || 0)}</Text>
                 </View>
 
                 {/* Customer Info */}
@@ -2163,10 +2163,10 @@ const DriverHomeScreen = ({ navigation }) => {
             </View>
 
             <Text style={styles.incomingFare}>
-              ₹{Math.round(activeIncoming?.fare_estimate || activeIncoming?.final_fare || 150)}
+              ₹{Math.round(activeIncoming?.final_fare || activeIncoming?.fare || activeIncoming?.fare_estimate || activeIncoming?.original_fare || 0)}
             </Text>
             <Text style={styles.incomingCategory}>
-              {activeIncoming?.vehicle_type?.toUpperCase() || 'CAB'} · {activeIncoming?.distance_km ? `${activeIncoming.distance_km} KM` : '3.5 KM'}
+              {activeIncoming?.vehicle_type?.toUpperCase() || 'CAB'}{activeIncoming?.distance_km ? ` · ${parseFloat(activeIncoming.distance_km).toFixed(1)} KM` : ''}
             </Text>
 
             <View style={styles.incomingRoute}>

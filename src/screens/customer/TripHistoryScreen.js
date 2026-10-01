@@ -126,7 +126,7 @@ export default function TripHistoryScreen({ navigation }) {
                       <Ionicons name="car-outline" size={13} color={COLORS.primary} />
                       <Text style={styles.metaText}>{trip.vehicle_type_name || 'Vehicle'}</Text>
                     </View>
-                    <Text style={styles.fareHighlight}>₹{Math.round(trip.final_fare || trip.fare_estimate || 0)}</Text>
+                    <Text style={styles.fareHighlight}>₹{Math.round(trip.final_fare || trip.fare || trip.fare_estimate || trip.original_fare || 0)}</Text>
                   </View>
 
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
@@ -208,7 +208,7 @@ export default function TripHistoryScreen({ navigation }) {
 
                 <View style={styles.historyBottom}>
                   <Text style={styles.historyDate}>{formatDateTime12Hr(item.scheduled_at || (item.pickup_date ? `${item.pickup_date} ${item.pickup_time || ''}` : item.created_at))}</Text>
-                  <Text style={styles.historyFare}>₹{Math.round(item.final_fare || item.fare_estimate || 0)}</Text>
+                  <Text style={styles.historyFare}>₹{Math.round(item.final_fare || item.fare || item.fare_estimate || item.original_fare || 0)}</Text>
                 </View>
 
                 {item.status === 'cancelled' ? (
