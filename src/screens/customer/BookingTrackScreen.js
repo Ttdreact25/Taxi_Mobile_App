@@ -118,18 +118,30 @@ export default function BookingTrackScreen({ route, navigation }) {
   }
 
   // Driver Assignment and Status Evaluation
-  const status = (booking?.status || 'searching').toLowerCase()
+  const status = (booking?.status || trackingData?.booking?.status || 'searching').toLowerCase()
   const driver = trackingData?.driver || null
-  const hasAssignedDriver = Boolean(
-    booking?.driver_id &&
-    Number(booking.driver_id) > 0 &&
-    (driver?.name || booking?.driver_name)
-  )
-  const isDriverAssigned = hasAssignedDriver && [
+  const assignedDriverId = booking?.driver_id || driver?.id || trackingData?.booking?.driver_id || null
+
+  const isAssignedStatus = [
     'driver_assigned', 'driver_accepted', 'accepted', 'driver_arrived',
-    'driver_reached', 'trip_started', 'in_progress', 'return_pickup',
-    'return_started', 'return_in_progress'
+    'driver_reached', 'pickup_reached', 'trip_started', 'in_progress', 'trip_in_progress',
+    'return_pickup', 'return_started', 'return_in_progress'
   ].includes(status)
+
+  const hasAssignedDriver = Boolean(
+    (assignedDriverId && Number(assignedDriverId) > 0) ||
+    Boolean(driver?.name) ||
+    Boolean(booking?.driver_name) ||
+    isAssignedStatus
+  )
+
+  const isDriverAssigned = Boolean(
+    hasAssignedDriver &&
+    status !== 'searching' &&
+    status !== 'pending' &&
+    status !== 'pending_driver_assignment' &&
+    status !== 'cancelled'
+  )
   const isDriverArrived = ['driver_arrived', 'driver_reached', 'pickup_reached'].includes(status)
 
   const isRoundTrip = Boolean(
@@ -607,7 +619,7 @@ export default function BookingTrackScreen({ route, navigation }) {
               </View>
 
               <View style={styles.searchingBadge}>
-                <Ionicons name="radar-outline" size={14} color="#D97706" />
+                <Ionicons name="radio-outline" size={14} color="#D97706" />
                 <Text style={styles.searchingBadgeText}>Searching</Text>
               </View>
             </View>
