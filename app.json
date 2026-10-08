@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "CityOneTaxi",
-    "slug": "cabtaxi-mobile",
+    "slug": "cityonetaxi",
     "scheme": "cityonetaxi",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -25,12 +25,17 @@
         "backgroundColor": "#FFFFFF"
       },
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION",
-        "CAMERA",
-        "POST_NOTIFICATIONS"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.RECORD_AUDIO"
       ],
       "config": {
         "googleMaps": {
@@ -75,7 +80,7 @@
       "backendUrl": "https://taxi-backend.toptechsoftwaresolutions.in",
       "googleMapsApiKey": "AIzaSyBZhUreM7E2U5krpAMizvpj2qoqgcQuuWc",
       "eas": {
-        "projectId": "5dde2293-94b7-4ed6-9477-696d5134d2bb"
+        "projectId": "77601284-6eb7-42f7-b41e-9b44dd48f97e"
       }
     },
     "owner": "ramsanthoshr"
