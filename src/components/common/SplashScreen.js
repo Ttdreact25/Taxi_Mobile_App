@@ -22,36 +22,46 @@ export const SplashScreen = ({
   const taglineSlide = useRef(new Animated.Value(20)).current
 
   useEffect(() => {
-    // 1. Entrance animation (fade in + logo spring)
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 700,
-        useNativeDriver: true,
-      }),
-      Animated.spring(logoScale, {
-        toValue: 1,
-        friction: 6,
-        tension: 40,
-        useNativeDriver: true,
-      }),
-      Animated.timing(taglineSlide, {
-        toValue: 0,
-        duration: 800,
-        useNativeDriver: true,
-      }),
-    ]).start()
-
-    // 2. Progress bar animation (filling over 2.4s then triggering onFinish)
-    Animated.timing(progressAnim, {
-      toValue: 1,
-      duration: 2400,
-      useNativeDriver: false,
-    }).start(({ finished }) => {
-      if (finished && onFinish) {
-        onFinish()
+    let finished = false
+    const finishSafely = () => {
+      if (!finished) {
+        finished = true
+        if (onFinish) onFinish()
       }
-    })
+    }
+
+    const fallbackTimer = setTimeout(finishSafely, 2000)
+
+    try {
+      Animated.parallel([
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.spring(logoScale, {
+          toValue: 1,
+          friction: 6,
+          tension: 40,
+          useNativeDriver: true,
+        }),
+        Animated.timing(taglineSlide, {
+          toValue: 0,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+      ]).start()
+
+      Animated.timing(progressAnim, {
+        toValue: 1,
+        duration: 1800,
+        useNativeDriver: false,
+      }).start(() => finishSafely())
+    } catch {
+      finishSafely()
+    }
+
+    return () => clearTimeout(fallbackTimer)
   }, [onFinish])
 
   const progressWidth = progressAnim.interpolate({
