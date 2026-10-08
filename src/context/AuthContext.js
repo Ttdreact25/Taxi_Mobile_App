@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { Alert } from 'react-native'
 import { authAPI, tokenManager, setOnUnauthorized } from '../api/api'
 
 const AuthContext = createContext(null)
@@ -7,19 +8,47 @@ export const AuthProvider = ({ children }) => {
   const [user,    setUser]    = useState(null)
   const [loading, setLoading] = useState(true)
 
-  const logout = useCallback(async () => {
+  const logout = useCallback(async (callApi = true) => {
+    if (callApi) {
+      try {
+        await authAPI.logout()
+      } catch {}
+    }
     try {
       await tokenManager.delete()
     } catch {}
     setUser(null)
   }, [])
 
-  // Listen for global 401 Unauthorized responses
+  // Listen for global 401 Unauthorized responses & single device login invalidation
   useEffect(() => {
-    setOnUnauthorized(() => {
-      logout()
+    setOnUnauthorized((info) => {
+      logout(false)
+      const msg = info?.message || 'Your account has been logged in from another device. Please login again.'
+      Alert.alert(
+        'Logged Out',
+        msg,
+        [{ text: 'OK' }],
+        { cancelable: false }
+      )
     })
   }, [logout])
+
+  // Active session heartbeat: detect remote login from another phone immediately
+  useEffect(() => {
+    if (!user) return
+    const timer = setInterval(async () => {
+      try {
+        const res = await authAPI.verify()
+        if (res.data?.status !== 'success') {
+          logout(false)
+        }
+      } catch {
+        // Any 401 will be captured by axios response interceptor
+      }
+    }, 10000)
+    return () => clearInterval(timer)
+  }, [user, logout])
 
   useEffect(() => {
     const init = async () => {
@@ -48,6 +77,16 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (identifier, password) => {
     const res = await authAPI.login({ identifier, password })
+    if (res.data?.requires_otp || res.data?.status === 'requires_otp') {
+      return {
+        requires_otp: true,
+        email: res.data.email,
+        phone: res.data.phone,
+        role: res.data.role || 'driver',
+        otp: res.data.otp,
+        message: res.data.message
+      }
+    }
     if (res.data?.status === 'success') {
       await tokenManager.save(res.data.token)
       setUser(res.data.user)
@@ -77,11 +116,14 @@ export const AuthProvider = ({ children }) => {
   }
 
   const updateUser = (u) => {
-    setUser(p => (typeof u === 'function' ? u(p) : { ...p, ...u }))
+    setUser(p => {
+      if (!p) return typeof u === 'function' ? u(null) : u
+      return typeof u === 'function' ? u(p) : { ...p, ...u }
+    })
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, deleteAccount, updateUser, refreshUser }}>
+    <AuthContext.Provider value={{ user, setUser, loading, login, logout, deleteAccount, updateUser, refreshUser }}>
       {children}
     </AuthContext.Provider>
   )

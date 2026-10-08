@@ -15,6 +15,8 @@ import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import { notifAPI } from '../../api/api'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
+import { SkeletonList } from '../../components/common/Skeleton'
+import EmptyState from '../../components/common/EmptyState'
 
 const FILTERS = [
   { id: 'all',      label: 'All Broadcasts' },
@@ -96,7 +98,7 @@ const DriverNotifScreen = ({ navigation }) => {
       return { icon: 'time', color: '#F59E0B', bg: '#FEF3C7' }
     }
     if (t.includes('kyc') || t.includes('document') || t.includes('verified')) {
-      return { icon: 'shield-checkmark', color: '#6366F1', bg: '#EEF2FF' }
+      return { icon: 'shield-checkmark', color: '#D97706', bg: '#FEF3C7' }
     }
     return { icon: 'car-sport', color: '#7C3AED', bg: '#EDE9FE' }
   }
@@ -165,9 +167,8 @@ const DriverNotifScreen = ({ navigation }) => {
 
       {/* List */}
       {loading ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading notifications...</Text>
+        <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
+          <SkeletonList count={4} />
         </View>
       ) : (
         <FlatList
@@ -186,17 +187,17 @@ const DriverNotifScreen = ({ navigation }) => {
             />
           }
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <View style={styles.emptyIconCircle}>
-                <Ionicons name="notifications-off-outline" size={36} color={COLORS.primary} />
-              </View>
-              <Text style={styles.emptyTitle}>No Notifications</Text>
-              <Text style={styles.emptyDesc}>
-                {filter === 'unread'
+            <EmptyState
+              icon="notifications-off-outline"
+              title="No Notifications"
+              subtitle={
+                filter === 'unread'
                   ? 'All caught up! You have no unread notifications.'
-                  : 'Real-time ride dispatches, customer updates, and earnings alerts will appear here.'}
-              </Text>
-            </View>
+                  : 'Real-time ride dispatches, customer updates, and earnings alerts will appear here.'
+              }
+              actionLabel="Go to Dashboard"
+              onAction={() => navigation.navigate('Dashboard')}
+            />
           }
         />
       )}
@@ -237,7 +238,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -291,8 +292,8 @@ const styles = StyleSheet.create({
     ...SHADOW.small,
   },
   notifCardUnread: {
-    backgroundColor: '#F8FAFF',
-    borderColor: '#C7D2FE',
+    backgroundColor: '#FFFDF5',
+    borderColor: '#FDE68A',
   },
   notifCardRead: {
     backgroundColor: COLORS.white,
@@ -348,7 +349,7 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 14,

@@ -18,11 +18,12 @@ import {
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import MapView, { Marker, Polyline, Circle, PROVIDER_GOOGLE } from 'react-native-maps'
-import { bookingsAPI, resolveAssetUrl } from '../../api/api'
+import MapView, { Marker, Polyline, Circle, PROVIDER_GOOGLE, UrlTile } from 'react-native-maps'
+import { bookingsAPI, reviewsAPI, resolveAssetUrl } from '../../api/api'
 import { fetchRouteDirections, calculateDistanceKm, calculateBearing } from '../../services/directionService'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import ModernBottomSheet from '../../components/common/ModernBottomSheet'
+import UniversalRouteMap from '../../components/common/UniversalRouteMap'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
 
@@ -66,11 +67,49 @@ export default function BookingTrackScreen({ route, navigation }) {
   const [showRatingModal, setShowRatingModal] = useState(false)
   const [ratingScore, setRatingScore] = useState(5)
   const [ratingComment, setRatingComment] = useState('')
+  const [submittingRating, setSubmittingRating] = useState(false)
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [selectedCancelReason, setSelectedCancelReason] = useState(CUSTOMER_CANCEL_REASONS[0].id)
   const [customCancelText, setCustomCancelText] = useState('')
   const [cancelling, setCancelling] = useState(false)
   const isCancelledAlertShownRef = useRef(false)
+  const [acceptingPickup, setAcceptingPickup] = useState(false)
+  const [pickupChargeDismissed, setPickupChargeDismissed] = useState(false)
+
+  // Safe navigation back to Customer Home screen
+  const returnToCustomerHome = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current)
+    }
+    try {
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'Home', params: { screen: 'HomeScreen' } }],
+      })
+    } catch (e1) {
+      try {
+        navigation.navigate('Home', { screen: 'HomeScreen' })
+      } catch (e2) {
+        try {
+          navigation.navigate('HomeScreen')
+        } catch (e3) {
+          try {
+            navigation.navigate('Home')
+          } catch (e4) {
+            navigation.goBack()
+          }
+        }
+      }
+    }
+  }, [navigation])
+
+  const hasPendingPickupCharge =
+    !['completed', 'TRIP_COMPLETED'].includes(booking?.status) &&
+    !['cancelled', 'CANCELLED'].includes(booking?.status) &&
+    Boolean(booking?.driver_id) &&
+    Number(booking?.pickup_charge) > 0 &&
+    Number(booking?.extra_pickup_distance_km) > 0 &&
+    (!booking?.pickup_charge_accepted || booking?.pickup_charge_accepted === 0 || booking?.pickup_charge_accepted === '0')
 
   // Poll Live Tracking Data every 3 seconds
   const fetchLiveTracking = useCallback(async () => {
@@ -89,9 +128,14 @@ export default function BookingTrackScreen({ route, navigation }) {
           clearInterval(pollTimerRef.current)
           if (!isCancelledAlertShownRef.current) {
             isCancelledAlertShownRef.current = true
-            Alert.alert('Booking Cancelled', 'This ride has been cancelled.', [
-              { text: 'OK', onPress: () => navigation.navigate('Home') }
-            ])
+            Alert.alert(
+              'Ride Cancelled',
+              'Driver has cancelled this ride. Returning to Home screen.',
+              [
+                { text: 'OK', onPress: returnToCustomerHome }
+              ],
+              { cancelable: false }
+            )
           }
         }
       }
@@ -100,7 +144,7 @@ export default function BookingTrackScreen({ route, navigation }) {
     } finally {
       setLoading(false)
     }
-  }, [bookingId])
+  }, [bookingId, returnToCustomerHome])
 
   useEffect(() => {
     fetchLiveTracking()
@@ -157,10 +201,14 @@ export default function BookingTrackScreen({ route, navigation }) {
     Boolean(booking?.return_date)
   )
   const isOutstationTrip = Boolean(
-    parseFloat(booking?.distance_km || 0) > 130 ||
+    parseFloat(booking?.distance_km || 0) > 50 ||
     (booking?.trip_type && booking.trip_type.toLowerCase().includes('outstation')) ||
     (booking?.booking_trip_type && booking.booking_trip_type.toLowerCase().includes('outstation')) ||
     Boolean(booking?.is_long_trip)
+  )
+  const isHourly = Boolean(
+    booking?.trip_sub_type === 'hourly' ||
+    Number(booking?.package_hours) > 0
   )
 
   const isReturnPickup = status === 'return_pickup'
@@ -327,7 +375,7 @@ export default function BookingTrackScreen({ route, navigation }) {
     try {
       const driverInfo = isDriverAssigned && driverName ? ` Driver: ${driverName} (${plateNo || vehicleModel}).` : ''
       await Share.share({
-        message: `I'm tracking my ride using CityDropTaxi! Booking #${booking?.booking_ref || bookingId}: ${destCoord.address}.${driverInfo}`,
+        message: `I'm tracking my ride using CityOneTaxi! Booking #${booking?.booking_ref || bookingId}: ${destCoord.address}.${driverInfo}`,
       })
     } catch {}
   }
@@ -357,13 +405,65 @@ export default function BookingTrackScreen({ route, navigation }) {
       isCancelledAlertShownRef.current = true
       setShowCancelModal(false)
       Alert.alert('Ride Cancelled', 'Your booking has been cancelled successfully.', [
-        { text: 'OK', onPress: () => navigation.navigate('Home') },
+        { text: 'OK', onPress: returnToCustomerHome },
       ])
     } catch (err) {
       Alert.alert('Error', err.response?.data?.message || 'Failed to cancel booking.')
     } finally {
       setCancelling(false)
     }
+  }
+
+  // Handle Accept Extra Pickup Charge
+  const handleAcceptPickupCharge = async () => {
+    setAcceptingPickup(true)
+    try {
+      const res = await bookingsAPI.acceptPickupCharge(bookingId)
+      if (res.data?.status === 'success') {
+        setBooking(prev => ({
+          ...prev,
+          pickup_charge_accepted: 1
+        }))
+        setPickupChargeDismissed(true)
+        Alert.alert('Pickup Charge Accepted ✅', 'Your driver has been notified and is proceeding for pickup.')
+      } else {
+        Alert.alert('Error', res.data?.message || 'Could not accept pickup charge.')
+      }
+    } catch (err) {
+      Alert.alert('Error', err.response?.data?.message || 'Failed to accept pickup charge.')
+    } finally {
+      setAcceptingPickup(false)
+    }
+  }
+
+  // Handle Decline Extra Pickup Charge (Cancels ride without penalty)
+  const handleDeclinePickupCharge = () => {
+    Alert.alert(
+      'Cancel Ride?',
+      'Since you declined the extra pickup charge, do you want to cancel this ride now without any fee?',
+      [
+        { text: 'Keep Ride', style: 'cancel' },
+        {
+          text: 'Cancel Ride',
+          style: 'destructive',
+          onPress: async () => {
+            setCancelling(true)
+            try {
+              await bookingsAPI.cancel(bookingId, { reason: 'Customer declined extra pickup charge' })
+              clearInterval(pollTimerRef.current)
+              isCancelledAlertShownRef.current = true
+              Alert.alert('Ride Cancelled', 'Your ride has been cancelled.', [
+                { text: 'OK', onPress: returnToCustomerHome }
+              ])
+            } catch (err) {
+              Alert.alert('Error', err.response?.data?.message || 'Failed to cancel booking.')
+            } finally {
+              setCancelling(false)
+            }
+          }
+        }
+      ]
+    )
   }
 
   // SOS Emergency Alert
@@ -382,93 +482,21 @@ export default function BookingTrackScreen({ route, navigation }) {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
 
-      {/* ── 1. Full Screen Interactive Map ── */}
-      <MapView
+      {/* ── 1. Full Screen Interactive Map (Zero Black Screen Guaranteed) ── */}
+      <UniversalRouteMap
         ref={mapRef}
-        provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
-        style={[StyleSheet.absoluteFillObject, { width: SCREEN_WIDTH, height: SCREEN_HEIGHT }]}
+        pickupCoords={originCoord}
+        destCoords={destCoord}
+        routeCoordinates={routeCoordinates}
+        driverLocation={isDriverAssigned && hasRealDriverCoord ? { latitude: driverCoord.latitude, longitude: driverCoord.longitude, heading: driverCoord.heading } : null}
         initialRegion={{
           latitude: originCoord.latitude,
           longitude: originCoord.longitude,
           latitudeDelta: 0.035,
           longitudeDelta: 0.035,
         }}
-        showsUserLocation={true}
-        showsMyLocationButton={false}
-        showsCompass={false}
-        toolbarEnabled={false}
-      >
-        {/* Route Polyline (Vibrant Blue) */}
-        {routeCoordinates.length > 1 && (
-          <>
-            <Polyline
-              coordinates={routeCoordinates}
-              strokeColor="rgba(245, 158, 11, 0.35)"
-              strokeWidth={8}
-            />
-            <Polyline
-              coordinates={routeCoordinates}
-              strokeColor="#F59E0B"
-              strokeWidth={4.5}
-            />
-          </>
-        )}
-
-        {/* Pickup Pin with Ripple */}
-        <Marker coordinate={originCoord} anchor={{ x: 0.5, y: 0.5 }}>
-          <View style={styles.pickupMarkerWrap}>
-            {(!isDriverAssigned || isDriverArrived) && <View style={styles.arrivedPulseRing} />}
-            <View style={styles.pickupMarkerDot} />
-          </View>
-        </Marker>
-
-        {/* Searching Radar Ring on Pickup Point when Driver Not Yet Assigned */}
-        {!isDriverAssigned && (
-          <Circle
-            center={originCoord}
-            radius={350}
-            strokeColor="rgba(245, 158, 11, 0.45)"
-            fillColor="rgba(245, 158, 11, 0.12)"
-          />
-        )}
-
-        {/* Destination Pin */}
-        <Marker coordinate={destCoord} anchor={{ x: 0.5, y: 1 }}>
-          <View style={styles.destPinWrap}>
-            <Ionicons name="location" size={32} color="#EF4444" />
-          </View>
-        </Marker>
-
-        {/* Moving Driver Car Marker with Floating Tooltip Bubble (Only when driver is assigned & real location available) */}
-        {isDriverAssigned && hasRealDriverCoord && (
-          <Marker
-            coordinate={driverCoord}
-            anchor={{ x: 0.5, y: 0.5 }}
-            flat
-            rotation={driverCoord.heading}
-          >
-            <View style={styles.driverCarMarkerContainer}>
-              {/* Tooltip Bubble above car marker (Matching Reference Image 3 & 4) */}
-              <View style={styles.carTooltipBubble}>
-                <Text style={styles.carTooltipText}>
-                  {isRoundTrip && isReturnStarted
-                    ? `Returning to origin · ${routeDistanceKm.toFixed(1)} km · ~${formatDurationHours(routeDurationMins)}`
-                    : (isRoundTrip && isReturnPickup
-                      ? `Driver arriving for return pickup · ${routeDistanceKm.toFixed(1)} km`
-                      : (isDriverArrived
-                        ? 'Driver arrived'
-                        : isInTripNavigation
-                        ? `On the way · ${routeDistanceKm.toFixed(1)} km · ~${formatDurationHours(routeDurationMins)}`
-                        : `Driver is on the way · ${routeDistanceKm.toFixed(1)} km · ~${formatDurationHours(routeDurationMins)}`))}
-                </Text>
-              </View>
-              <View style={styles.carMarkerCircle}>
-                <Ionicons name="car-sport" size={20} color="#0F172A" />
-              </View>
-            </View>
-          </Marker>
-        )}
-      </MapView>
+        style={[StyleSheet.absoluteFillObject, { width: SCREEN_WIDTH, height: SCREEN_HEIGHT }]}
+      />
 
       {/* ── 2. Top Header Elements ── */}
       <SafeAreaView style={[styles.topHeaderWrap, { paddingTop: insets.top + 6 }]} pointerEvents="box-none">
@@ -544,9 +572,11 @@ export default function BookingTrackScreen({ route, navigation }) {
               <View style={{ marginLeft: 8 }}>
                 <Text style={styles.vehicleBannerTitle}>{vehicleName}</Text>
                 <Text style={styles.vehicleBannerSub}>
-                  {tripDistanceKm > 0
-                    ? `${tripDistanceKm.toFixed(1)} km · ~${formatDurationHours(tripDurationMins || Math.round(tripDistanceKm * 2.4))}`
-                    : (routeDistanceKm > 0 ? `${routeDistanceKm.toFixed(1)} km · ~${formatDurationHours(routeDurationMins)}` : 'Trip Route')}
+                  {isHourly
+                    ? `${booking?.package_hours || 1} Hours Package (${booking?.hourly_package_km || ((booking?.package_hours || 1) * 10)} km included)`
+                    : (tripDistanceKm > 0
+                      ? `${tripDistanceKm.toFixed(1)} km · ~${formatDurationHours(tripDurationMins || Math.round(tripDistanceKm * 2.4))}`
+                      : (routeDistanceKm > 0 ? `${routeDistanceKm.toFixed(1)} km · ~${formatDurationHours(routeDurationMins)}` : 'Trip Route'))}
                 </Text>
               </View>
             </View>
@@ -640,20 +670,28 @@ export default function BookingTrackScreen({ route, navigation }) {
               <View style={{ flex: 1, marginLeft: 12 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <Text style={styles.searchingTitle}>
-                    {isOutstationTrip ? 'Driver Assignment Pending' : 'Searching for Driver...'}
+                    {status === 'pending_driver_assignment'
+                      ? 'Driver Assignment in Progress'
+                      : (isOutstationTrip ? 'Driver Assignment Pending' : 'Searching for Driver...')}
                   </Text>
                   <View style={styles.searchingPulseDot} />
                 </View>
                 <Text style={styles.searchingSub}>
-                  {isOutstationTrip
-                    ? 'Admin is assigning the best category driver for your outstation trip.'
-                    : 'Looking for nearby drivers. Please hold on...'}
+                  {status === 'pending_driver_assignment'
+                    ? (isOutstationTrip
+                        ? 'Admin is assigning the best category driver for your outstation trip.'
+                        : 'Admin is reviewing and assigning a driver. Auto-assign will trigger if unassigned.')
+                    : (isOutstationTrip
+                        ? 'Admin is assigning the best category driver for your outstation trip.'
+                        : 'Looking for nearby drivers. Please hold on...')}
                 </Text>
               </View>
 
               <View style={styles.searchingBadge}>
                 <Ionicons name="radio-outline" size={14} color="#D97706" />
-                <Text style={styles.searchingBadgeText}>Searching</Text>
+                <Text style={styles.searchingBadgeText}>
+                  {status === 'pending_driver_assignment' ? 'Assigning' : 'Searching'}
+                </Text>
               </View>
             </View>
           )}
@@ -791,30 +829,181 @@ export default function BookingTrackScreen({ route, navigation }) {
             </View>
             <Text style={styles.ratingModalTitle}>Trip Completed!</Text>
             <Text style={styles.ratingModalSub}>
-              You have arrived at {destCoord.address?.split(',')?.[0] || 'your destination'}. Total Fare: ₹{fareAmount}
+              {isHourly
+                ? `Hourly trip (${booking?.package_hours || 1} hrs) finished! Total Fare: ₹${fareAmount}`
+                : `You have arrived at ${destCoord.address?.split(',')?.[0] || 'your destination'}. Total Fare: ₹${fareAmount}`}
             </Text>
+
+            <View style={{ backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, marginVertical: 8, width: '100%', borderWidth: 1, borderColor: '#E2E8F0' }}>
+              {isHourly ? (
+                <>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 12, color: '#64748B' }}>Base Package ({booking?.package_hours || 1} hrs)</Text>
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>₹{Math.round(Number(booking?.base_package_fare || ((booking?.package_hours || 1) * (booking?.hourly_rate || 250))))}</Text>
+                  </View>
+                  {Number(booking?.extra_mins) > 0 ? (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={{ fontSize: 12, color: '#D97706' }}>Overtime ({booking?.extra_mins} mins)</Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+₹{Math.round(Number(booking?.extra_min_fare || 0))}</Text>
+                    </View>
+                  ) : null}
+                  {Number(booking?.extra_km) > 0 ? (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={{ fontSize: 12, color: '#D97706' }}>Extra Distance ({Number(booking?.extra_km).toFixed(1)} km)</Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+₹{Math.round(Number(booking?.extra_km_fare || 0))}</Text>
+                    </View>
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 12, color: '#64748B' }}>
+                      Booked Route Fare ({Number(booking?.original_distance_km || booking?.distance_km || 0).toFixed(1)} km)
+                    </Text>
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>
+                      ₹{Math.round(Number(booking?.original_fare || (Number(fareAmount) - Number(booking?.extra_km_fare || 0) - Number(booking?.pickup_charge || 0))))}
+                    </Text>
+                  </View>
+                  {Number(booking?.extra_km) > 0 ? (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={{ fontSize: 12, color: '#D97706', fontWeight: '600' }}>
+                        Extra Route Distance ({Number(booking?.extra_km).toFixed(1)} km @ ₹{booking?.per_km_rate || 15}/km)
+                      </Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>
+                        +₹{Math.round(Number(booking?.extra_km_fare || 0))}
+                      </Text>
+                    </View>
+                  ) : null}
+                </>
+              )}
+
+              {Number(booking?.pickup_charge) > 0 ? (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 12, color: '#7C3AED', fontWeight: '600' }}>
+                    Pickup Charge (Extra {booking?.extra_pickup_distance_km || ((Number(booking?.pickup_distance_km) > 2) ? (Number(booking?.pickup_distance_km) - 2).toFixed(1) : 0)} km)
+                  </Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C3AED' }}>+₹{Math.round(Number(booking?.pickup_charge))}</Text>
+                </View>
+              ) : null}
+
+              {Number(booking?.waiting_charge) > 0 ? (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B' }}>Waiting Charge ({booking?.waiting_mins || 0}m)</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>+₹{Math.round(Number(booking?.waiting_charge))}</Text>
+                </View>
+              ) : null}
+
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingTop: 6, marginTop: 4, borderTopWidth: 1, borderTopColor: '#E2E8F0' }}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: '#0F172A' }}>Total Invoice Amount</Text>
+                <Text style={{ fontSize: 15, fontWeight: '900', color: '#16A34A' }}>₹{fareAmount}</Text>
+              </View>
+
+              {Number(booking?.online_paid) > 0 && (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                  <Text style={{ fontSize: 11, color: '#0284C7' }}>Paid Online (Advance)</Text>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#0284C7' }}>-₹{Math.round(Number(booking?.online_paid))}</Text>
+                </View>
+              )}
+
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4, paddingTop: 4, borderTopWidth: 1, borderTopColor: '#E2E8F0' }}>
+                <Text style={{ fontSize: 12, fontWeight: '800', color: '#D97706' }}>Cash to Pay Driver</Text>
+                <Text style={{ fontSize: 14, fontWeight: '900', color: '#D97706' }}>
+                  ₹{Math.round(Number(booking?.cash_pending ?? (Number(fareAmount) - Number(booking?.online_paid || 0))))}
+                </Text>
+              </View>
+            </View>
 
             {/* Rating Stars */}
             <View style={styles.starsRow}>
               {[1, 2, 3, 4, 5].map(star => (
-                <TouchableOpacity key={star} onPress={() => setRatingScore(star)} style={{ padding: 4 }}>
+                <TouchableOpacity key={star} onPress={() => setRatingScore(star)} style={{ padding: 6 }}>
                   <Ionicons
                     name={star <= ratingScore ? 'star' : 'star-outline'}
-                    size={32}
+                    size={34}
                     color="#F59E0B"
                   />
                 </TouchableOpacity>
               ))}
             </View>
 
+            {/* Review Description */}
+            <View style={{ width: '100%', marginVertical: 12 }}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.gray600, marginBottom: 6 }}>
+                Trip Feedback & Comments:
+              </Text>
+              <TextInput
+                style={{
+                  backgroundColor: '#F8FAFC',
+                  borderWidth: 1,
+                  borderColor: '#E2E8F0',
+                  borderRadius: 12,
+                  padding: 12,
+                  fontSize: 13,
+                  color: '#0F172A',
+                  minHeight: 70,
+                  textAlignVertical: 'top',
+                }}
+                placeholder="Share your driving and ride experience (optional)..."
+                placeholderTextColor="#94A3B8"
+                multiline
+                numberOfLines={3}
+                value={ratingComment}
+                onChangeText={setRatingComment}
+              />
+            </View>
+
             <TouchableOpacity
-              style={styles.modalDoneBtn}
+              style={[styles.modalDoneBtn, submittingRating && { opacity: 0.7 }]}
+              onPress={async () => {
+                if (!booking) return
+                setSubmittingRating(true)
+                try {
+                  await reviewsAPI.submit({
+                    booking_id: booking.id,
+                    reviewee_id: driver?.user_id,
+                    role: 'driver',
+                    rating: ratingScore,
+                    comment: ratingComment.trim() || undefined,
+                  })
+                } catch (e) {
+                  console.log('Rating submit error:', e)
+                } finally {
+                  setSubmittingRating(false)
+                  setShowRatingModal(false)
+                  Alert.alert(
+                    'Trip Completed! 🎉',
+                    'Thank you for your rating & feedback!\n\nYou can view and download your trip invoice anytime under "My Trips".',
+                    [
+                      { text: 'OK', onPress: returnToCustomerHome },
+                    ],
+                    { cancelable: false }
+                  )
+                }
+              }}
+              disabled={submittingRating}
+            >
+              {submittingRating ? (
+                <ActivityIndicator color={COLORS.white} />
+              ) : (
+                <Text style={styles.modalDoneBtnText}>Submit Rating & Review ⭐</Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={{ marginTop: 10, paddingVertical: 8, alignItems: 'center' }}
               onPress={() => {
                 setShowRatingModal(false)
-                navigation.navigate('Home')
+                Alert.alert(
+                  'Trip Completed! 🎉',
+                  'You can view and download your trip invoice anytime under "My Trips".',
+                  [
+                    { text: 'OK', onPress: returnToCustomerHome },
+                  ],
+                  { cancelable: false }
+                )
               }}
             >
-              <Text style={styles.modalDoneBtnText}>Done · Back to Home</Text>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.gray500 }}>Skip for Now</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -973,6 +1162,135 @@ export default function BookingTrackScreen({ route, navigation }) {
                     Confirm Cancellation
                   </Text>
                 )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── 6. Extra Pickup Charge Alert Modal ── */}
+      <Modal visible={hasPendingPickupCharge && !pickupChargeDismissed} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContentCard, { padding: 22, maxWidth: 360 }]}>
+            <View style={{
+              width: 58,
+              height: 58,
+              borderRadius: 29,
+              backgroundColor: '#F5F3FF',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: 14,
+              borderWidth: 1,
+              borderColor: '#DDD6FE'
+            }}>
+              <Ionicons name="location" size={30} color="#7C3AED" />
+            </View>
+
+            <Text style={{ fontSize: 18, fontWeight: '900', color: '#1E1B4B', textAlign: 'center', marginBottom: 6 }}>
+              Driver Pickup Charge Alert
+            </Text>
+
+            <Text style={{ fontSize: 13, color: '#4B5563', textAlign: 'center', lineHeight: 19, marginBottom: 16 }}>
+              Your assigned driver is{' '}
+              <Text style={{ fontWeight: '800', color: '#111827' }}>
+                {booking?.pickup_distance_km ? `${Number(booking?.pickup_distance_km).toFixed(1)} km` : `${(2 + Number(booking?.extra_pickup_distance_km)).toFixed(1)} km`}
+              </Text>{' '}
+              away from your pickup location.
+            </Text>
+
+            {/* Fare Breakdown Details */}
+            <View style={{
+              width: '100%',
+              backgroundColor: '#F9FAFB',
+              borderRadius: 12,
+              padding: 14,
+              borderWidth: 1,
+              borderColor: '#E5E7EB',
+              marginBottom: 18
+            }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={{ fontSize: 12, color: '#6B7280' }}>Free Pickup Radius</Text>
+                <Text style={{ fontSize: 12, fontWeight: '800', color: '#16A34A' }}>First 2 KM FREE</Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={{ fontSize: 12, color: '#6B7280' }}>Extra Arrival Distance</Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#1F2937' }}>
+                  {Number(booking?.extra_pickup_distance_km || 0).toFixed(1)} KM
+                </Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={{ fontSize: 12, color: '#6B7280' }}>Rate Per Extra KM</Text>
+                <Text style={{ fontSize: 12, fontWeight: '700', color: '#1F2937' }}>
+                  ₹{Math.round(Number(booking?.pickup_charge_per_km || 10))}/km
+                </Text>
+              </View>
+
+              <View style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                paddingTop: 8,
+                borderTopWidth: 1,
+                borderTopColor: '#E5E7EB'
+              }}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: '#111827' }}>Additional Pickup Charge</Text>
+                <Text style={{ fontSize: 15, fontWeight: '900', color: '#7C3AED' }}>
+                  ₹{Math.round(Number(booking?.pickup_charge || 0))}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={{ fontSize: 11, color: '#9CA3AF', textAlign: 'center', marginBottom: 16 }}>
+              This charge will be added to your total trip invoice upon ride completion.
+            </Text>
+
+            {/* Actions */}
+            <View style={{ width: '100%', gap: 10 }}>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: '#7C3AED',
+                  paddingVertical: 14,
+                  borderRadius: 12,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexDirection: 'row',
+                  gap: 8,
+                  shadowColor: '#7C3AED',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.25,
+                  shadowRadius: 6,
+                  elevation: 4
+                }}
+                onPress={handleAcceptPickupCharge}
+                disabled={acceptingPickup}
+              >
+                {acceptingPickup ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#FFFFFF' }}>
+                      Accept & Continue (₹{Math.round(Number(booking?.pickup_charge || 0))})
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={{
+                  backgroundColor: '#F3F4F6',
+                  paddingVertical: 12,
+                  borderRadius: 12,
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+                onPress={handleDeclinePickupCharge}
+                disabled={acceptingPickup || cancelling}
+              >
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#EF4444' }}>
+                  Cancel Ride
+                </Text>
               </TouchableOpacity>
             </View>
           </View>

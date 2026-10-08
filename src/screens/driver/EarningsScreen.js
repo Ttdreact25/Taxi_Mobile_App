@@ -11,8 +11,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
-import { driverAPI } from '../../api/api'
+import { driverAPI, settingsAPI } from '../../api/api'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
+import { Skeleton, SkeletonCard } from '../../components/common/Skeleton'
+import EmptyState from '../../components/common/EmptyState'
 
 const PERIODS = [
   { id: 'today', label: 'Today' },
@@ -30,8 +32,34 @@ const EarningsScreen = ({ navigation }) => {
   const loadEarnings = useCallback(async (refresh = false) => {
     if (!refresh) setLoading(true)
     try {
-      const res = await driverAPI.earnings(period)
-      setData(res.data)
+      const [earnRes, settingsRes] = await Promise.allSettled([
+        driverAPI.earnings(period),
+        settingsAPI.list(),
+      ])
+
+      let earnData = (earnRes.status === 'fulfilled' && earnRes.value.data?.status === 'success')
+        ? earnRes.value.data
+        : (earnRes.status === 'fulfilled' && earnRes.value.data ? earnRes.value.data : null)
+
+      const targetFromSettings = settingsRes.status === 'fulfilled' ? settingsRes.value.data?.settings?.driver_daily_target : null
+      const tripsFromSettings = settingsRes.status === 'fulfilled' ? settingsRes.value.data?.settings?.driver_daily_target_trips : null
+      const bonusFromSettings = settingsRes.status === 'fulfilled' ? settingsRes.value.data?.settings?.driver_target_bonus : null
+
+      if (earnData) {
+        if (targetFromSettings) earnData.daily_target = Number(targetFromSettings)
+        if (tripsFromSettings) earnData.daily_target_trips = Number(tripsFromSettings)
+        if (bonusFromSettings) earnData.target_bonus = Number(bonusFromSettings)
+      } else if (targetFromSettings) {
+        earnData = {
+          total_earnings: 0,
+          total_trips: 0,
+          daily_target: Number(targetFromSettings),
+          daily_target_trips: Number(tripsFromSettings || 10),
+          target_bonus: Number(bonusFromSettings || 200),
+        }
+      }
+
+      setData(earnData)
     } catch {
       setData(null)
     } finally {
@@ -56,7 +84,7 @@ const EarningsScreen = ({ navigation }) => {
   const ratingVal = data?.avg_rating || data?.rating || '5.0'
   const txns = data?.trips_detail || data?.details || data?.recent_trips || []
 
-  const targetGoal = 2000
+  const targetGoal = Number(data?.daily_target || 2000)
   const progressPercent = Math.min(Math.round((Number(earningsVal) / targetGoal) * 100), 100)
 
   return (
@@ -100,9 +128,13 @@ const EarningsScreen = ({ navigation }) => {
         </View>
 
         {loading ? (
-          <View style={styles.centerContainer}>
-            <ActivityIndicator size="large" color={COLORS.primary} />
-            <Text style={styles.loadingText}>Calculating earnings...</Text>
+          <View style={{ marginTop: 8 }}>
+            <Skeleton width="100%" height={140} borderRadius={RADIUS.xxl} style={{ marginBottom: 16 }} />
+            <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
+              <Skeleton width="48%" height={90} borderRadius={RADIUS.xl} />
+              <Skeleton width="48%" height={90} borderRadius={RADIUS.xl} />
+            </View>
+            <Skeleton width="100%" height={80} borderRadius={RADIUS.xl} />
           </View>
         ) : (
           <>
@@ -143,8 +175,8 @@ const EarningsScreen = ({ navigation }) => {
               </View>
 
               <View style={styles.statCard}>
-                <View style={[styles.statIconWrap, { backgroundColor: '#DBEAFE' }]}>
-                  <Ionicons name="trending-up" size={20} color="#2563EB" />
+                <View style={[styles.statIconWrap, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="trending-up" size={20} color="#D97706" />
                 </View>
                 <Text style={styles.statVal}>
                   ₹{tripsVal > 0 ? Math.round(earningsVal / tripsVal) : 0}

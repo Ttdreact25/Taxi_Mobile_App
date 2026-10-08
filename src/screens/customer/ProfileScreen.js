@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import { useAuth } from '../../context/AuthContext'
-import { authAPI, customerAPI, uploadAPI, resolveAssetUrl } from '../../api/api'
+import { authAPI, customerAPI, uploadAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 
 const ProfileScreen = ({ navigation }) => {
@@ -81,42 +81,36 @@ const ProfileScreen = ({ navigation }) => {
         return
       }
 
+      const imageOptions = {
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+        base64: true,
+      }
+
       const result = useCamera
-        ? await ImagePicker.launchCameraAsync({
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.8,
-          })
+        ? await ImagePicker.launchCameraAsync(imageOptions)
         : await ImagePicker.launchImageLibraryAsync({
+            ...imageOptions,
             mediaTypes: ['images'],
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.8,
           })
 
       if (!result.canceled && result.assets && result.assets[0]?.uri) {
-        uploadPhoto(result.assets[0].uri)
+        uploadPhoto(result.assets[0].uri, result.assets[0])
       }
     } catch (err) {
       Alert.alert('Error', 'Could not open image picker: ' + err.message)
     }
   }
 
-  const uploadPhoto = async (localUri) => {
+  const uploadPhoto = async (localUri, asset = null) => {
     setUploading(true)
     try {
-      const filename = localUri.split('/').pop() || `profile_${Date.now()}.jpg`
-      const match = /\.(\w+)$/.exec(filename)
-      const ext = match ? match[1].toLowerCase() : 'jpg'
-      const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
-
-      const formData = new FormData()
-      formData.append('file', {
-        uri: Platform.OS === 'android' ? localUri : localUri.replace('file://', ''),
-        name: filename,
-        type: mimeType,
+      const formData = createUploadFormData(localUri, {
+        prefix: 'customer_profile',
+        type: 'profile',
+        asset: asset,
       })
-      formData.append('type', 'profile')
 
       const res = await uploadAPI.upload(formData, 'profile')
       if (res.data?.status === 'success') {
@@ -135,12 +129,14 @@ const ProfileScreen = ({ navigation }) => {
         Alert.alert('Upload Failed', res.data?.message || 'Could not upload photo')
       }
     } catch (err) {
+      console.log('Customer profile photo upload error:', err)
+      const errorMsg = err?.message || 'Failed to upload image.'
       Alert.alert(
         'Upload Error',
-        'Failed to upload image. Would you like to retry?',
+        `${errorMsg}\n\nWould you like to retry?`,
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Retry', onPress: () => uploadPhoto(localUri) }
+          { text: 'Retry', onPress: () => uploadPhoto(localUri, asset) }
         ]
       )
     } finally {
@@ -259,7 +255,7 @@ const ProfileScreen = ({ navigation }) => {
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Account',
-      'Are you sure you want to permanently delete your CityDropTaxi account? All your personal details, profile data, and saved locations will be deleted or permanently anonymized.',
+      'Are you sure you want to permanently delete your CityOneTaxi account? All your personal details, profile data, and saved locations will be deleted or permanently anonymized.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -304,11 +300,11 @@ const ProfileScreen = ({ navigation }) => {
     { icon: 'person-circle-outline', label: 'Customer Identity KYC', color: '#059669', onPress: () => navigation.navigate('IdentityVerification') },
     { icon: 'bookmark-outline', label: 'Saved Destinations', color: '#10B981', onPress: () => navigation.navigate('SavedPlaces') },
     { icon: 'create-outline', label: 'Edit Profile Information', color: '#7C3AED', onPress: () => setEditModalVisible(true) },
-    { icon: 'time-outline', label: 'My Trip History', color: '#2563EB', onPress: () => navigation.navigate('TripsList') },
-    { icon: 'key-outline', label: 'Change Security Password', color: '#6366F1', onPress: () => setPwModalVisible(true) },
+    { icon: 'time-outline', label: 'My Trip History', color: '#D97706', onPress: () => navigation.navigate('TripsList') },
+    { icon: 'key-outline', label: 'Change Security Password', color: '#B45309', onPress: () => setPwModalVisible(true) },
     { icon: 'notifications-outline', label: 'Notifications & Alerts', color: '#D97706', onPress: () => navigation.navigate('Notifications') },
     { icon: 'help-buoy-outline', label: 'Help & 24x7 Support', color: '#EA580C', onPress: () => navigation.navigate('Support') },
-    { icon: 'document-text-outline', label: 'Privacy Policy', color: '#0284C7', onPress: () => navigation.navigate('PrivacyPolicy') },
+    { icon: 'document-text-outline', label: 'Privacy Policy', color: '#D97706', onPress: () => navigation.navigate('PrivacyPolicy') },
     { icon: 'newspaper-outline', label: 'Terms & Conditions', color: '#64748B', onPress: () => navigation.navigate('Terms') },
     { icon: 'lock-closed-outline', label: 'Safety Guarantee', color: '#475569', onPress: () => Alert.alert('Safety Guarantee', 'All rides are monitored with live 24/7 GPS Fleet Tracking, SOS Emergency triggers & Verified Drivers.') },
   ]
@@ -443,7 +439,7 @@ const ProfileScreen = ({ navigation }) => {
           <Text style={styles.deleteText}>Delete Account & Erase Personal Data</Text>
         </TouchableOpacity>
 
-        <Text style={styles.appVer}>CabTaxi Customer App v1.0.0 · 256-Bit SSL Secured</Text>
+        <Text style={styles.appVer}>CityOneTaxi Customer App v1.0.0 · 256-Bit SSL Secured</Text>
       </ScrollView>
 
       {/* Edit Profile Modal */}
@@ -612,8 +608,8 @@ const ProfileScreen = ({ navigation }) => {
                 onPress={() => capturePhoto(false)}
                 activeOpacity={0.7}
               >
-                <View style={[styles.actionIconWrap, { backgroundColor: '#E0F2FE' }]}>
-                  <Ionicons name="images" size={20} color="#0284C7" />
+                <View style={[styles.actionIconWrap, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="images" size={20} color="#D97706" />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.actionOptionText}>Choose from Gallery</Text>

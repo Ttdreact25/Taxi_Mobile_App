@@ -16,7 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
-import { driverAPI, authAPI, uploadAPI, resolveAssetUrl } from '../../api/api'
+import { driverAPI, authAPI, uploadAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 
@@ -64,6 +64,34 @@ const DriverProfileScreen = ({ navigation }) => {
     }
   }, [user])
 
+  const [updatingServices, setUpdatingServices] = useState(false)
+
+  const handleToggleService = async (serviceKey) => {
+    const curRaw = driver?.service_types || 'local,outstation,hourly'
+    const curList = curRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    let nextList
+    if (curList.includes(serviceKey)) {
+      if (curList.length === 1) {
+        Alert.alert('Selection Required', 'You must keep at least one active operating service category.')
+        return
+      }
+      nextList = curList.filter(s => s !== serviceKey)
+    } else {
+      nextList = [...curList, serviceKey]
+    }
+    const newTypesStr = nextList.join(',')
+    setDriver(prev => ({ ...prev, service_types: newTypesStr }))
+    setUpdatingServices(true)
+    try {
+      await driverAPI.updateProfile({ service_types: newTypesStr })
+    } catch {
+      Alert.alert('Update Failed', 'Could not update service preferences.')
+      loadProfile()
+    } finally {
+      setUpdatingServices(false)
+    }
+  }
+
   useEffect(() => {
     loadProfile()
   }, [loadProfile])
@@ -93,42 +121,36 @@ const DriverProfileScreen = ({ navigation }) => {
         return
       }
 
+      const imageOptions = {
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+        base64: true,
+      }
+
       const result = useCamera
-        ? await ImagePicker.launchCameraAsync({
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.8,
-          })
+        ? await ImagePicker.launchCameraAsync(imageOptions)
         : await ImagePicker.launchImageLibraryAsync({
+            ...imageOptions,
             mediaTypes: ['images'],
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.8,
           })
 
       if (result.canceled || !result.assets || !result.assets[0]?.uri) return
-      uploadPhoto(result.assets[0].uri)
+      uploadPhoto(result.assets[0].uri, result.assets[0])
     } catch (err) {
       Alert.alert('Error', 'Could not open image picker: ' + err.message)
     }
   }
 
   // Upload Photo to Backend
-  const uploadPhoto = async (localUri) => {
+  const uploadPhoto = async (localUri, asset = null) => {
     setUploadingPhoto(true)
     try {
-      const filename = localUri.split('/').pop() || `driver_profile_${Date.now()}.jpg`
-      const match = /\.(\w+)$/.exec(filename)
-      const ext = match ? match[1].toLowerCase() : 'jpg'
-      const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
-
-      const formData = new FormData()
-      formData.append('file', {
-        uri: Platform.OS === 'android' ? localUri : localUri.replace('file://', ''),
-        name: filename,
-        type: mimeType,
+      const formData = createUploadFormData(localUri, {
+        prefix: 'driver_profile',
+        type: 'profile',
+        asset: asset,
       })
-      formData.append('type', 'profile')
 
       const uploadRes = await uploadAPI.upload(formData, 'profile')
       if (uploadRes.data?.status === 'success') {
@@ -152,13 +174,15 @@ const DriverProfileScreen = ({ navigation }) => {
       } else {
         Alert.alert('Upload Failed', uploadRes.data?.message || 'Could not upload photo.')
       }
-    } catch {
+    } catch (err) {
+      console.log('Driver profile photo upload error:', err)
+      const errorMsg = err?.message || 'Failed to upload image.'
       Alert.alert(
         'Upload Error',
-        'Failed to upload image. Would you like to retry?',
+        `${errorMsg}\n\nWould you like to retry?`,
         [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Retry', onPress: () => uploadPhoto(localUri) }
+          { text: 'Retry', onPress: () => uploadPhoto(localUri, asset) }
         ]
       )
     } finally {
@@ -276,7 +300,16 @@ const DriverProfileScreen = ({ navigation }) => {
   const handleLogout = () => {
     Alert.alert('Sign Out', 'Are you sure you want to sign out of driver mode?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign Out', style: 'destructive', onPress: logout }
+      {
+        text: 'Sign Out',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await driverAPI.toggleOnline({ is_online: 0 })
+          } catch {}
+          logout()
+        }
+      }
     ])
   }
 
@@ -284,7 +317,7 @@ const DriverProfileScreen = ({ navigation }) => {
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Driver Account',
-      'Permanently delete your CityDropTaxi Driver Partner account? All your personal details, KYC verification documents, and vehicle records will be permanently removed. Active trips must be completed before deletion.',
+      'Permanently delete your CityOneTaxi Driver Partner account? All your personal details, KYC verification documents, and vehicle records will be permanently removed. Active trips must be completed before deletion.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -364,12 +397,17 @@ const DriverProfileScreen = ({ navigation }) => {
 
           <Text style={styles.driverNameText}>{driver?.name || user?.name || 'Driver Partner'}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
-            {(Boolean(driver?.approval_status === 'approved' && driver?.verification_status === 'approved' && (driver?.license_front_image || driver?.license_front_url))) ? (
+            {((
+              (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
+              (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
+              (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
+              (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
+            )) ? (
               <View style={[styles.verifiedBadge, { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }]}>
                 <Ionicons name="checkmark-circle" size={12} color="#059669" />
                 <Text style={[styles.verifiedText, { color: '#059669' }]}>Verified Driver Partner</Text>
               </View>
-            ) : ((driver?.approval_status || '').toLowerCase() === 'rejected' || (driver?.verification_status || '').toLowerCase() === 'rejected') ? (
+            ) : ((driver?.approval_status || user?.approval_status || '').toLowerCase() === 'rejected' || (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'rejected') ? (
               <TouchableOpacity
                 style={[styles.verifiedBadge, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}
                 onPress={() => navigation.navigate('DriverDocuments')}
@@ -387,11 +425,11 @@ const DriverProfileScreen = ({ navigation }) => {
               </TouchableOpacity>
             ) : (
               <TouchableOpacity
-                style={[styles.verifiedBadge, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}
+                style={[styles.verifiedBadge, { backgroundColor: '#FFF8E7', borderColor: '#FDE68A' }]}
                 onPress={() => navigation.navigate('DriverDocuments')}
               >
-                <Ionicons name="document-text" size={12} color="#2563EB" />
-                <Text style={[styles.verifiedText, { color: '#2563EB' }]}> KYC Submission Required</Text>
+                <Ionicons name="document-text" size={12} color="#D97706" />
+                <Text style={[styles.verifiedText, { color: '#B45309' }]}> KYC Submission Required</Text>
               </TouchableOpacity>
             )}
             <View style={styles.ratingPill}>
@@ -425,6 +463,82 @@ const DriverProfileScreen = ({ navigation }) => {
           ))}
         </View>
 
+        {/* Operating Service Categories */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, marginBottom: 8 }}>
+          <Text style={[styles.sectionTitle, { marginTop: 0, marginBottom: 0 }]}>Operating Services</Text>
+          {updatingServices && <ActivityIndicator size="small" color={COLORS.primary} />}
+        </View>
+        <View style={styles.card}>
+          <Text style={{ fontSize: 12, color: '#64748B', marginBottom: 12, lineHeight: 16 }}>
+            Tap to toggle the ride categories you accept. Dispatches & auto-assignments are routed only to eligible categories.
+          </Text>
+          <View style={{ gap: 10 }}>
+            {[
+              {
+                key: 'local',
+                title: 'Local Drop',
+                subtitle: 'One-way point-to-point city rides',
+                icon: 'car',
+                badge: 'City Taxi',
+                color: '#4F46E5',
+                bgLight: '#EEF2FF',
+              },
+              {
+                key: 'outstation',
+                title: 'Out Station',
+                subtitle: 'Inter-city one-way drops & round trips',
+                icon: 'navigate',
+                badge: 'Long Trip',
+                color: '#059669',
+                bgLight: '#ECFDF5',
+              },
+              {
+                key: 'hourly',
+                title: 'Hourly Package',
+                subtitle: 'Multi-hour city rentals (1h, 2h, 4h, etc.)',
+                icon: 'time',
+                badge: 'Rental',
+                color: '#D97706',
+                bgLight: '#FFFBEB',
+              },
+            ].map(svc => {
+              const activeList = (driver?.service_types || 'local,outstation,hourly').split(',').map(s => s.trim().toLowerCase())
+              const isActive = activeList.includes(svc.key)
+              return (
+                <TouchableOpacity
+                  key={svc.key}
+                  style={[
+                    styles.profileSvcRow,
+                    isActive && { borderColor: svc.color, backgroundColor: svc.bgLight }
+                  ]}
+                  onPress={() => handleToggleService(svc.key)}
+                  activeOpacity={0.8}
+                >
+                  <View style={[styles.profileSvcIcon, { backgroundColor: isActive ? svc.color : '#F1F5F9' }]}>
+                    <Ionicons name={svc.icon} size={18} color={isActive ? '#FFFFFF' : '#64748B'} />
+                  </View>
+                  <View style={{ flex: 1, marginHorizontal: 10 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={[styles.profileSvcTitle, isActive && { color: '#0F172A', fontWeight: '800' }]}>
+                        {svc.title}
+                      </Text>
+                      <View style={[styles.profileSvcBadge, { backgroundColor: isActive ? '#FFFFFF' : '#E2E8F0' }]}>
+                        <Text style={[styles.profileSvcBadgeText, { color: isActive ? svc.color : '#64748B' }]}>
+                          {svc.badge}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.profileSvcSub}>{svc.subtitle}</Text>
+                  </View>
+                  <View style={[styles.profileSvcToggle, isActive && { backgroundColor: svc.color, borderColor: svc.color }]}>
+                    <Ionicons name={isActive ? "checkmark" : "close"} size={14} color={isActive ? "#FFFFFF" : "#94A3B8"} />
+                  </View>
+                </TouchableOpacity>
+              )
+            })}
+          </View>
+        </View>
+
         {/* Partner Management Navigation */}
         <Text style={styles.sectionTitle}>Partner Management</Text>
         <View style={styles.card}>
@@ -434,65 +548,79 @@ const DriverProfileScreen = ({ navigation }) => {
             onPress={() => navigation.navigate('DriverDocuments')}
             activeOpacity={0.8}
           >
-            <View style={[styles.menuIconWrap, { backgroundColor: '#EEF2FF' }]}>
-              <Ionicons name="shield-checkmark" size={18} color="#4F46E5" />
+            <View style={[styles.menuIconWrap, { backgroundColor: '#FEF3C7' }]}>
+              <Ionicons name="shield-checkmark" size={18} color="#D97706" />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.menuLabel}>KYC Verification & Documents</Text>
-              <Text style={{ fontSize: 10, color: '#64748B', marginTop: 1 }}>
-                {Boolean(driver?.approval_status === 'approved' && driver?.verification_status === 'approved')
-                  ? 'All 10 documents verified'
-                  : ((driver?.approval_status || '').toLowerCase() === 'rejected' || (driver?.verification_status || '').toLowerCase() === 'rejected')
-                  ? 'Correction required · Tap to re-upload'
-                  : (driver?.license_front_image || driver?.verification_status === 'pending')
-                  ? '10 documents in Admin review'
-                  : 'Action required · Submit government IDs'}
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <View style={[
-                styles.approvedPill,
-                {
-                  backgroundColor: Boolean(driver?.approval_status === 'approved' && driver?.verification_status === 'approved')
-                    ? '#D1FAE5'
-                    : ((driver?.approval_status || '').toLowerCase() === 'rejected' || (driver?.verification_status || '').toLowerCase() === 'rejected')
-                    ? '#FEE2E2'
-                    : (driver?.license_front_image || driver?.verification_status === 'pending')
-                    ? '#FEF3C7'
-                    : '#DBEAFE'
-                }
-              ]}>
-                <Text style={[
-                  styles.approvedPillText,
-                  {
-                    color: Boolean(driver?.approval_status === 'approved' && driver?.verification_status === 'approved')
-                      ? '#059669'
-                      : ((driver?.approval_status || '').toLowerCase() === 'rejected' || (driver?.verification_status || '').toLowerCase() === 'rejected')
-                      ? '#DC2626'
-                      : (driver?.license_front_image || driver?.verification_status === 'pending')
-                      ? '#B45309'
-                      : '#1D4ED8'
-                  }
-                ]}>
-                  {Boolean(driver?.approval_status === 'approved' && driver?.verification_status === 'approved')
-                    ? 'VERIFIED'
-                    : ((driver?.approval_status || '').toLowerCase() === 'rejected' || (driver?.verification_status || '').toLowerCase() === 'rejected')
-                    ? 'REJECTED'
-                    : (driver?.license_front_image || driver?.verification_status === 'pending')
-                    ? 'IN REVIEW'
-                    : 'SUBMIT KYC'}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={COLORS.gray400} />
-            </View>
+            {(() => {
+              const isApproved =
+                (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
+                (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
+                (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
+                (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
+              const isRejected = (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'rejected' || (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'rejected'
+              const hasSubmitted = Boolean(driver?.license_front_image || driver?.verification_status === 'pending')
+
+              return (
+                <>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.menuLabel}>KYC Verification & Documents</Text>
+                    <Text style={{ fontSize: 10, color: '#64748B', marginTop: 1 }}>
+                      {isApproved
+                        ? 'All documents verified'
+                        : isRejected
+                        ? 'Correction required · Tap to re-upload'
+                        : hasSubmitted
+                        ? 'Documents in Admin review'
+                        : 'Action required · Submit government IDs'}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <View style={[
+                      styles.approvedPill,
+                      {
+                        backgroundColor: isApproved
+                          ? '#D1FAE5'
+                          : isRejected
+                          ? '#FEE2E2'
+                          : hasSubmitted
+                          ? '#FEF3C7'
+                          : '#FFF8E7'
+                      }
+                    ]}>
+                      <Text style={[
+                        styles.approvedPillText,
+                        {
+                          color: isApproved
+                            ? '#059669'
+                            : isRejected
+                            ? '#DC2626'
+                            : hasSubmitted
+                            ? '#B45309'
+                            : '#D97706'
+                        }
+                      ]}>
+                        {isApproved
+                          ? 'VERIFIED'
+                          : isRejected
+                          ? 'REJECTED'
+                          : hasSubmitted
+                          ? 'IN REVIEW'
+                          : 'SUBMIT KYC'}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={COLORS.gray400} />
+                  </View>
+                </>
+              )
+            })()}
           </TouchableOpacity>
 
           {[
             { icon: 'cash-outline', label: 'Earnings & Payout Settlements', color: '#10B981', action: () => navigation.navigate('Earnings') },
-            { icon: 'key-outline', label: 'Change Security Password', color: '#6366F1', action: () => setPwModalVisible(true) },
-            { icon: 'notifications-outline', label: 'Broadcast Alerts & Notifications', color: '#2563EB', action: () => navigation.navigate('DriverNotifications') },
+            { icon: 'key-outline', label: 'Change Security Password', color: '#B45309', action: () => setPwModalVisible(true) },
+            { icon: 'notifications-outline', label: 'Broadcast Alerts & Notifications', color: '#D97706', action: () => navigation.navigate('DriverNotifications') },
             { icon: 'headset-outline', label: 'Help, Safety & 24x7 SOS Support', color: '#EA580C', action: () => navigation.navigate('DriverSupport') },
-            { icon: 'document-text-outline', label: 'Privacy Policy', color: '#0284C7', action: () => navigation.navigate('PrivacyPolicy') },
+            { icon: 'document-text-outline', label: 'Privacy Policy', color: '#D97706', action: () => navigation.navigate('PrivacyPolicy') },
             { icon: 'newspaper-outline', label: 'Terms & Conditions', color: '#64748B', action: () => navigation.navigate('Terms') },
           ].map((item, idx) => (
             <TouchableOpacity key={idx} style={[styles.menuRow, idx < 5 && styles.rowBorder]} onPress={item.action} activeOpacity={0.8}>
@@ -517,7 +645,7 @@ const DriverProfileScreen = ({ navigation }) => {
           <Text style={styles.deleteText}>Delete Driver Account & Erase Records</Text>
         </TouchableOpacity>
 
-        <Text style={styles.appVer}>CabTaxi Driver Partner Platform · Secure 256-Bit SSL</Text>
+        <Text style={styles.appVer}>CityOneTaxi Driver Partner Platform · Secure 256-Bit SSL</Text>
       </ScrollView>
 
       {/* Edit Profile Modal */}
@@ -641,8 +769,8 @@ const DriverProfileScreen = ({ navigation }) => {
                 onPress={() => capturePhoto(false)}
                 activeOpacity={0.7}
               >
-                <View style={[styles.actionIconWrap, { backgroundColor: '#E0F2FE' }]}>
-                  <Ionicons name="images" size={20} color="#0284C7" />
+                <View style={[styles.actionIconWrap, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="images" size={20} color="#D97706" />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.actionOptionText}>Choose from Gallery</Text>
@@ -709,7 +837,7 @@ const styles = StyleSheet.create({
   editBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: RADIUS.md,
@@ -1077,6 +1205,52 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     color: COLORS.gray700,
+  },
+  profileSvcRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+  },
+  profileSvcIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: RADIUS.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  profileSvcTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
+  },
+  profileSvcBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  profileSvcBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  profileSvcSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  profileSvcToggle: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 })
 

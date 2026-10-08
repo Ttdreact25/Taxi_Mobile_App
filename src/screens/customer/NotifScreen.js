@@ -7,13 +7,15 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { notifAPI } from '../../api/api'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
+import { SkeletonList } from '../../components/common/Skeleton'
+import EmptyState from '../../components/common/EmptyState'
 
 const getNotifIcon = (type) => {
   switch (type) {
     case 'booking': return { name: 'car-sport', color: COLORS.primary, bg: COLORS.primaryLight }
     case 'payment': return { name: 'card', color: '#10B981', bg: '#D1FAE5' }
     case 'promo':   return { name: 'pricetag', color: COLORS.secondary, bg: '#FEF3C7' }
-    case 'support': return { name: 'headset', color: '#3B82F6', bg: '#DBEAFE' }
+    case 'support': return { name: 'headset', color: '#D97706', bg: '#FFF8E7' }
     default:        return { name: 'notifications', color: COLORS.primary, bg: COLORS.primaryLight }
   }
 }
@@ -92,15 +94,17 @@ const NotifScreen = ({ navigation }) => {
 
       {/* Content */}
       {loading ? (
-        <ActivityIndicator color={COLORS.primary} style={{ marginTop: 40 }} />
-      ) : !notifs.length ? (
-        <View style={styles.empty}>
-          <View style={styles.emptyIconWrap}>
-            <Ionicons name="notifications-off-outline" size={40} color={COLORS.gray400} />
-          </View>
-          <Text style={styles.emptyTitle}>All Caught Up!</Text>
-          <Text style={styles.emptySub}>You have no notifications at this time.</Text>
+        <View style={{ paddingHorizontal: SPACING.lg, marginTop: 10 }}>
+          <SkeletonList count={4} />
         </View>
+      ) : !notifs.length ? (
+        <EmptyState
+          icon="notifications-off-outline"
+          title="All Caught Up!"
+          subtitle="You have no notifications or alerts at this time."
+          actionLabel="Explore Rides"
+          onAction={() => navigation.navigate('Booking')}
+        />
       ) : (
         <FlatList
           data={notifs}

@@ -33,7 +33,17 @@ const LoginScreen = ({ navigation }) => {
     }
     setLoading(true)
     try {
-      await login(form.identifier.trim(), form.password)
+      const result = await login(form.identifier.trim(), form.password)
+      if (result?.requires_otp) {
+        navigation.navigate('OTP', {
+          email: result.email,
+          phone: result.phone,
+          identifier: result.email || form.identifier.trim(),
+          role: result.role || 'driver',
+          isLogin: true,
+        })
+        return
+      }
     } catch (err) {
       Alert.alert('Login Failed', err.message || 'Invalid credentials. Please verify and try again.')
     } finally {
@@ -52,7 +62,7 @@ const LoginScreen = ({ navigation }) => {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Top Brand Header */}
+          {/* Top Brand Header (Light Theme) */}
           <View style={styles.header}>
             <View style={styles.logoWrap}>
               <View style={styles.logoCircle}>
@@ -63,7 +73,9 @@ const LoginScreen = ({ navigation }) => {
               </View>
             </View>
 
-            <Text style={styles.brandTitle}>CityDropTaxi</Text>
+            <Text style={styles.brandTitle}>
+              CityOne<Text style={{ color: COLORS.secondary }}>Taxi</Text>
+            </Text>
             <View style={styles.taglineBadge}>
               <Ionicons name="shield-checkmark" size={12} color={COLORS.success} />
               <Text style={styles.taglineText}>Fast, Safe & Verified Rides</Text>
@@ -109,7 +121,7 @@ const LoginScreen = ({ navigation }) => {
                 />
                 {Boolean(form.identifier) && (
                   <TouchableOpacity onPress={() => setForm(p => ({ ...p, identifier: '' }))} style={{ padding: 4 }}>
-                    <Ionicons name="close-circle" size={18} color={COLORS.gray400} />
+                    <Ionicons name="close-circle" size={18} color={COLORS.gray300} />
                   </TouchableOpacity>
                 )}
               </TouchableOpacity>
@@ -166,7 +178,7 @@ const LoginScreen = ({ navigation }) => {
                 <ActivityIndicator color={COLORS.white} />
               ) : (
                 <View style={styles.btnRow}>
-                  <Text style={styles.btnText}>Sign In to CityDropTaxi</Text>
+                  <Text style={styles.btnText}>Sign In to CityOneTaxi</Text>
                   <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
                 </View>
               )}
@@ -174,7 +186,7 @@ const LoginScreen = ({ navigation }) => {
 
             {/* Register Link Footer */}
             <View style={styles.footer}>
-              <Text style={styles.footerText}>New to CityDropTaxi? </Text>
+              <Text style={styles.footerText}>New to CityOneTaxi? </Text>
               <TouchableOpacity onPress={() => navigation.navigate('Register')} activeOpacity={0.8}>
                 <Text style={styles.linkText}>Create Account</Text>
               </TouchableOpacity>
@@ -183,7 +195,7 @@ const LoginScreen = ({ navigation }) => {
 
           {/* Security & Safety Note */}
           <View style={styles.safetyFooter}>
-            <Ionicons name="lock-closed" size={13} color="#94A3B8" />
+            <Ionicons name="lock-closed" size={13} color={COLORS.gray500} />
             <Text style={styles.safetyText}>256-Bit SSL Encrypted • Real-time GPS Fleet Tracking</Text>
           </View>
         </ScrollView>
@@ -195,7 +207,7 @@ const LoginScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A',
+    backgroundColor: COLORS.background,
   },
   scroll: {
     flexGrow: 1,
@@ -213,20 +225,18 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   logoCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
+    width: 68,
+    height: 68,
+    borderRadius: 22,
     backgroundColor: COLORS.primary,
     alignItems: 'center',
     justifyContent: 'center',
     ...SHADOW.glow,
-    borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.2)',
   },
   verifiedDot: {
     position: 'absolute',
-    bottom: 2,
-    right: 2,
+    bottom: -2,
+    right: -2,
     width: 20,
     height: 20,
     borderRadius: 10,
@@ -234,112 +244,111 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#0F172A',
+    borderColor: COLORS.white,
   },
   brandTitle: {
     fontSize: 26,
     fontWeight: '900',
-    color: COLORS.white,
+    color: COLORS.text,
     letterSpacing: -0.5,
   },
   taglineBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: COLORS.white,
     paddingHorizontal: 12,
-    paddingVertical: 4,
+    paddingVertical: 5,
     borderRadius: RADIUS.full,
-    marginTop: 6,
+    marginTop: 8,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
+    borderColor: COLORS.gray200,
   },
   taglineText: {
     fontSize: 11,
-    fontWeight: '700',
-    color: '#E2E8F0',
+    color: COLORS.textSecondary,
+    fontWeight: '600',
   },
-
   card: {
     backgroundColor: COLORS.white,
     borderRadius: RADIUS.xxl,
     padding: SPACING.xl,
-    ...SHADOW.lg,
     borderWidth: 1,
-    borderColor: COLORS.borderLight,
+    borderColor: COLORS.gray200,
+    ...SHADOW.md,
   },
   cardHeader: {
     marginBottom: SPACING.lg,
   },
   cardTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: COLORS.textPrimary,
+    fontSize: 22,
+    fontWeight: '800',
+    color: COLORS.text,
   },
   cardSub: {
-    fontSize: 12,
-    color: COLORS.textMuted,
-    marginTop: 2,
-    fontWeight: '500',
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    marginTop: 3,
   },
-
   inputGroup: {
-    marginBottom: SPACING.md,
+    marginBottom: SPACING.lg,
   },
   inputLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: COLORS.textMuted,
-    letterSpacing: 0.8,
-    marginBottom: 6,
-  },
-  forgotText: {
     fontSize: 11,
-    fontWeight: '800',
-    color: COLORS.primary,
+    fontWeight: '700',
+    color: COLORS.textSecondary,
+    marginBottom: 7,
+    letterSpacing: 0.6,
   },
   inputWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: COLORS.gray50,
     borderRadius: RADIUS.lg,
     borderWidth: 1.5,
-    borderColor: COLORS.border,
-    paddingHorizontal: 14,
+    borderColor: COLORS.gray200,
+    paddingHorizontal: SPACING.md,
     height: 52,
   },
   inputWrapFocused: {
     borderColor: COLORS.primary,
-    backgroundColor: '#FFFFFF',
-    ...SHADOW.xs,
+    backgroundColor: COLORS.white,
+    shadowColor: COLORS.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 2,
   },
   inputIcon: {
     marginRight: 10,
   },
   input: {
     flex: 1,
+    fontSize: FONTS.sizes.base,
+    color: COLORS.text,
     height: '100%',
-    fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
-    paddingVertical: 0,
-    paddingHorizontal: 0,
   },
   eyeBtn: {
     padding: 6,
   },
-
+  forgotText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
   btn: {
-    backgroundColor: COLORS.primary,
+    height: 52,
     borderRadius: RADIUS.xl,
-    height: 54,
+    backgroundColor: COLORS.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: SPACING.sm,
-    ...SHADOW.md,
+    marginTop: 4,
+    ...SHADOW.sm,
   },
   btnDisabled: {
-    opacity: 0.6,
+    opacity: 0.55,
+    elevation: 0,
+    shadowOpacity: 0,
   },
   btnRow: {
     flexDirection: 'row',
@@ -348,42 +357,36 @@ const styles = StyleSheet.create({
   },
   btnText: {
     color: COLORS.white,
-    fontSize: 16,
-    fontWeight: '900',
-    letterSpacing: 0.3,
+    fontSize: FONTS.sizes.base,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
-
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: SPACING.xl,
-    paddingTop: SPACING.md,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.borderLight,
+    marginTop: SPACING.lg,
   },
   footerText: {
-    color: COLORS.textMuted,
     fontSize: 13,
-    fontWeight: '500',
+    color: COLORS.textSecondary,
   },
   linkText: {
-    color: COLORS.primary,
-    fontWeight: '900',
     fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.primary,
   },
-
   safetyFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    marginTop: SPACING.lg,
+    marginTop: SPACING.xl,
   },
   safetyText: {
-    color: '#94A3B8',
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: 11,
+    color: COLORS.gray500,
+    fontWeight: '500',
   },
 })
 

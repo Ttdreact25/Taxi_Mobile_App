@@ -16,15 +16,16 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as Location from 'expo-location'
 import { customerAPI, bookingsAPI } from '../../api/api'
-import { searchPlacesService, reverseGeocodeService } from '../../services/locationSearchService'
 import { COLORS, RADIUS, SHADOW } from '../../constants/theme'
+import { SkeletonList } from '../../components/common/Skeleton'
+import EmptyState from '../../components/common/EmptyState'
 
 const PRESET_CATEGORIES = [
-  { type: 'home',    label: 'Home',     icon: 'home',      color: '#10B981', bg: '#ECFDF5' },
-  { type: 'work',    label: 'Work',     icon: 'briefcase', color: '#7C3AED', bg: '#F5F3FF' },
-  { type: 'airport', label: 'Airport',  icon: 'airplane',  color: '#2563EB', bg: '#EFF6FF' },
+  { type: 'home',    label: 'Home',     icon: 'home',      color: '#D97706', bg: '#FFF8E7' },
+  { type: 'work',    label: 'Work',     icon: 'briefcase', color: '#B45309', bg: '#FEF3C7' },
+  { type: 'airport', label: 'Airport',  icon: 'airplane',  color: '#D97706', bg: '#FFF8E7' },
   { type: 'station', label: 'Station',  icon: 'train',     color: '#D97706', bg: '#FFFBEB' },
-  { type: 'custom',  label: 'Custom',   icon: 'location',  color: '#EF4444', bg: '#FEF2F2' },
+  { type: 'custom',  label: 'Custom',   icon: 'bookmark',  color: '#0F172A', bg: '#F1F5F9' },
 ]
 
 const getCategoryMeta = (loc) => {
@@ -288,9 +289,8 @@ const SavedPlacesScreen = ({ navigation }) => {
 
       {/* Content */}
       {loading ? (
-        <View style={styles.centerBox}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading saved places...</Text>
+        <View style={{ padding: 16 }}>
+          <SkeletonList count={3} height={90} />
         </View>
       ) : (
         <ScrollView
@@ -298,19 +298,13 @@ const SavedPlacesScreen = ({ navigation }) => {
           contentContainerStyle={styles.scrollContent}
         >
           {locations.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <View style={styles.emptyIconCircle}>
-                <Ionicons name="bookmark-outline" size={36} color={COLORS.primary} />
-              </View>
-              <Text style={styles.emptyTitle}>No Saved Destinations Yet</Text>
-              <Text style={styles.emptySub}>
-                Save your Home, Work, Airport, or favorite hangouts for 1-tap ride bookings.
-              </Text>
-              <TouchableOpacity style={styles.emptyBtn} onPress={handleOpenAdd}>
-                <Ionicons name="add-circle" size={18} color={COLORS.white} style={{ marginRight: 6 }} />
-                <Text style={styles.emptyBtnText}>Add First Saved Place</Text>
-              </TouchableOpacity>
-            </View>
+            <EmptyState
+              icon="bookmark-outline"
+              title="No Saved Destinations Yet"
+              subtitle="Save your Home, Work, Airport, or favorite hangouts for 1-tap ride bookings."
+              buttonText="Add First Saved Place"
+              onPress={handleOpenAdd}
+            />
           ) : (
             <View style={{ gap: 12 }}>
               {locations.map((item) => {
@@ -632,7 +626,7 @@ const styles = StyleSheet.create({
     width: 72,
     height: 72,
     borderRadius: 36,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 16,

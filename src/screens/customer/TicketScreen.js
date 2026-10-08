@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Share, Alert, Image
+  ActivityIndicator, Share, Alert, Image, TextInput
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -16,6 +16,7 @@ export default function TicketScreen({ route, navigation }) {
   const [error, setError] = useState(null)
   const [showReviewModal, setShowReviewModal] = useState(false)
   const [rating, setRating] = useState(5)
+  const [comment, setComment] = useState('')
   const [submittingReview, setSubmittingReview] = useState(false)
   const [payingSingleComm, setPayingSingleComm] = useState(false)
 
@@ -54,9 +55,10 @@ export default function TicketScreen({ route, navigation }) {
     try {
       const res = await reviewsAPI.submit({
         booking_id: ticket.id || bookingId,
-        driver_id: ticket.driver?.id,
+        reviewee_id: ticket.driver?.user_id || ticket.driver?.id,
+        role: 'driver',
         rating: rating,
-        comment: `Rated ${rating} Stars on Mobile App`
+        comment: comment.trim() || `Rated ${rating} Stars on Mobile App`
       })
       if (res.data?.status === 'success') {
         Alert.alert('Thank You!', 'Your rating & review has been submitted.')
@@ -176,7 +178,7 @@ export default function TicketScreen({ route, navigation }) {
             <View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <Ionicons name="car-sport" size={18} color="#FFFFFF" />
-                <Text style={styles.bannerLogo}>CITYDROPTAXI</Text>
+                <Text style={styles.bannerLogo}>CITYONETAXI</Text>
               </View>
               <Text style={styles.bannerSub}>OFFICIAL BOARDING PASS</Text>
             </View>
@@ -324,6 +326,118 @@ export default function TicketScreen({ route, navigation }) {
               </Text>
             </View>
 
+            {/* Detailed Trip Invoice Breakdown */}
+            {(() => {
+              const isHourly = fare.trip_sub_type === 'hourly' || Number(fare.package_hours) > 0
+              return (
+                <View style={{
+                  backgroundColor: '#F8FAFC',
+                  borderRadius: 12,
+                  padding: 14,
+                  borderWidth: 1,
+                  borderColor: '#E2E8F0',
+                  marginVertical: 12
+                }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, borderBottomWidth: 1, borderBottomColor: '#E2E8F0', paddingBottom: 6 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Ionicons name="receipt-outline" size={16} color="#0F172A" />
+                      <Text style={{ fontSize: 13, fontWeight: '800', color: '#0F172A' }}>Trip Final Tax Invoice</Text>
+                    </View>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748B' }}>
+                      {isHourly ? `${fare.package_hours || 1} Hr Package` : `${Number(fare.distance_km || journey.distance_km || 0).toFixed(1)} KM Trip`}
+                    </Text>
+                  </View>
+
+                  {/* Base Fare / Booked Package */}
+                  {isHourly ? (
+                    <>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <Text style={{ fontSize: 12, color: '#475569' }}>Base Package ({fare.package_hours || 1} hrs)</Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>
+                          ₹{Math.round(Number(fare.base_package_fare || ((fare.package_hours || 1) * (fare.hourly_rate || 250))))}
+                        </Text>
+                      </View>
+                      {Number(fare.extra_mins) > 0 && (
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <Text style={{ fontSize: 12, color: '#D97706' }}>Overtime ({fare.extra_mins} mins @ ₹{fare.extra_min_rate || 2}/min)</Text>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+₹{Math.round(Number(fare.extra_min_fare))}</Text>
+                        </View>
+                      )}
+                      {Number(fare.extra_km) > 0 && (
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <Text style={{ fontSize: 12, color: '#D97706' }}>Extra Distance ({Number(fare.extra_km).toFixed(1)} km)</Text>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+₹{Math.round(Number(fare.extra_km_fare))}</Text>
+                        </View>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <Text style={{ fontSize: 12, color: '#475569' }}>
+                          Booked Route Fare ({Number(fare.original_distance_km || journey.original_distance_km || journey.distance_km || 0).toFixed(1)} km)
+                        </Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>
+                          ₹{Math.round(Number(fare.original_fare || (Number(fare.final_fare) - Number(fare.extra_km_fare || 0) - Number(fare.pickup_charge || 0))))}
+                        </Text>
+                      </View>
+                      {Number(fare.extra_km) > 0 && (
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                          <Text style={{ fontSize: 12, color: '#D97706', fontWeight: '600' }}>
+                            Extra Route Distance ({Number(fare.extra_km).toFixed(1)} km @ ₹{fare.per_km_rate || 15}/km)
+                          </Text>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+₹{Math.round(Number(fare.extra_km_fare))}</Text>
+                        </View>
+                      )}
+                    </>
+                  )}
+
+                  {/* Pickup Charge if > 2 KM */}
+                  {Number(fare.pickup_charge) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 12, color: '#7C3AED', fontWeight: '600' }}>
+                        Pickup Charge (Extra {fare.extra_pickup_distance_km || ((Number(fare.pickup_distance_km) > 2) ? (Number(fare.pickup_distance_km) - 2).toFixed(1) : 0)} km)
+                      </Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C3AED' }}>+₹{Math.round(Number(fare.pickup_charge))}</Text>
+                    </View>
+                  )}
+
+                  {/* Waiting & Tolls */}
+                  {Number(fare.waiting_charge) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 12, color: '#475569' }}>Waiting Charge ({fare.waiting_mins || 0}m)</Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>+₹{Math.round(Number(fare.waiting_charge))}</Text>
+                    </View>
+                  )}
+                  {Number(fare.toll_amount) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 12, color: '#475569' }}>Toll Fees</Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>+₹{Math.round(Number(fare.toll_amount))}</Text>
+                    </View>
+                  )}
+
+                  {/* Total Invoice */}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingTop: 8, marginTop: 4, borderTopWidth: 1, borderTopColor: '#E2E8F0' }}>
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: '#0F172A' }}>Total Invoice Amount</Text>
+                    <Text style={{ fontSize: 16, fontWeight: '900', color: '#16A34A' }}>₹{Math.round(Number(fare.final_fare || 0))}</Text>
+                  </View>
+
+                  {/* Payment Split */}
+                  {Number(fare.online_paid) > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
+                      <Text style={{ fontSize: 11, color: '#0284C7' }}>Online Paid (Advance)</Text>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#0284C7' }}>-₹{Math.round(Number(fare.online_paid))}</Text>
+                    </View>
+                  )}
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4, paddingTop: 4, borderTopWidth: 1, borderTopColor: '#E2E8F0' }}>
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#D97706' }}>Cash Paid to Driver</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '900', color: '#D97706' }}>
+                      ₹{Math.round(Number(fare.cash_pending ?? (Number(fare.final_fare) - Number(fare.online_paid || 0))))}
+                    </Text>
+                  </View>
+                </View>
+              )
+            })()}
+
             {/* Fare Summary */}
             <View style={styles.fareRow}>
               <View>
@@ -401,6 +515,28 @@ export default function TicketScreen({ route, navigation }) {
                 </TouchableOpacity>
               ))}
             </View>
+
+            {/* Review description input */}
+            <TextInput
+              style={{
+                backgroundColor: '#F8FAFC',
+                borderWidth: 1,
+                borderColor: '#E2E8F0',
+                borderRadius: 10,
+                padding: 10,
+                fontSize: 13,
+                color: '#0F172A',
+                minHeight: 60,
+                textAlignVertical: 'top',
+                marginTop: 10,
+              }}
+              placeholder="Write feedback about the driver (optional)..."
+              placeholderTextColor="#94A3B8"
+              multiline
+              numberOfLines={2}
+              value={comment}
+              onChangeText={setComment}
+            />
 
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 14 }}>
               <TouchableOpacity

@@ -1,9 +1,9 @@
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
-import { Platform } from 'react-native'
+import { Platform, View, StyleSheet } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { COLORS } from '../constants/theme'
+import { COLORS, RADIUS } from '../constants/theme'
 
 // Driver screens
 import DriverHomeScreen      from '../screens/driver/DriverHomeScreen'
@@ -48,6 +48,13 @@ const EarningsStack = () => (
   </Stack.Navigator>
 )
 
+const NotificationsStack = () => (
+  <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+    <Stack.Screen name="NotificationsMain"   component={DriverNotifScreen} />
+    <Stack.Screen name="DriverSupport"       component={DriverSupportScreen} />
+  </Stack.Navigator>
+)
+
 const ProfileStack = () => (
   <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
     <Stack.Screen name="ProfileMain"         component={DriverProfileScreen} />
@@ -60,38 +67,59 @@ const ProfileStack = () => (
   </Stack.Navigator>
 )
 
-const tabIcon = (route, focused) => {
+const TabIcon = ({ routeName, focused }) => {
   const icons = {
-    Dashboard: focused ? 'car-sport' : 'car-sport-outline',
-    Trips:     focused ? 'list'      : 'list-outline',
-    Earnings:  focused ? 'cash'      : 'cash-outline',
-    Profile:   focused ? 'person'    : 'person-outline',
+    Dashboard: { active: 'speedometer',   inactive: 'speedometer-outline' },
+    Trips:     { active: 'list',          inactive: 'list-outline' },
+    Earnings:  { active: 'wallet',        inactive: 'wallet-outline' },
+    Profile:   { active: 'person',        inactive: 'person-outline' },
   }
-  return <Ionicons name={icons[route.name] || 'ellipse'} size={22} color={focused ? COLORS.primary : COLORS.gray400} />
+
+  const iconSet = icons[routeName] || { active: 'ellipse', inactive: 'ellipse-outline' }
+
+  return (
+    <View style={[styles.iconPill, focused && styles.iconPillActive]}>
+      <Ionicons
+        name={focused ? iconSet.active : iconSet.inactive}
+        size={21}
+        color={focused ? '#0F172A' : '#64748B'}
+      />
+    </View>
+  )
 }
 
 const DriverTabs = () => {
   const insets = useSafeAreaInsets()
-  const bottomInset = Math.max(insets.bottom, Platform.OS === 'ios' ? 24 : 14)
+  const bottomInset = Math.max(insets.bottom, Platform.OS === 'ios' ? 20 : 10)
 
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarShowLabel: true,
-        tabBarLabelStyle: { fontSize: 11, fontWeight: '600', paddingBottom: 2 },
-        tabBarActiveTintColor: COLORS.primary,
-        tabBarInactiveTintColor: COLORS.gray400,
-        tabBarStyle: {
-          backgroundColor: COLORS.white,
-          borderTopWidth: 1,
-          borderTopColor: COLORS.gray100,
-          height: 56 + bottomInset,
-          paddingTop: 8,
-          paddingBottom: bottomInset,
-          elevation: 12,
+        tabBarLabelStyle: {
+          fontSize: 10.5,
+          fontWeight: '700',
+          paddingBottom: 2,
+          marginTop: -2,
+          letterSpacing: 0.2,
         },
-        tabBarIcon: ({ focused }) => tabIcon(route, focused),
+        tabBarActiveTintColor: '#0F172A',
+        tabBarInactiveTintColor: '#64748B',
+        tabBarStyle: {
+          backgroundColor: '#FFFFFF',
+          borderTopWidth: 1,
+          borderTopColor: '#F1F5F9',
+          height: 62 + bottomInset,
+          paddingTop: 6,
+          paddingBottom: bottomInset,
+          shadowColor: '#0F172A',
+          shadowOffset: { width: 0, height: -4 },
+          shadowOpacity: 0.08,
+          shadowRadius: 12,
+          elevation: 16,
+        },
+        tabBarIcon: ({ focused }) => <TabIcon routeName={route.name} focused={focused} />,
       })}
     >
       <Tab.Screen name="Dashboard" component={DashboardStack} options={{ title: 'Dashboard' }} />
@@ -101,5 +129,19 @@ const DriverTabs = () => {
     </Tab.Navigator>
   )
 }
+
+const styles = StyleSheet.create({
+  iconPill: {
+    width: 46,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconPillActive: {
+    backgroundColor: '#FFC700',
+    transform: [{ scale: 1.05 }],
+  },
+})
 
 export default DriverTabs

@@ -20,7 +20,7 @@ const TermsScreen = ({ navigation }) => {
           onPress={() => navigation.goBack()}
           activeOpacity={0.8}
         >
-          <Ionicons name="arrow-back" size={20} color={COLORS.white} />
+          <Ionicons name="arrow-back" size={20} color={COLORS.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Terms of Service</Text>
         <View style={{ width: 40 }} />
@@ -37,7 +37,7 @@ const TermsScreen = ({ navigation }) => {
           </View>
           <Text style={styles.bannerTitle}>Terms and Conditions</Text>
           <Text style={styles.bannerSub}>
-            Please review these terms carefully before using CityDropTaxi services, mobile applications, and driver partner platform.
+            Please review these terms carefully before using CityOneTaxi services, mobile applications, and driver partner platform.
           </Text>
           <View style={styles.badge}>
             <Text style={styles.badgeText}>Effective Date: September 2026</Text>
@@ -48,7 +48,7 @@ const TermsScreen = ({ navigation }) => {
         <View style={styles.sectionCard}>
           <Text style={styles.sectionHeading}>1. Acceptance of Terms</Text>
           <Text style={styles.bodyText}>
-            By creating an account, accessing, or using the CityDropTaxi mobile applications or web platforms, you agree to be bound by these Terms of Service. If you do not agree to these terms, do not download, register, or use the service.
+            By creating an account, accessing, or using the CityOneTaxi mobile applications or web platforms, you agree to be bound by these Terms of Service. If you do not agree to these terms, do not download, register, or use the service.
           </Text>
         </View>
 
@@ -123,7 +123,7 @@ const TermsScreen = ({ navigation }) => {
         <View style={styles.sectionCard}>
           <Text style={styles.sectionHeading}>7. Limitation of Liability</Text>
           <Text style={styles.bodyText}>
-            CityDropTaxi acts as a technology intermediary platform connecting independent riders with transportation providers. While we perform driver vetting and provide real-time GPS monitoring and SOS support, CityDropTaxi is not liable for indirect, incidental, or consequential damages resulting from third-party actions, force majeure, or road delays beyond our reasonable control.
+            CityOneTaxi acts as a technology intermediary platform connecting independent riders with transportation providers. While we perform driver vetting and provide real-time GPS monitoring and SOS support, CityOneTaxi is not liable for indirect, incidental, or consequential damages resulting from third-party actions, force majeure, or road delays beyond our reasonable control.
           </Text>
         </View>
 
@@ -142,9 +142,9 @@ const TermsScreen = ({ navigation }) => {
             These terms are governed by and construed in accordance with the laws of India. For questions or disputes, contact:
           </Text>
           <View style={styles.contactBox}>
-            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Platform:</Text> CityDropTaxi</Text>
-            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Legal Inquiries:</Text> legal@citydroptaxi.com</Text>
-            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Help & Support:</Text> support@citydroptaxi.com</Text>
+            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Platform:</Text> CityOneTaxi</Text>
+            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Legal Inquiries:</Text> legal@cityonetaxi.com</Text>
+            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Help & Support:</Text> support@cityonetaxi.com</Text>
           </View>
         </View>
 
@@ -156,7 +156,7 @@ const TermsScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A',
+    backgroundColor: COLORS.background,
   },
   header: {
     flexDirection: 'row',
@@ -165,40 +165,41 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.md,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.08)',
+    borderBottomColor: COLORS.gray200,
+    backgroundColor: COLORS.white,
   },
   backBtn: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: COLORS.gray100,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
     fontSize: 17,
     fontWeight: '800',
-    color: COLORS.white,
+    color: COLORS.text,
   },
   scrollContent: {
     padding: SPACING.lg,
     paddingBottom: 40,
   },
   bannerCard: {
-    backgroundColor: '#1E293B',
+    backgroundColor: COLORS.white,
     borderRadius: RADIUS.xxl,
     padding: SPACING.xl,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: COLORS.gray200,
     marginBottom: SPACING.lg,
-    ...SHADOW.md,
+    ...SHADOW.sm,
   },
   iconCircle: {
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: COLORS.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
@@ -206,20 +207,20 @@ const styles = StyleSheet.create({
   bannerTitle: {
     fontSize: 18,
     fontWeight: '900',
-    color: COLORS.white,
+    color: COLORS.text,
     textAlign: 'center',
     marginBottom: 8,
   },
   bannerSub: {
     fontSize: 13,
-    color: '#94A3B8',
+    color: COLORS.textSecondary,
     textAlign: 'center',
     lineHeight: 19,
   },
   badge: {
-    backgroundColor: 'rgba(79, 70, 229, 0.2)',
+    backgroundColor: COLORS.primaryLight,
     borderWidth: 1,
-    borderColor: '#6366F1',
+    borderColor: COLORS.primaryMid,
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 4,
@@ -228,7 +229,7 @@ const styles = StyleSheet.create({
   badgeText: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#A5B4FC',
+    color: COLORS.primary,
   },
   sectionCard: {
     backgroundColor: COLORS.white,

@@ -14,22 +14,26 @@ import {
   Image,
   RefreshControl,
   Vibration,
+  StatusBar,
+  Dimensions,
 } from 'react-native'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import { useFocusEffect } from '@react-navigation/native'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useFocusEffect, useIsFocused } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import * as Location from 'expo-location'
 import * as ImagePicker from 'expo-image-picker'
 import * as SecureStore from 'expo-secure-store'
-import { driverAPI, adsAPI, longTripAPI, notifAPI, uploadAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
+import { driverAPI, adsAPI, longTripAPI, notifAPI, uploadAPI, settingsAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
 
 // Module-level persistent cache of dismissed cancelled trip IDs (guarantees alert shows exactly ONCE across screens/tabs)
 const acknowledgedCancelledTripIds = new Set()
+const { width: SCREEN_WIDTH } = Dimensions.get('window')
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import AdCarousel from '../../components/ui/AdCarousel'
 import LiveTripMap from '../../components/common/LiveTripMap'
 import { formatTime12Hr, formatDateDisplay, formatDateTime12Hr } from '../../utils/formatters'
+import { playDriverAlertSound } from '../../services/SoundService'
 
 const REJECT_REASONS = [
   'Pickup location too far away',
@@ -85,8 +89,16 @@ const getScheduleCountdown = (pickupDate, pickupTime, nowTime = Date.now()) => {
 }
 
 const DriverHomeScreen = ({ navigation }) => {
+  const insets = useSafeAreaInsets()
+  const isFocused = useIsFocused()
   const { user } = useAuth()
   const [driver, setDriver] = useState(user || null)
+
+  useEffect(() => {
+    if (user) {
+      setDriver(prev => ({ ...(prev || {}), ...user }))
+    }
+  }, [user])
   const [isOnline, setIsOnline] = useState(false)
   const [driverLocation, setDriverLocation] = useState(null)
   const [activeRide, setActiveRide] = useState(null)
@@ -100,6 +112,16 @@ const DriverHomeScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false)
   const [toggling, setToggling] = useState(false)
   const [nowTime, setNowTime] = useState(Date.now())
+
+  // New Telemetry, Performance & Dashboard States
+  const [currentCity, setCurrentCity] = useState('')
+  const [currentArea, setCurrentArea] = useState('')
+  const [gpsStatus, setGpsStatus] = useState('GPS Active 🟢')
+  const [lastUpdatedTime, setLastUpdatedTime] = useState('Just now')
+  const [recentTrips, setRecentTrips] = useState([])
+  const [weeklyEarnings, setWeeklyEarnings] = useState({ total: 0, trips_detail: [] })
+  const [vehicleModalVisible, setVehicleModalVisible] = useState(false)
+  const [showLiveMapDetails, setShowLiveMapDetails] = useState(true)
 
   // Action Loading States
   const [acceptingTripId, setAcceptingTripId] = useState(null)
@@ -125,15 +147,23 @@ const DriverHomeScreen = ({ navigation }) => {
   const [detailModalTrip, setDetailModalTrip] = useState(null)
   const [cancelledNotice, setCancelledNotice] = useState(null)
 
+  // Complete Trip Modal & Final Invoice
+  const [completeTripModalVisible, setCompleteTripModalVisible] = useState(false)
+  const [enteredActualDistance, setEnteredActualDistance] = useState('')
+  const [isSubmittingComplete, setIsSubmittingComplete] = useState(false)
+
   const pollRef = useRef(null)
   const timerRef = useRef(null)
   const incomingIdRef = useRef(null)
   const alertedAssignedTripIdRef = useRef(null)
+  const alertedPendingTripIdRef = useRef(null)
+  const prevUnreadNotifCountRef = useRef(null)
   const prevActiveRideRef = useRef(null)
+  const completedTripIdsRef = useRef(new Set())
   const acknowledgedCancelledTripIdRef = useRef(null)
-  const lastGeoRef = useRef({ lat: 0, lng: 0, area: '', address: '', timestamp: 0 })
+  const lastGeoRef = useRef({ lat: 0, lng: 0, area: '', city: '', address: '', timestamp: 0 })
 
-  // Reverse Geocoding with memory caching to extract readable Area (e.g. KK Nagar, Chennai)
+  // Reverse Geocoding with memory caching to extract readable Area & City (e.g. KK Nagar, Chennai)
   const resolveAreaFromCoords = useCallback(async (latitude, longitude) => {
     try {
       const now = Date.now()
@@ -142,7 +172,7 @@ const DriverHomeScreen = ({ navigation }) => {
         const dLat = Math.abs(latitude - cached.lat)
         const dLng = Math.abs(longitude - cached.lng)
         if (dLat < 0.0025 && dLng < 0.0025) {
-          return { area: cached.area, address: cached.address }
+          return { area: cached.area, city: cached.city, address: cached.address }
         }
       }
       const rev = await Location.reverseGeocodeAsync({ latitude, longitude })
@@ -157,11 +187,16 @@ const DriverHomeScreen = ({ navigation }) => {
           area = sub || city || ''
         }
         const address = [r.name, r.street, r.district, r.city, r.region].filter(Boolean).join(', ')
-        lastGeoRef.current = { lat: latitude, lng: longitude, area, address, timestamp: now }
-        return { area, address }
+        lastGeoRef.current = { lat: latitude, lng: longitude, area, city, address, timestamp: now }
+        if (city) setCurrentCity(city)
+        if (sub || area) setCurrentArea(sub || area)
+        setGpsStatus('GPS Active 🟢')
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        setLastUpdatedTime(timeStr)
+        return { area, city, address }
       }
     } catch (e) {}
-    return { area: '', address: '' }
+    return { area: '', city: '', address: '' }
   }, [])
 
   // Clock timer to smoothly refresh countdowns
@@ -174,31 +209,95 @@ const DriverHomeScreen = ({ navigation }) => {
   const loadDashboardData = useCallback(async (isPull = false) => {
     if (isPull) setRefreshing(true)
     try {
-      const [dashRes, schedRes, activeRes, pendingRes, adRes, notifRes] = await Promise.allSettled([
+      const locParams = {
+        target_audience: 'driver',
+        city: lastGeoRef.current.city || undefined,
+        latitude: lastGeoRef.current.lat || undefined,
+        longitude: lastGeoRef.current.lng || undefined,
+      }
+      const [dashRes, schedRes, activeRes, pendingRes, adRes, notifRes, tripsRes, earnRes, sysSettingsRes] = await Promise.allSettled([
         driverAPI.dashboard(),
         longTripAPI.assignedScheduledTrips(),
         driverAPI.activeBooking(),
         driverAPI.pendingRides(),
-        adsAPI.list({ target_audience: 'driver' }),
+        adsAPI.list(locParams),
         notifAPI.list(true),
+        driverAPI.myTrips({ per_page: 5 }),
+        driverAPI.earnings('week'),
+        settingsAPI.list(),
       ])
 
-      // 1. Dashboard payload
+      // 1. Dashboard payload & Admin System Settings Target
+      let adminTarget = null
+      let adminTargetTrips = null
+      let adminBonus = null
+
+      if (sysSettingsRes.status === 'fulfilled' && sysSettingsRes.value.data?.settings) {
+        const s = sysSettingsRes.value.data.settings
+        if (s.driver_daily_target) adminTarget = Number(s.driver_daily_target)
+        if (s.driver_daily_target_trips) adminTargetTrips = Number(s.driver_daily_target_trips)
+        if (s.driver_target_bonus) adminBonus = Number(s.driver_target_bonus)
+      }
+
       if (dashRes.status === 'fulfilled' && dashRes.value.data?.status === 'success') {
         const dData = dashRes.value.data
         if (dData.driver) {
-          setDriver(dData.driver)
-          const isKycApproved = (dData.driver.approval_status || '').toLowerCase() === 'approved' && (dData.driver.verification_status || '').toLowerCase() === 'approved'
-          setIsOnline(isKycApproved ? Boolean(dData.driver.is_online) : false)
+          const mergedDriver = { ...(user || {}), ...dData.driver }
+          setDriver(mergedDriver)
+          const isKycApproved = (mergedDriver.approval_status || '').toLowerCase() === 'approved' ||
+                                (mergedDriver.verification_status || '').toLowerCase() === 'approved' ||
+                                (mergedDriver.verification_status || '').toLowerCase() === 'verified' ||
+                                (mergedDriver.kyc_status || '').toLowerCase() === 'approved'
+          setIsOnline(isKycApproved ? Boolean(mergedDriver.is_online) : false)
         }
-        if (dData.today) setStats(dData.today)
+
+        const resolvedTarget = adminTarget
+          ?? (dData.today?.daily_target ? Number(dData.today.daily_target) : null)
+          ?? (dData.daily_target ? Number(dData.daily_target) : null)
+          ?? (dData.driver?.daily_target ? Number(dData.driver.daily_target) : null)
+          ?? 2000
+
+        const resolvedTrips = adminTargetTrips
+          ?? (dData.today?.daily_target_trips ? Number(dData.today.daily_target_trips) : null)
+          ?? (dData.daily_target_trips ? Number(dData.daily_target_trips) : null)
+          ?? (dData.driver?.daily_target_trips ? Number(dData.driver.daily_target_trips) : null)
+          ?? 10
+
+        const resolvedBonus = adminBonus
+          ?? (dData.target_bonus ? Number(dData.target_bonus) : null)
+          ?? (dData.today?.target_bonus ? Number(dData.today.target_bonus) : null)
+          ?? 200
+
+        setStats({
+          ...(dData.today || {}),
+          daily_target: resolvedTarget,
+          daily_target_trips: resolvedTrips,
+          target_bonus: resolvedBonus,
+        })
+      } else if (adminTarget) {
+        setStats(prev => ({
+          ...(prev || {}),
+          daily_target: adminTarget,
+          daily_target_trips: adminTargetTrips || 10,
+          target_bonus: adminBonus || 200,
+        }))
       }
 
       // 2. Scheduled & Admin Assigned Trips
       if (schedRes.status === 'fulfilled' && schedRes.value.data?.status === 'success') {
         const sData = schedRes.value.data
-        setAdminAssignedTrips(sData.new_assignments || [])
+        const newAssignments = sData.new_assignments || []
+        setAdminAssignedTrips(newAssignments)
         setUpcomingTrips(sData.upcoming_trips || [])
+
+        if (newAssignments.length > 0) {
+          const firstNew = newAssignments[0]
+          const newId = firstNew.long_trip_id || firstNew.id
+          if (newId && alertedAssignedTripIdRef.current !== `sched_${newId}`) {
+            alertedAssignedTripIdRef.current = `sched_${newId}`
+            playDriverAlertSound().catch(() => {})
+          }
+        }
       }
 
       // 3. Pending Dispatch Requests
@@ -218,9 +317,9 @@ const DriverHomeScreen = ({ navigation }) => {
         ? activeRes.value.data.cancelled_trip
         : (dashRes.status === 'fulfilled' && dashRes.value.data?.cancelled_trip ? dashRes.value.data.cancelled_trip : null)
 
-      // Automatic Trip Cancellation Detection for Driver (Strictly ONCE per cancelled trip)
+      // Automatic Trip Cancellation Detection for Driver (Strictly ONCE per genuinely cancelled trip from server)
       const serverCancId = serverCancelledTrip?.id ? Number(serverCancelledTrip.id) : null
-      if (serverCancId && !acknowledgedCancelledTripIds.has(serverCancId)) {
+      if (serverCancId && !acknowledgedCancelledTripIds.has(serverCancId) && !completedTripIdsRef.current.has(serverCancId)) {
         acknowledgedCancelledTripIds.add(serverCancId)
         try {
           SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
@@ -240,34 +339,12 @@ const DriverHomeScreen = ({ navigation }) => {
           dest: serverCancelledTrip.dest_address,
           reason: serverCancelledTrip.cancellation_reason || 'Rider cancelled the ride.',
         })
-      } else if (!act && prevActiveRideRef.current?.id) {
-        const oldRide = prevActiveRideRef.current
-        prevActiveRideRef.current = null
-        const oldRideId = Number(oldRide.id)
-        if (oldRideId && !acknowledgedCancelledTripIds.has(oldRideId)) {
-          acknowledgedCancelledTripIds.add(oldRideId)
-          try {
-            SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
-          } catch {}
-          setActiveRide(null)
-          setOtpModalVisible(false)
-          setPassOtpModal(null)
-          setDetailModalTrip(null)
-          try {
-            Vibration.vibrate([0, 400, 200, 400])
-          } catch {}
-          setCancelledNotice({
-            id: oldRideId,
-            bookingRef: oldRide.booking_ref || `CTB#${oldRideId}`,
-            pickup: oldRide.pickup_address,
-            dest: oldRide.dest_address,
-            reason: 'Rider cancelled this booking.',
-          })
-        }
       }
 
       if (act?.id) {
         prevActiveRideRef.current = act
+      } else {
+        prevActiveRideRef.current = null
       }
 
       setActiveRide(act)
@@ -280,11 +357,39 @@ const DriverHomeScreen = ({ navigation }) => {
           try {
             Vibration.vibrate([0, 500, 200, 500])
           } catch {}
-          Alert.alert(
-            '🚨 New Local Ride Assigned!',
-            `A new ride has been assigned to you!\n\n📍 Pickup: ${act.pickup_address}\n🏁 Drop: ${act.dest_address}\n💵 Fare: ₹${Math.round(act.final_fare || act.fare || 0)}\n\nPlease proceed to pickup location!`,
-            [{ text: 'View & Proceed to Pickup', style: 'default' }]
-          )
+          playDriverAlertSound().catch(() => {})
+
+          const extraKm = Number(act.extra_pickup_distance_km || 0)
+          const pickupDist = Number(act.pickup_distance_km || 0)
+          const pickupCash = Math.round(Number(act.pickup_charge || 0))
+
+          if (extraKm > 0 || pickupDist > 2.0) {
+            const actualExtra = extraKm > 0 ? extraKm : Math.max(0, pickupDist - 2.0)
+            const actualCash = pickupCash > 0 ? pickupCash : Math.round(actualExtra * 10)
+            Alert.alert(
+              '📢 Pickup Distance Alert (Extra Cash to Collect)',
+              `Driver neenga pickup location-la irunthu ${(pickupDist > 0 ? pickupDist : (2.0 + actualExtra)).toFixed(1)} km thoorathil irukkeenga.\n\n` +
+              `• 2.0 km Free Pickup\n` +
+              `• ${actualExtra.toFixed(1)} km Extra Arrival Distance\n` +
+              `• 💰 Customer extra cash pay pannanum: ₹${actualCash}\n\n` +
+              `📍 Pickup: ${act.pickup_address || 'Pickup'}\n🏁 Drop: ${act.dest_address || 'Destination'}\n\n` +
+              `Idhai confirm seithu pickup location-kku pogalam!`,
+              [
+                { text: 'Later', style: 'cancel' },
+                {
+                  text: '✓ Confirm & Proceed',
+                  style: 'default',
+                  onPress: () => handleUpdateRideStatus('driver_accepted')
+                }
+              ]
+            )
+          } else {
+            Alert.alert(
+              '🚨 New Local Ride Assigned!',
+              `A new ride has been assigned to you!\n\n📍 Pickup: ${act.pickup_address}\n🏁 Drop: ${act.dest_address}\n💵 Fare: ₹${Math.round(act.final_fare || act.fare || 0)}\n\nPlease proceed to pickup location!`,
+              [{ text: 'View & Proceed to Pickup', style: 'default' }]
+            )
+          }
         }
 
         if (act.trip_type === 'shared' || act.is_shared == 1 || act.is_shared === '1') {
@@ -297,6 +402,15 @@ const DriverHomeScreen = ({ navigation }) => {
       } else {
         setPendingRides(incomingRides)
         setManifest([])
+
+        if (incomingRides.length > 0) {
+          const firstIncoming = incomingRides[0]
+          const inId = firstIncoming.id
+          if (inId && alertedPendingTripIdRef.current !== inId) {
+            alertedPendingTripIdRef.current = inId
+            playDriverAlertSound().catch(() => {})
+          }
+        }
       }
 
       // 5. Promotional Banners
@@ -307,7 +421,29 @@ const DriverHomeScreen = ({ navigation }) => {
       // 6. Unread Notifications
       if (notifRes.status === 'fulfilled') {
         const unread = notifRes.value.data?.unread || notifRes.value.data?.unread_count || 0
+        if (prevUnreadNotifCountRef.current !== null && unread > prevUnreadNotifCountRef.current) {
+          playDriverAlertSound().catch(() => {})
+        }
+        prevUnreadNotifCountRef.current = unread
         setUnreadNotifCount(unread)
+      }
+
+      // 7. Recent Rides for Dashboard Compact Cards
+      if (tripsRes.status === 'fulfilled') {
+        const tList = tripsRes.value.data?.bookings || tripsRes.value.data?.trips || []
+        setRecentTrips(Array.isArray(tList) ? tList.slice(0, 5) : [])
+      }
+
+      // 8. Weekly Earnings for Performance Chart
+      if (earnRes.status === 'fulfilled' && earnRes.value.data?.status === 'success') {
+        const earnData = earnRes.value.data
+        setWeeklyEarnings({
+          total: Number(earnData.total_earnings || 0),
+          trips_detail: Array.isArray(earnData.trips_detail) ? earnData.trips_detail : [],
+        })
+        if (earnData.daily_target && !adminTarget) {
+          setStats(prev => prev ? ({ ...prev, daily_target: prev.daily_target || Number(earnData.daily_target) }) : null)
+        }
       }
     } catch (err) {
       console.warn('Dashboard sync error:', err)
@@ -421,11 +557,12 @@ const DriverHomeScreen = ({ navigation }) => {
   // Toggle Online with Mandatory Live Selfie Verification
   const handleToggleOnline = async (val) => {
     if (val) {
-      const isAccountApproved = (driver?.approval_status || '').toLowerCase() === 'approved'
-      const verifStatus = (driver?.verification_status || 'unsubmitted').toLowerCase()
-      const isKycApproved = verifStatus === 'approved' || verifStatus === 'verified'
+      const isAccountApproved = (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
+                                (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
+      const verifStatus = (driver?.verification_status || user?.verification_status || 'unsubmitted').toLowerCase()
+      const isKycApproved = isAccountApproved || verifStatus === 'approved' || verifStatus === 'verified'
 
-      if (!isAccountApproved || !isKycApproved) {
+      if (!isKycApproved) {
         setIsOnline(false)
 
         if (!isAccountApproved) {
@@ -673,23 +810,57 @@ const DriverHomeScreen = ({ navigation }) => {
     } catch {}
   }
 
-  // Update Ride Status (Normal Trip)
-  const handleUpdateRideStatus = async (newStatus) => {
+  // Open Complete Trip Modal (Final Distance & Invoice Preview)
+  const handleOpenCompleteTripModal = () => {
     if (!activeRide) return
+    const initialKm = String(activeRide.distance_km || activeRide.original_distance_km || '')
+    setEnteredActualDistance(initialKm)
+    setCompleteTripModalVisible(true)
+  }
+
+  // Update Ride Status (Normal Trip)
+  const handleUpdateRideStatus = async (newStatus, extraParams = {}) => {
+    if (!activeRide) return false
     try {
-      const res = await driverAPI.updateStatus(activeRide.id, { status: newStatus })
+      const res = await driverAPI.updateStatus(activeRide.id, { status: newStatus, ...extraParams })
       if (res.data?.status === 'success') {
         if (newStatus === 'completed') {
+          const completedId = Number(activeRide.id)
+          if (completedId) {
+            acknowledgedCancelledTripIds.add(completedId)
+            completedTripIdsRef.current.add(completedId)
+          }
+          prevActiveRideRef.current = null
+          setCancelledNotice(null)
           navigation.navigate('DriverPayment', { bookingId: activeRide.id })
         } else {
           Alert.alert('Status Updated', `Ride status: ${newStatus.replace(/_/g, ' ')}`)
         }
         loadDashboardData()
+        return true
       } else {
         Alert.alert('Error', res.data?.message || 'Failed to update status.')
+        return false
       }
-    } catch {
-      Alert.alert('Error', 'Failed to update ride status.')
+    } catch (err) {
+      const errMsg = err.response?.data?.message || err.message || 'Failed to update ride status.'
+      Alert.alert('Error', errMsg)
+      return false
+    }
+  }
+
+  // Confirm Complete Trip & Submit Distance
+  const handleConfirmCompleteTrip = async () => {
+    if (!activeRide) return
+    setIsSubmittingComplete(true)
+    const distNum = parseFloat(enteredActualDistance) || parseFloat(activeRide.distance_km || activeRide.original_distance_km || 0)
+    try {
+      const ok = await handleUpdateRideStatus('completed', { actual_distance_km: distNum })
+      if (ok) {
+        setCompleteTripModalVisible(false)
+      }
+    } finally {
+      setIsSubmittingComplete(false)
     }
   }
 
@@ -809,7 +980,7 @@ const DriverHomeScreen = ({ navigation }) => {
                       { text: 'Later', style: 'cancel' },
                       {
                         text: 'Complete Journey & Settle ✅',
-                        onPress: () => handleUpdateRideStatus('completed')
+                        onPress: handleOpenCompleteTripModal
                       }
                     ]
                   )
@@ -861,61 +1032,157 @@ const DriverHomeScreen = ({ navigation }) => {
     loadDashboardData()
   }, [cancelledNotice, loadDashboardData])
 
-  // Performance calculations
+  // Performance & Telemetry Calculations
   const completedCount = stats?.trips ?? stats?.completed_today ?? 0
   const grossEarnings = Math.round(stats?.earnings ?? stats?.today_earnings ?? 0)
-  const targetGoal = 2000
+  const targetGoal = Number(stats?.daily_target || 2000)
   const progressPercent = Math.min(Math.round((grossEarnings / targetGoal) * 100), 100)
+  const cancelledCount = stats?.cancelled_today ?? stats?.cancelled ?? recentTrips.filter(t => (t.status || '').toLowerCase().includes('cancel')).length
+  const acceptanceRate = stats?.acceptance_rate ? `${stats.acceptance_rate}%` : '98%'
+  const cancellationRate = stats?.cancellation_rate ? `${stats.cancellation_rate}%` : '2%'
+
+  // 7-Day Weekly Earnings for Performance Chart
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const weekChartData = Array.from({ length: 7 }).map((_, i) => {
+    const d = new Date()
+    d.setDate(d.getDate() - (6 - i))
+    const dayStr = d.toISOString().split('T')[0]
+    const dayLabel = dayNames[d.getDay()]
+    const isToday = i === 6
+    return { date: dayStr, label: dayLabel, isToday, amount: 0 }
+  })
+
+  if (Array.isArray(weeklyEarnings.trips_detail) && weeklyEarnings.trips_detail.length > 0) {
+    weeklyEarnings.trips_detail.forEach(t => {
+      const tDate = (t.created_at || '').split(' ')[0]
+      const found = weekChartData.find(d => d.date === tDate)
+      if (found) {
+        found.amount += Number(t.amount || t.final_fare || 0)
+      }
+    })
+  }
+  if (weekChartData[6].amount === 0 && grossEarnings > 0) {
+    weekChartData[6].amount = grossEarnings
+  }
+  const maxWeeklyAmount = Math.max(...weekChartData.map(d => d.amount), 500)
+  const totalWeeklyCalculated = weekChartData.reduce((acc, d) => acc + d.amount, 0)
+  const finalWeeklyEarnings = weeklyEarnings.total > 0 ? weeklyEarnings.total : totalWeeklyCalculated
+
+  // City-filtered ads: show only banners uploaded for this city or all cities
+  const cityFilteredAds = (driverAds || []).filter(ad => {
+    if (!ad) return false
+    const adCity = (ad.city || '').toLowerCase().trim()
+    if (!adCity || adCity === 'all') return true
+    if (!currentCity) return true
+    return adCity === currentCity.toLowerCase().trim()
+  })
+
+  // Quick Actions List (7 professional enterprise cards)
+  const quickActionsList = [
+    { id: 'trips', label: 'My Trips', icon: 'car-sport', color: '#0F172A', bg: '#FFF8E7', action: () => navigation.navigate('Trips') },
+    { id: 'documents', label: 'Documents', icon: 'document-text', color: '#D97706', bg: '#FEF3C7', action: () => navigation.navigate('DriverDocuments') },
+    { id: 'vehicle', label: 'Vehicle', icon: 'car', color: '#4F46E5', bg: '#EEF2FF', action: () => setVehicleModalVisible(true) },
+    { id: 'wallet', label: 'Wallet', icon: 'wallet', color: '#10B981', bg: '#ECFDF5', action: () => navigation.navigate('Earnings') },
+    { id: 'support', label: 'Support', icon: 'headset', color: '#EA580C', bg: '#FFEDD5', action: () => navigation.navigate('DriverSupport') },
+    { id: 'settings', label: 'Settings', icon: 'settings-sharp', color: '#475569', bg: '#F1F5F9', action: () => navigation.navigate('Profile') },
+    { id: 'history', label: 'Ride History', icon: 'time', color: '#0284C7', bg: '#E0F2FE', action: () => navigation.navigate('Trips') },
+  ]
 
   const activeIncoming = pendingRides[0] || null
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* 1. Header */}
-      <View style={styles.header}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-          <TouchableOpacity onPress={() => navigation.navigate('Profile')} activeOpacity={0.8}>
-            <View style={styles.avatarWrap}>
-              {resolveAssetUrl(driver?.avatar_url || driver?.avatar) ? (
-                <Image source={{ uri: resolveAssetUrl(driver.avatar_url || driver.avatar) }} style={styles.avatarImg} />
-              ) : (
-                <Text style={styles.avatarText}>{(driver?.name?.[0] || user?.name?.[0] || 'D').toUpperCase()}</Text>
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFC700" translucent={false} />
+      {/* Top Notch Status Bar Area in Signature Customer Taxi Yellow (#FFC700) */}
+      <View style={{ height: insets.top, backgroundColor: '#FFC700' }} />
+      {/* ── 1. SIGNATURE CITYONETAXI YELLOW BRAND HERO HEADER ── */}
+      <View style={styles.heroContainer}>
+        {/* Subtle Map Grid Lines */}
+        <View style={styles.headerMapLines} pointerEvents="none">
+          <View style={styles.mapGridLine1} />
+          <View style={styles.mapGridLine2} />
+          <View style={styles.mapGridLine3} />
+          <View style={styles.mapGridBox1} />
+        </View>
+
+        {/* Top Brand Bar */}
+        <View style={styles.heroTopBar}>
+          <View style={styles.heroBrandRow}>
+            <View style={styles.taxiBadgePill}>
+              <Ionicons name="car-sport" size={13} color="#FFC700" />
+              <Text style={styles.taxiBadgeText}>CityOneTaxi</Text>
+            </View>
+            <View style={styles.driverTagPill}>
+              <View style={[styles.liveDot, { backgroundColor: isOnline ? '#10B981' : '#94A3B8' }]} />
+              <Text style={styles.driverTagText}>{isOnline ? 'ONLINE' : 'OFFLINE'}</Text>
+            </View>
+          </View>
+
+          <View style={styles.heroRightActions}>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('DriverNotifications')}
+              style={styles.heroActionBtn}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="notifications-outline" size={19} color="#0F172A" />
+              {unreadNotifCount > 0 && (
+                <View style={styles.notifBadgeDot}>
+                  <Text style={styles.notifBadgeDotText}>{unreadNotifCount > 9 ? '9+' : unreadNotifCount}</Text>
+                </View>
               )}
-            </View>
-          </TouchableOpacity>
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Text style={styles.driverName} numberOfLines={1}>{driver?.name || user?.name || 'Driver Partner'}</Text>
-              <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
-              <View style={styles.ratingBadge}>
-                <Ionicons name="star" size={11} color="#F59E0B" />
-                <Text style={styles.ratingText}>{driver?.rating || '5.0'}</Text>
-              </View>
-              <Text style={styles.vehicleText}>{driver?.vehicle_type || 'Cab'} · {driver?.plate_no || 'Verified'}</Text>
-            </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => loadDashboardData(true)}
+              style={styles.heroActionBtn}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="refresh" size={18} color="#0F172A" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Profile')}
+              style={styles.heroAvatarBtn}
+              activeOpacity={0.8}
+            >
+              {resolveAssetUrl(driver?.avatar_url || driver?.avatar) ? (
+                <Image
+                  source={{ uri: resolveAssetUrl(driver?.avatar_url || driver?.avatar) }}
+                  style={styles.heroAvatarImg}
+                  resizeMode="cover"
+                />
+              ) : (
+                <Text style={styles.heroAvatarInitial}>
+                  {(driver?.name?.[0] || user?.name?.[0] || 'D').toUpperCase()}
+                </Text>
+              )}
+              <View style={[styles.heroOnlineDot, { backgroundColor: isOnline ? '#10B981' : '#94A3B8' }]} />
+            </TouchableOpacity>
           </View>
         </View>
 
-        {/* Notification & Refresh */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <TouchableOpacity
-            style={styles.notifBtn}
-            onPress={() => navigation.navigate('DriverNotifications')}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="notifications-outline" size={20} color={COLORS.textPrimary} />
-            {unreadNotifCount > 0 && (
-              <View style={styles.notifBadge}>
-                <Text style={styles.notifBadgeText}>{unreadNotifCount > 9 ? '9+' : unreadNotifCount}</Text>
+        {/* Driver Greeting & Vehicle Row */}
+        <View style={styles.heroTextRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.heroGreeting}>Hi, {driver?.name?.split(' ')[0] || user?.name?.split(' ')[0] || 'Partner'}</Text>
+            <Text style={styles.heroHeadline}>Professional Taxi Platform</Text>
+            <View style={styles.heroMetaRow}>
+              <View style={styles.heroRatingPill}>
+                <Ionicons name="star" size={11} color="#F59E0B" />
+                <Text style={styles.heroRatingText}>{driver?.rating || '5.0'}</Text>
               </View>
-            )}
-          </TouchableOpacity>
+              <Text style={styles.heroVehicleText} numberOfLines={1}>
+                {driver?.vehicle_type || 'Commercial Cab'} · {driver?.plate_no || 'Verified Partner'}
+              </Text>
+            </View>
+          </View>
 
-          <TouchableOpacity style={styles.iconBtn} onPress={() => loadDashboardData(true)} activeOpacity={0.8}>
-            <Ionicons name="refresh" size={18} color={COLORS.primary} />
-          </TouchableOpacity>
+          {/* Stylized Taxi Watermark Badge */}
+          <View style={styles.heroCarGraphicWrap} pointerEvents="none">
+            <View style={styles.miniCarBadge}>
+              <Ionicons name="speedometer" size={26} color="#FFFFFF" />
+            </View>
+          </View>
         </View>
       </View>
 
@@ -931,8 +1198,17 @@ const DriverHomeScreen = ({ navigation }) => {
         }
       >
         {/* 1.5 Driver KYC Verification Alert Banner */}
-        {((driver?.approval_status || '').toLowerCase() !== 'approved') && (() => {
-          const isRej = (driver?.approval_status || '').toLowerCase() === 'rejected'
+        {(() => {
+          const isApproved =
+            (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
+            (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
+            (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
+            (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
+
+          if (isApproved) return null
+
+          const isRej = (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'rejected' ||
+                        (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'rejected'
           const hasSubmitted = Boolean(driver?.has_kyc_submitted || driver?.license_front_image || driver?.profile_selfie)
           
           const bannerBg = isRej ? '#FEF2F2' : hasSubmitted ? '#FFFBEB' : '#FFF8E7'
@@ -1003,68 +1279,72 @@ const DriverHomeScreen = ({ navigation }) => {
           )
         })()}
 
-        {/* 2. Online / Offline Switch */}
+        {/* 2. ONLINE STATUS CARD (Premium Gradient Card with live GPS, City, Area, Last Updated Time) */}
         {(() => {
-          const isKycApproved = (driver?.approval_status || '').toLowerCase() === 'approved'
+          const isKycApproved =
+            (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
+            (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
+            (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
+            (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
           return (
-            <View style={[styles.onlineCard, isOnline ? styles.onlineCardActive : styles.onlineCardInactive]}>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <View style={[styles.statusBeacon, { backgroundColor: isOnline ? '#10B981' : isKycApproved ? '#94A3B8' : '#F59E0B' }]}>
-                    <View style={[styles.statusBeaconInner, { backgroundColor: isOnline ? '#34D399' : isKycApproved ? '#CBD5E1' : '#FCD34D' }]} />
+            <View style={styles.telemetryCard}>
+              <View style={styles.telemetryTopRow}>
+                <View style={{ flex: 1, paddingRight: 10 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View style={[styles.statusBeacon, { backgroundColor: isOnline ? '#10B981' : isKycApproved ? '#94A3B8' : '#F59E0B' }]}>
+                      <View style={[styles.statusBeaconInner, { backgroundColor: isOnline ? '#34D399' : isKycApproved ? '#CBD5E1' : '#FCD34D' }]} />
+                    </View>
+                    <Text style={styles.telemetryCardTitle}>
+                      {isOnline ? 'Online · Accepting Rides' : isKycApproved ? 'Offline · Tap to Go Online' : 'Offline · KYC Pending'}
+                    </Text>
                   </View>
-                  <Text style={styles.onlineTitle}>
-                    {isOnline ? 'Online · Accepting Rides' : isKycApproved ? 'Offline · Not Accepting' : 'Offline · KYC Required'}
+                  <Text style={styles.telemetryCardSub} numberOfLines={2}>
+                    {isOnline
+                      ? 'Broadcasting live GPS coordinates to passengers'
+                      : isKycApproved
+                      ? 'Toggle switch when ready to receive ride requests'
+                      : 'Submit and get your KYC approved by Admin to go online'}
                   </Text>
                 </View>
-                <Text style={styles.onlineSub}>
-                  {isOnline
-                    ? 'Broadcasting live GPS coordinates to nearby passengers'
-                    : isKycApproved
-                    ? 'Toggle switch when ready to receive ride requests'
-                    : 'Submit and get your KYC approved by Admin to go online and take taxi rides'}
-                </Text>
+                {toggling ? (
+                  <ActivityIndicator color={COLORS.primary} />
+                ) : (
+                  <Switch
+                    value={isOnline}
+                    onValueChange={handleToggleOnline}
+                    disabled={!isKycApproved || toggling}
+                    trackColor={{ false: '#334155', true: '#10B981' }}
+                    thumbColor={isOnline ? '#FFFFFF' : isKycApproved ? '#94A3B8' : '#64748B'}
+                  />
+                )}
               </View>
-              {toggling ? (
-                <ActivityIndicator color={COLORS.primary} />
-              ) : (
-                <Switch
-                  value={isOnline}
-                  onValueChange={handleToggleOnline}
-                  disabled={!isKycApproved || toggling}
-                  trackColor={{ false: '#CBD5E1', true: '#A7F3D0' }}
-                  thumbColor={isOnline ? '#10B981' : isKycApproved ? '#64748B' : '#94A3B8'}
-                />
-              )}
+
+              {/* Telemetry Divider */}
+              <View style={styles.telemetryDivider} />
+
+              {/* Location & GPS Telemetry Grid */}
+              <View style={styles.telemetryPillsRow}>
+                <View style={styles.telemetryPill}>
+                  <Ionicons name="location" size={13} color="#F59E0B" />
+                  <Text style={styles.telemetryPillText} numberOfLines={1}>
+                    {currentCity ? `${currentCity}${currentArea ? ` · ${currentArea}` : ''}` : 'Detecting City...'}
+                  </Text>
+                </View>
+                <View style={styles.telemetryPill}>
+                  <Ionicons name="radio" size={13} color={isOnline ? '#10B981' : '#94A3B8'} />
+                  <Text style={styles.telemetryPillText} numberOfLines={1}>{gpsStatus}</Text>
+                </View>
+                <View style={styles.telemetryPill}>
+                  <Ionicons name="time-outline" size={13} color="#94A3B8" />
+                  <Text style={styles.telemetryPillText} numberOfLines={1}>{lastUpdatedTime}</Text>
+                </View>
+              </View>
             </View>
           )
         })()}
 
-        {/* 3. Promotional Banners */}
-        {driverAds.length > 0 && (
-          <View style={{ marginTop: 14 }}>
-            <AdCarousel ads={driverAds} userRole="driver" navigation={navigation} />
-          </View>
-        )}
-
-        {/* 4. Earnings Target Goal */}
-        <View style={styles.goalCard}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Ionicons name="wallet" size={16} color={COLORS.primary} />
-              <Text style={styles.goalTitle}>Today's Earnings Target</Text>
-            </View>
-            <Text style={styles.goalValue}>₹{grossEarnings} <Text style={{ fontSize: 11, color: COLORS.gray500, fontWeight: '600' }}>/ ₹{targetGoal}</Text></Text>
-          </View>
-          <View style={styles.progressBar}>
-            <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
-          </View>
-          <Text style={styles.goalSub}>
-            {grossEarnings >= targetGoal ? '🎉 Daily target achieved! Extra rides earn bonus incentives.' : `₹${targetGoal - grossEarnings} remaining to reach today's target.`}
-          </Text>
-        </View>
-
-        {/* 5. Admin Assigned Trips */}
+        
+{/* 5. Admin Assigned Trips */}
         {adminAssignedTrips.length > 0 && (
           <View style={{ marginTop: 14 }}>
             <View style={styles.sectionHeader}>
@@ -1185,7 +1465,8 @@ const DriverHomeScreen = ({ navigation }) => {
           </View>
         )}
 
-        {/* 6. Active Trip Execution Lifecycle Card (Normal & Shared) */}
+        
+{/* 6. Active Trip Execution Lifecycle Card (Normal & Shared) */}
         {activeRide && (() => {
           let rawStops = []
           try {
@@ -1215,6 +1496,10 @@ const DriverHomeScreen = ({ navigation }) => {
             activeRide.is_shared === '1' ||
             activeRide.is_shared === true ||
             (manifest && manifest.length > 0)
+          )
+          const isHourly = Boolean(
+            activeRide.trip_sub_type === 'hourly' ||
+            Number(activeRide.package_hours) > 0
           )
 
           // Multi-Passenger Boarding & Dropping Calculations for Shared Trips
@@ -1290,7 +1575,13 @@ const DriverHomeScreen = ({ navigation }) => {
                 <View>
                   <Text style={styles.bookingRef}>{activeRide.booking_ref}</Text>
                   <Text style={styles.tripTypeBadge}>
-                    {isShared ? '🤝 SHARED MULTI-PASSENGER TRIP' : (isRoundTrip ? '🔁 ROUND TRIP' : (activeRide.trip_type ? activeRide.trip_type.replace(/_/g, ' ').toUpperCase() : 'ACTIVE RIDE'))}
+                    {isShared
+                      ? '🤝 SHARED MULTI-PASSENGER TRIP'
+                      : (isHourly
+                        ? `⏱️ HOURLY RENTAL (${activeRide.package_hours || 1} HRS)`
+                        : (isRoundTrip
+                          ? '🔁 ROUND TRIP'
+                          : (activeRide.trip_type ? activeRide.trip_type.replace(/_/g, ' ').toUpperCase() : 'ACTIVE RIDE')))}
                   </Text>
                 </View>
                 <View style={[styles.statusBadge, {
@@ -1318,20 +1609,139 @@ const DriverHomeScreen = ({ navigation }) => {
                 </View>
               </View>
 
-              {/* Live Interactive Road Directions & Turn-by-Turn GPS Map */}
-              <View style={{ borderRadius: RADIUS.lg, overflow: 'hidden', marginVertical: 10 }}>
-                <LiveTripMap
-                  origin={mapOrigin}
-                  destination={mapDestination}
-                  driverLocation={driverLocation || (driver?.lat && driver?.lng ? { latitude: parseFloat(driver.lat), longitude: parseFloat(driver.lng) } : null)}
-                  waypoints={isReturnStarted ? [] : rawStops}
-                  role="driver"
-                  status={activeRide.status}
-                  driverInfo={driver}
-                  height={230}
-                  showNavigationButton={true}
-                />
+              {/* Live Ride Status Card */}
+              <View style={styles.liveRideSummaryCard}>
+                <View style={styles.liveRideCustomerRow}>
+                  <View style={styles.liveRideAvatarWrap}>
+                    {resolveAssetUrl(activeRide.customer_avatar_url || activeRide.customer_avatar) ? (
+                      <Image source={{ uri: resolveAssetUrl(activeRide.customer_avatar_url || activeRide.customer_avatar) }} style={styles.custAvatarImg} />
+                    ) : (
+                      <Text style={styles.liveRideAvatarText}>
+                        {((activeRide.customer_name || 'C')?.[0] || 'C').toUpperCase()}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.liveRideCustomerName}>{activeRide.customer_name || 'Passenger'}</Text>
+                      <Ionicons name="shield-checkmark" size={13} color="#10B981" />
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                      <View style={styles.livePaymentPill}>
+                        <Text style={styles.livePaymentText}>{activeRide.payment_method?.toUpperCase() || 'CASH'}</Text>
+                      </View>
+                      <Text style={styles.liveDistanceText}>
+                        {activeRide.distance_km ? `${parseFloat(activeRide.distance_km).toFixed(1)} KM` : 'Local Ride'}
+                      </Text>
+                    </View>
+                  </View>
+                  {activeRide.customer_phone ? (
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      <TouchableOpacity
+                        style={styles.chatSmallBtn}
+                        onPress={() => Linking.openURL(`sms:${activeRide.customer_phone}`)}
+                      >
+                        <Ionicons name="chatbubble" size={14} color={COLORS.primary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.callSmallBtn}
+                        onPress={() => Linking.openURL(`tel:${activeRide.customer_phone}`)}
+                      >
+                        <Ionicons name="call" size={14} color={COLORS.white} />
+                      </TouchableOpacity>
+                    </View>
+                  ) : null}
+                </View>
+
+                {/* Trip Status Timeline */}
+                <View style={styles.tripTimelineCard}>
+                  <View style={styles.tripTimelineRow}>
+                    <View style={styles.timelineStep}>
+                      <View style={[styles.timelineNode, styles.timelineNodeDone]}>
+                        <Ionicons name="checkmark" size={10} color="#FFFFFF" />
+                      </View>
+                      <Text style={styles.timelineNodeLabelActive}>Assigned</Text>
+                    </View>
+                    <View style={[styles.timelineLine, (isArrived || isTripStarted) && styles.timelineLineDone]} />
+
+                    <View style={styles.timelineStep}>
+                      <View style={[styles.timelineNode, (isArrived || isTripStarted) ? styles.timelineNodeDone : styles.timelineNodePending]}>
+                        {(isArrived || isTripStarted) ? (
+                          <Ionicons name="checkmark" size={10} color="#FFFFFF" />
+                        ) : (
+                          <View style={styles.timelineNodeInner} />
+                        )}
+                      </View>
+                      <Text style={(isArrived || isTripStarted) ? styles.timelineNodeLabelActive : styles.timelineNodeLabelPending}>Arrived</Text>
+                    </View>
+                    <View style={[styles.timelineLine, isTripStarted && styles.timelineLineDone]} />
+
+                    <View style={styles.timelineStep}>
+                      <View style={[styles.timelineNode, isTripStarted ? styles.timelineNodeDone : styles.timelineNodePending]}>
+                        {isTripStarted ? (
+                          <Ionicons name="checkmark" size={10} color="#FFFFFF" />
+                        ) : (
+                          <View style={styles.timelineNodeInner} />
+                        )}
+                      </View>
+                      <Text style={isTripStarted ? styles.timelineNodeLabelActive : styles.timelineNodeLabelPending}>Started</Text>
+                    </View>
+                    <View style={[styles.timelineLine, activeRide.status === 'completed' && styles.timelineLineDone]} />
+
+                    <View style={styles.timelineStep}>
+                      <View style={[styles.timelineNode, activeRide.status === 'completed' ? styles.timelineNodeDone : styles.timelineNodePending]}>
+                        {activeRide.status === 'completed' ? (
+                          <Ionicons name="checkmark" size={10} color="#FFFFFF" />
+                        ) : (
+                          <View style={styles.timelineNodeInner} />
+                        )}
+                      </View>
+                      <Text style={activeRide.status === 'completed' ? styles.timelineNodeLabelActive : styles.timelineNodeLabelPending}>Drop Off</Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Pickup & Destination Line Preview */}
+                <View style={styles.liveRoutePreview}>
+                  <View style={styles.routeItem}>
+                    <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
+                    <Text style={styles.routeText} numberOfLines={1}>Pickup: {activeRide.pickup_address}</Text>
+                  </View>
+                  <View style={styles.routeItem}>
+                    <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
+                    <Text style={styles.routeText} numberOfLines={1}>Drop: {activeRide.dest_address}</Text>
+                  </View>
+                </View>
+
+                {/* Resume Trip / Toggle Live Navigation Button */}
+                <TouchableOpacity
+                  style={styles.resumeTripBtn}
+                  onPress={() => setShowLiveMapDetails(prev => !prev)}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name={showLiveMapDetails ? "chevron-up" : "navigate"} size={16} color="#0F172A" />
+                  <Text style={styles.resumeTripBtnText}>
+                    {showLiveMapDetails ? 'Collapse Map View ▴' : 'Resume Trip & View Live Navigation ▾'}
+                  </Text>
+                </TouchableOpacity>
               </View>
+
+              {showLiveMapDetails && (
+                <>
+                  {/* Live Interactive Road Directions & Turn-by-Turn GPS Map */}
+                  <View style={{ borderRadius: RADIUS.lg, overflow: 'hidden', marginVertical: 10 }}>
+                    <LiveTripMap
+                      origin={mapOrigin}
+                      destination={mapDestination}
+                      driverLocation={driverLocation || (driver?.lat && driver?.lng ? { latitude: parseFloat(driver.lat), longitude: parseFloat(driver.lng) } : null)}
+                      waypoints={isReturnStarted ? [] : rawStops}
+                      role="driver"
+                      status={activeRide.status}
+                      driverInfo={driver}
+                      height={230}
+                      showNavigationButton={true}
+                    />
+                  </View>
 
               {/* Customer Contact & Profile Row (Single Ride) */}
               {!isShared && (
@@ -1496,6 +1906,21 @@ const DriverHomeScreen = ({ navigation }) => {
                 </View>
               )}
 
+              {/* Hourly Rental Package Notice */}
+              {!isShared && isHourly && (
+                <View style={{ backgroundColor: '#EEF2FF', padding: 10, borderRadius: RADIUS.md, marginBottom: 10, borderWidth: 1, borderColor: '#C7D2FE' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                    <Ionicons name="time" size={15} color="#4F46E5" />
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#3730A3' }}>
+                      Hourly Package: {activeRide.package_hours || 1} Hours ({activeRide.hourly_package_km || ((activeRide.package_hours || 1) * 10)} KM Included)
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 10, color: '#4338CA', lineHeight: 14 }}>
+                    Base Fare: ₹{Math.round(activeRide.base_package_fare || activeRide.fare || activeRide.fare_estimate || 0)}. Any extra minutes or extra distance beyond package will be automatically added to the bill at completion.
+                  </Text>
+                </View>
+              )}
+
               {/* Ride Start PIN Status Banner */}
               {!isShared && (
                 <View style={{
@@ -1620,12 +2045,12 @@ const DriverHomeScreen = ({ navigation }) => {
                               </View>
                             ) : (
                               <TouchableOpacity
-                                style={[styles.verifyOtpBtn, { backgroundColor: '#F59E0B' }]}
+                                style={[styles.verifyOtpBtn, { backgroundColor: '#FFC700' }]}
                                 onPress={() => handleConfirmPassengerDrop(p)}
                                 activeOpacity={0.8}
                               >
-                                <Ionicons name="location" size={13} color={COLORS.white} />
-                                <Text style={styles.verifyOtpBtnText}>Confirm Drop</Text>
+                                <Ionicons name="location" size={13} color="#000000" />
+                                <Text style={[styles.verifyOtpBtnText, { color: '#000000' }]}>Confirm Drop</Text>
                               </TouchableOpacity>
                             )
                           )}
@@ -1676,15 +2101,60 @@ const DriverHomeScreen = ({ navigation }) => {
                 {/* 1. Normal Single / Multi-Stop Ride Actions */}
                 {!isShared && (
                   <>
-                    {['driver_assigned', 'driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way'].includes(activeRide.status) && (
+                    {/* Extra Arrival Pickup Cash Notice & Confirm Button */}
+                    {activeRide.status === 'driver_assigned' && (Number(activeRide.extra_pickup_distance_km) > 0 || Number(activeRide.pickup_distance_km) > 2.0) && (
+                      <View style={{ backgroundColor: '#FEF3C7', borderColor: '#F59E0B', borderWidth: 1.5, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                          <Ionicons name="warning" size={18} color="#D97706" style={{ marginRight: 6 }} />
+                          <Text style={{ fontWeight: 'bold', color: '#92400E', fontSize: 14 }}>
+                            Pickup Arrival Distance Alert
+                          </Text>
+                        </View>
+                        <Text style={{ color: '#78350F', fontSize: 13 }}>
+                          Pickup Distance: <Text style={{ fontWeight: 'bold' }}>{Number(activeRide.pickup_distance_km || (2.0 + Number(activeRide.extra_pickup_distance_km || 0))).toFixed(1)} KM</Text>
+                        </Text>
+                        <Text style={{ color: '#78350F', fontSize: 13, marginTop: 2 }}>
+                          • 2.0 KM Free | <Text style={{ fontWeight: 'bold', color: '#B45309' }}>{Number(activeRide.extra_pickup_distance_km || Math.max(0, Number(activeRide.pickup_distance_km || 0) - 2.0)).toFixed(1)} KM Extra Arrival</Text>
+                        </Text>
+                        <View style={{ backgroundColor: '#FDE68A', borderRadius: 6, padding: 8, marginTop: 8 }}>
+                          <Text style={{ color: '#92400E', fontSize: 13, fontWeight: 'bold' }}>
+                            💰 Customer Pay Panna Vendiya Extra Cash: ₹{Math.round(activeRide.pickup_charge || (Math.max(0, Number(activeRide.pickup_distance_km || 0) - 2.0) * 10))}
+                          </Text>
+                          <Text style={{ color: '#78350F', fontSize: 11, marginTop: 2 }}>
+                            Confirm panni vittu pickup location-kku pogavum.
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          style={[styles.primaryActionBtn, { backgroundColor: '#10B981', marginTop: 10 }]}
+                          onPress={() => handleUpdateRideStatus('driver_accepted')}
+                        >
+                          <Ionicons name="checkmark-circle-outline" size={20} color="#FFFFFF" style={{ marginRight: 6 }} />
+                          <Text style={[styles.primaryActionText, { color: '#FFFFFF' }]}>✓ Confirm & Proceed to Pickup</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+
+                    {/* Confirmed Extra Cash Notice when on the way */}
+                    {['driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way'].includes(activeRide.status) && (Number(activeRide.extra_pickup_distance_km) > 0 || Number(activeRide.pickup_distance_km) > 2.0) && (
+                      <View style={{ backgroundColor: '#ECFDF5', borderColor: '#10B981', borderWidth: 1, borderRadius: 8, padding: 10, marginBottom: 12 }}>
+                        <Text style={{ color: '#065F46', fontSize: 13, fontWeight: 'bold' }}>
+                          ✓ Confirmed: Customer-idam ₹{Math.round(activeRide.pickup_charge || (Math.max(0, Number(activeRide.pickup_distance_km || 0) - 2.0) * 10))} Extra Cash Collect Pannavum!
+                        </Text>
+                        <Text style={{ color: '#047857', fontSize: 11, marginTop: 2 }}>
+                          ({Number(activeRide.extra_pickup_distance_km || Math.max(0, Number(activeRide.pickup_distance_km || 0) - 2.0)).toFixed(1)} KM extra arrival distance @ ₹10/KM)
+                        </Text>
+                      </View>
+                    )}
+
+                    {['driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way'].includes(activeRide.status) || (activeRide.status === 'driver_assigned' && !(Number(activeRide.extra_pickup_distance_km) > 0 || Number(activeRide.pickup_distance_km) > 2.0)) ? (
                       <TouchableOpacity
-                        style={[styles.primaryActionBtn, { backgroundColor: '#F59E0B' }]}
+                        style={[styles.primaryActionBtn, { backgroundColor: '#FFC700' }]}
                         onPress={() => handleUpdateRideStatus('driver_arrived')}
                       >
-                        <Ionicons name="location-outline" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
-                        <Text style={styles.primaryActionText}>I Have Arrived at Pickup</Text>
+                        <Ionicons name="location-outline" size={20} color="#000000" style={{ marginRight: 6 }} />
+                        <Text style={[styles.primaryActionText, { color: '#000000' }]}>I Have Arrived at Pickup</Text>
                       </TouchableOpacity>
-                    )}
+                    ) : null}
 
                     {['driver_arrived', 'driver_reached', 'pickup_reached', 'arrived'].includes(activeRide.status) && (
                       <TouchableOpacity
@@ -1704,7 +2174,7 @@ const DriverHomeScreen = ({ navigation }) => {
                       if (currIdx < totalStops && rawStops[currIdx]) {
                         return (
                           <TouchableOpacity
-                            style={[styles.primaryActionBtn, { backgroundColor: '#F59E0B' }]}
+                            style={[styles.primaryActionBtn, { backgroundColor: '#FFC700' }]}
                             onPress={async () => {
                               try {
                                 const res = await driverAPI.completeStop(activeRide.id)
@@ -1715,7 +2185,7 @@ const DriverHomeScreen = ({ navigation }) => {
                               } catch {}
                             }}
                           >
-                            <Text style={styles.primaryActionText}>📍 Complete Stop {currIdx + 1} & Continue</Text>
+                            <Text style={[styles.primaryActionText, { color: '#000000' }]}>📍 Complete Stop {currIdx + 1} & Continue</Text>
                           </TouchableOpacity>
                         )
                       }
@@ -1753,14 +2223,16 @@ const DriverHomeScreen = ({ navigation }) => {
                         )
                       }
 
-                      // One-Way Normal Trip: Complete Trip & Settle
+                      // One-Way Normal Trip / Hourly Trip: Complete Trip & Settle
                       return (
                         <TouchableOpacity
                           style={[styles.primaryActionBtn, { backgroundColor: '#10B981' }]}
-                          onPress={() => handleUpdateRideStatus('completed')}
+                          onPress={handleOpenCompleteTripModal}
                         >
                           <Ionicons name="checkmark-done" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
-                          <Text style={styles.primaryActionText}>Complete Trip & Collect Payment</Text>
+                          <Text style={styles.primaryActionText}>
+                            {isHourly ? 'Complete Hourly Trip & Settle Fare' : 'Complete Trip & Collect Payment'}
+                          </Text>
                         </TouchableOpacity>
                       )
                     })()}
@@ -1815,7 +2287,7 @@ const DriverHomeScreen = ({ navigation }) => {
                                 { text: 'Not Yet', style: 'cancel' },
                                 {
                                   text: 'Yes, Complete Trip',
-                                  onPress: () => handleUpdateRideStatus('completed')
+                                  onPress: handleOpenCompleteTripModal
                                 }
                               ]
                             )
@@ -1879,7 +2351,7 @@ const DriverHomeScreen = ({ navigation }) => {
                             )
                             return
                           }
-                          handleUpdateRideStatus('completed')
+                          handleOpenCompleteTripModal()
                         }}
                       >
                         <Ionicons name="checkmark-done" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
@@ -1891,11 +2363,82 @@ const DriverHomeScreen = ({ navigation }) => {
                   </>
                 )}
               </View>
-            </View>
-          )
-        })()}
+            </>
+          )}
+        </View>
+      )
+    })()}
 
-        {/* 7. Upcoming Accepted Trips */}
+        
+{/* 4. TODAY'S SUMMARY CARD */}
+        <View style={styles.todaySummaryCard}>
+          <View style={styles.todaySummaryHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={styles.todayIconWrap}>
+                <Ionicons name="wallet" size={16} color="#D97706" />
+              </View>
+              <Text style={styles.todaySummaryTitle}>Today's Summary</Text>
+            </View>
+            <Text style={styles.todayGrossText}>₹{grossEarnings}</Text>
+          </View>
+
+          {/* Today's Target Progress */}
+          <View style={styles.targetProgressContainer}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <Text style={styles.targetLabel}>
+                Daily Target: <Text style={{ fontWeight: '800', color: '#0F172A' }}>₹{grossEarnings}</Text> / ₹{targetGoal}
+              </Text>
+              <View style={styles.percentBadge}>
+                <Text style={styles.percentBadgeText}>{progressPercent}%</Text>
+              </View>
+            </View>
+            <View style={styles.progressBarTrack}>
+              <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
+            </View>
+            <Text style={styles.targetSubText}>
+              {grossEarnings >= targetGoal
+                ? '🎉 Daily target achieved! Extra rides earn bonus incentives.'
+                : `₹${Math.max(0, targetGoal - grossEarnings)} remaining to reach today's target.`}
+            </Text>
+          </View>
+
+          {/* 6-Metric Compact Grid */}
+          <View style={styles.todayMetricsGrid}>
+            <View style={styles.todayMetricBox}>
+              <Ionicons name="cash" size={15} color="#10B981" />
+              <Text style={styles.todayMetricVal}>₹{grossEarnings}</Text>
+              <Text style={styles.todayMetricLbl}>Earnings</Text>
+            </View>
+            <View style={styles.todayMetricBox}>
+              <Ionicons name="car-sport" size={15} color="#3B82F6" />
+              <Text style={styles.todayMetricVal}>{completedCount}</Text>
+              <Text style={styles.todayMetricLbl}>Trips</Text>
+            </View>
+            <View style={styles.todayMetricBox}>
+              <Ionicons name="checkmark-done" size={15} color="#059669" />
+              <Text style={styles.todayMetricVal}>{completedCount}</Text>
+              <Text style={styles.todayMetricLbl}>Completed</Text>
+            </View>
+            <View style={styles.todayMetricBox}>
+              <Ionicons name="close-circle" size={15} color="#EF4444" />
+              <Text style={styles.todayMetricVal}>{cancelledCount}</Text>
+              <Text style={styles.todayMetricLbl}>Cancelled</Text>
+            </View>
+            <View style={styles.todayMetricBox}>
+              <Ionicons name="shield-checkmark" size={15} color="#7C3AED" />
+              <Text style={styles.todayMetricVal}>{acceptanceRate}</Text>
+              <Text style={styles.todayMetricLbl}>Acceptance</Text>
+            </View>
+            <View style={styles.todayMetricBox}>
+              <Ionicons name="time" size={15} color="#D97706" />
+              <Text style={styles.todayMetricVal}>{stats?.hours !== undefined && stats?.hours !== null ? `${stats.hours}h` : (isOnline ? '1.0h' : '0.0h')}</Text>
+              <Text style={styles.todayMetricLbl}>Online Hours</Text>
+            </View>
+          </View>
+        </View>
+
+        
+{/* 7. Upcoming Accepted Trips */}
         {upcomingTrips.length > 0 && (
           <View style={{ marginTop: 14 }}>
             <View style={styles.sectionHeader}>
@@ -1954,61 +2497,170 @@ const DriverHomeScreen = ({ navigation }) => {
           </View>
         )}
 
-        {/* 8. CRM Performance Metrics Grid */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Performance Overview</Text>
-        </View>
-        <View style={styles.statsGrid}>
-          <View style={styles.statBox}>
-            <View style={[styles.statIconBadge, { backgroundColor: '#EDE9FE' }]}>
-              <Ionicons name="car-sport" size={18} color="#7C3AED" />
-            </View>
-            <Text style={styles.statVal}>{completedCount}</Text>
-            <Text style={styles.statLbl}>Trips Today</Text>
+        
+{/* 3. LOCATION BASED PROMOTIONAL BANNER CAROUSEL */}
+        {cityFilteredAds.length > 0 && (
+          <View style={{ marginTop: 14 }}>
+            <AdCarousel ads={cityFilteredAds} userRole="driver" navigation={navigation} />
           </View>
-          <View style={styles.statBox}>
-            <View style={[styles.statIconBadge, { backgroundColor: '#D1FAE5' }]}>
-              <Ionicons name="cash" size={18} color="#10B981" />
-            </View>
-            <Text style={styles.statVal}>₹{grossEarnings}</Text>
-            <Text style={styles.statLbl}>Earned Today</Text>
-          </View>
-          <View style={styles.statBox}>
-            <View style={[styles.statIconBadge, { backgroundColor: '#FEF3C7' }]}>
-              <Ionicons name="time" size={18} color="#D97706" />
-            </View>
-            <Text style={styles.statVal}>{stats?.hours ? `${stats.hours}h` : '—'}</Text>
-            <Text style={styles.statLbl}>Hours Online</Text>
-          </View>
-          <View style={styles.statBox}>
-            <View style={[styles.statIconBadge, { backgroundColor: '#FEF3C7' }]}>
-              <Ionicons name="star" size={18} color="#F59E0B" />
-            </View>
-            <Text style={styles.statVal}>{driver?.rating || '5.0'}</Text>
-            <Text style={styles.statLbl}>Avg Rating</Text>
-          </View>
-        </View>
+        )}
 
-        {/* 9. Quick CRM Services Grid */}
+        
+{/* 8. QUICK ACTIONS */}
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Quick Services</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name="grid-outline" size={16} color="#0F172A" />
+            <Text style={styles.sectionTitle}>Quick Actions</Text>
+          </View>
         </View>
         <View style={styles.quickGrid}>
-          {[
-            { icon: 'time-outline', label: 'My Trips', color: '#7C3AED', bg: '#EDE9FE', action: () => navigation.navigate('Trips') },
-            { icon: 'cash-outline', label: 'Earnings', color: '#10B981', bg: '#D1FAE5', action: () => navigation.navigate('Earnings') },
-            { icon: 'document-text-outline', label: 'Documents', color: '#D97706', bg: '#FFF8E7', action: () => navigation.navigate('DriverDocuments') },
-            { icon: 'headset-outline', label: 'Support', color: '#EA580C', bg: '#FFEDD5', action: () => navigation.navigate('DriverSupport') },
-            { icon: 'alert-circle-outline', label: 'Safety SOS', color: '#EF4444', bg: '#FEE2E2', action: handleSOS },
-          ].map((item, idx) => (
-            <TouchableOpacity key={idx} style={styles.quickTile} onPress={item.action} activeOpacity={0.8}>
+          {quickActionsList.map(item => (
+            <TouchableOpacity key={item.id} style={styles.quickTile} onPress={item.action} activeOpacity={0.8}>
               <View style={[styles.quickIconWrap, { backgroundColor: item.bg }]}>
                 <Ionicons name={item.icon} size={22} color={item.color} />
               </View>
-              <Text style={styles.quickLabel}>{item.label}</Text>
+              <Text style={styles.quickLabel} numberOfLines={1}>{item.label}</Text>
             </TouchableOpacity>
           ))}
         </View>
+
+        
+{/* 9. PERFORMANCE */}
+        <View style={styles.sectionHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name="trending-up" size={16} color="#0F172A" />
+            <Text style={styles.sectionTitle}>Performance Overview</Text>
+          </View>
+        </View>
+        <View style={styles.performanceCard}>
+          {/* 7-Day Weekly Earnings Mini Bar Chart */}
+          <View style={styles.chartHeaderRow}>
+            <View>
+              <Text style={styles.chartTitle}>Past 7 Days Earnings</Text>
+              <Text style={styles.chartTotal}>₹{finalWeeklyEarnings}</Text>
+            </View>
+            <View style={styles.chartPill}>
+              <Ionicons name="sparkles" size={12} color="#D97706" />
+              <Text style={styles.chartPillText}>Weekly Target</Text>
+            </View>
+          </View>
+
+          <View style={styles.chartBarsContainer}>
+            {weekChartData.map((d, idx) => {
+              const barHeight = Math.max(10, Math.round((d.amount / maxWeeklyAmount) * 60))
+              return (
+                <View key={idx} style={styles.chartBarCol}>
+                  <Text style={styles.chartBarVal}>{d.amount > 0 ? `₹${d.amount}` : ''}</Text>
+                  <View style={styles.chartBarTrack}>
+                    <View
+                      style={[
+                        styles.chartBarFill,
+                        {
+                          height: barHeight,
+                          backgroundColor: d.isToday ? '#F59E0B' : (d.amount > 0 ? '#10B981' : '#E2E8F0'),
+                        },
+                      ]}
+                    />
+                  </View>
+                  <Text style={[styles.chartBarLabel, d.isToday && styles.chartBarLabelActive]}>
+                    {d.label}
+                  </Text>
+                </View>
+              )
+            })}
+          </View>
+
+          {/* Performance Statistics Grid */}
+          <View style={styles.perfStatsDivider} />
+          <View style={styles.perfStatsRow}>
+            <View style={styles.perfStatItem}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Ionicons name="star" size={14} color="#F59E0B" />
+                <Text style={styles.perfStatVal}>{driver?.rating || '5.0'}</Text>
+              </View>
+              <Text style={styles.perfStatLbl}>Driver Rating</Text>
+            </View>
+            <View style={styles.perfStatDividerV} />
+            <View style={styles.perfStatItem}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+                <Text style={styles.perfStatVal}>{acceptanceRate}</Text>
+              </View>
+              <Text style={styles.perfStatLbl}>Acceptance</Text>
+            </View>
+            <View style={styles.perfStatDividerV} />
+            <View style={styles.perfStatItem}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Ionicons name="alert-circle" size={14} color="#EF4444" />
+                <Text style={styles.perfStatVal}>{cancellationRate}</Text>
+              </View>
+              <Text style={styles.perfStatLbl}>Cancellation</Text>
+            </View>
+            <View style={styles.perfStatDividerV} />
+            <View style={styles.perfStatItem}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Ionicons name="car-sport" size={14} color="#7C3AED" />
+                <Text style={styles.perfStatVal}>{driver?.total_trips || stats?.total_trips || completedCount}</Text>
+              </View>
+              <Text style={styles.perfStatLbl}>Total Trips</Text>
+            </View>
+          </View>
+        </View>
+
+        
+{/* 10. RECENT RIDES */}
+        <View style={styles.sectionHeader}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name="receipt-outline" size={16} color="#0F172A" />
+            <Text style={styles.sectionTitle}>Recent Rides</Text>
+          </View>
+          <TouchableOpacity onPress={() => navigation.navigate('Trips')} activeOpacity={0.8}>
+            <Text style={styles.viewAllText}>View All →</Text>
+          </TouchableOpacity>
+        </View>
+
+        {recentTrips && recentTrips.length > 0 ? (
+          <View style={{ paddingHorizontal: 16 }}>
+            {recentTrips.slice(0, 4).map((ride, idx) => {
+              const isCancelled = (ride.status || '').toLowerCase().includes('cancel')
+              const fareAmt = Math.round(ride.final_fare || ride.fare || ride.original_fare || 0)
+              return (
+                <View key={ride.id || idx} style={styles.recentRideCard}>
+                  <View style={styles.recentRideTop}>
+                    <Text style={styles.recentRef}>{ride.booking_ref || `CTB#${ride.id}`}</Text>
+                    <View style={[styles.recentStatusBadge, { backgroundColor: isCancelled ? '#FEE2E2' : '#DCFCE7' }]}>
+                      <Text style={[styles.recentStatusText, { color: isCancelled ? '#DC2626' : '#15803D' }]}>
+                        {isCancelled ? 'CANCELLED' : 'COMPLETED'}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.recentRoute}>
+                    <View style={styles.recentRouteLine}>
+                      <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
+                      <Text style={styles.recentRouteText} numberOfLines={1}>{ride.pickup_address}</Text>
+                    </View>
+                    <View style={styles.recentRouteLine}>
+                      <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
+                      <Text style={styles.recentRouteText} numberOfLines={1}>{ride.dest_address}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.recentBottom}>
+                    <Text style={styles.recentDate}>
+                      🗓 {formatDateDisplay(ride.created_at || ride.pickup_date)} · {formatTime12Hr(ride.pickup_time || ride.created_at)}
+                    </Text>
+                    <Text style={styles.recentFare}>₹{fareAmt}</Text>
+                  </View>
+                </View>
+              )
+            })}
+          </View>
+        ) : (
+          <View style={styles.emptyRecentCard}>
+            <Ionicons name="car-outline" size={28} color="#94A3B8" />
+            <Text style={styles.emptyRecentTitle}>No rides yet today</Text>
+            <Text style={styles.emptyRecentSub}>Go Online to receive incoming ride requests in your city</Text>
+          </View>
+        )}
       </ScrollView>
 
       {/* Customer & Trip Details Sheet Modal */}
@@ -2128,7 +2780,7 @@ const DriverHomeScreen = ({ navigation }) => {
         </View>
       </Modal>
 
-      {/* Incoming Request Alert Modal */}
+      {/* Incoming Request Alert Modal - Premium Floating Booking Card */}
       <Modal
         visible={Boolean(activeIncoming)}
         animationType="slide"
@@ -2144,36 +2796,69 @@ const DriverHomeScreen = ({ navigation }) => {
               <View style={styles.incomingBadge}>
                 <Text style={styles.incomingBadgeText}>⚡ NEW RIDE REQUEST</Text>
               </View>
-              <Text style={styles.countdownText}>{countdown}s</Text>
+              <View style={styles.countdownBadge}>
+                <Ionicons name="timer-outline" size={13} color="#DC2626" />
+                <Text style={styles.countdownText}>{countdown}s</Text>
+              </View>
             </View>
 
             {/* Customer Info */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10, backgroundColor: '#F8FAFC', padding: 8, borderRadius: RADIUS.lg }}>
-              <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+            <View style={styles.incomingCustRow}>
+              <View style={styles.incomingAvatarWrap}>
                 {resolveAssetUrl(activeIncoming?.customer_avatar_url || activeIncoming?.customer_avatar) ? (
                   <Image source={{ uri: resolveAssetUrl(activeIncoming.customer_avatar_url || activeIncoming.customer_avatar) }} style={{ width: '100%', height: '100%' }} />
                 ) : (
-                  <Text style={{ color: COLORS.white, fontWeight: '700', fontSize: 16 }}>{((activeIncoming?.customer_name || 'C')?.[0] || 'C').toUpperCase()}</Text>
+                  <Text style={{ color: '#0F172A', fontWeight: '800', fontSize: 16 }}>{((activeIncoming?.customer_name || 'C')?.[0] || 'C').toUpperCase()}</Text>
                 )}
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.text }}>{activeIncoming?.customer_name || 'Customer'}</Text>
-                <Text style={{ fontSize: 11, color: COLORS.textMuted }}>Payment: {activeIncoming?.payment_method?.toUpperCase() || 'CASH'}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.incomingCustName}>{activeIncoming?.customer_name || 'Customer'}</Text>
+                  <View style={styles.custRatingPill}>
+                    <Ionicons name="star" size={10} color="#F59E0B" />
+                    <Text style={styles.custRatingText}>4.9</Text>
+                  </View>
+                </View>
+                <Text style={styles.incomingPaymentText}>Payment: {activeIncoming?.payment_method?.toUpperCase() || 'CASH'}</Text>
+              </View>
+              <View style={styles.incomingTypePill}>
+                <Text style={styles.incomingTypeText}>
+                  {activeIncoming?.trip_type ? activeIncoming.trip_type.replace(/_/g, ' ').toUpperCase() : 'LOCAL TAXI'}
+                </Text>
               </View>
             </View>
 
-            <Text style={styles.incomingFare}>
-              ₹{Math.round(activeIncoming?.final_fare || activeIncoming?.fare || activeIncoming?.fare_estimate || activeIncoming?.original_fare || 0)}
-            </Text>
-            <Text style={styles.incomingCategory}>
-              {activeIncoming?.vehicle_type?.toUpperCase() || 'CAB'}{activeIncoming?.distance_km ? ` · ${parseFloat(activeIncoming.distance_km).toFixed(1)} KM` : ''}
-            </Text>
-
-            <View style={styles.incomingRoute}>
-              <Text style={styles.incomingRouteText} numberOfLines={2}>🟢 Pickup: {activeIncoming?.pickup_address}</Text>
-              <Text style={styles.incomingRouteText} numberOfLines={2}>🔴 Drop: {activeIncoming?.dest_address}</Text>
+            {/* Fare & Metrics */}
+            <View style={styles.incomingFareRow}>
+              <View>
+                <Text style={styles.incomingFareLabel}>ESTIMATED FARE</Text>
+                <Text style={styles.incomingFare}>
+                  ₹{Math.round(activeIncoming?.final_fare || activeIncoming?.fare || activeIncoming?.fare_estimate || activeIncoming?.original_fare || 0)}
+                </Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={styles.incomingDistanceBadge}>
+                  📍 {activeIncoming?.distance_km ? `${parseFloat(activeIncoming.distance_km).toFixed(1)} KM` : 'Local Distance'}
+                </Text>
+                <Text style={styles.incomingCategoryText}>
+                  {activeIncoming?.vehicle_type?.toUpperCase() || 'SEDAN / HATCHBACK'}
+                </Text>
+              </View>
             </View>
 
+            {/* Route */}
+            <View style={styles.incomingRoute}>
+              <View style={styles.routeItem}>
+                <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
+                <Text style={styles.incomingRouteText} numberOfLines={2}>Pickup: {activeIncoming?.pickup_address}</Text>
+              </View>
+              <View style={styles.routeItem}>
+                <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
+                <Text style={styles.incomingRouteText} numberOfLines={2}>Drop: {activeIncoming?.dest_address}</Text>
+              </View>
+            </View>
+
+            {/* Action Buttons */}
             <View style={styles.incomingBtnRow}>
               <TouchableOpacity
                 style={styles.rejectBtn}
@@ -2191,9 +2876,12 @@ const DriverHomeScreen = ({ navigation }) => {
                 disabled={respondingPendingId === activeIncoming?.id}
               >
                 {respondingPendingId === activeIncoming?.id ? (
-                  <ActivityIndicator color={COLORS.white} />
+                  <ActivityIndicator color="#0F172A" />
                 ) : (
-                  <Text style={styles.acceptBtnText}>Accept Ride ({countdown}s)</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="checkmark-circle" size={18} color="#0F172A" />
+                    <Text style={styles.acceptBtnText}>Accept Ride ({countdown}s)</Text>
+                  </View>
                 )}
               </TouchableOpacity>
             </View>
@@ -2350,7 +3038,7 @@ const DriverHomeScreen = ({ navigation }) => {
 
       {/* ── Enterprise Ride Cancelled by Customer Alert Modal ── */}
       <Modal
-        visible={Boolean(cancelledNotice)}
+        visible={Boolean(cancelledNotice) && isFocused}
         animationType="fade"
         transparent={true}
         onRequestClose={handleDismissCancelledNotice}
@@ -2475,7 +3163,268 @@ const DriverHomeScreen = ({ navigation }) => {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+
+      {/* ── Complete Trip & Final Distance Modal ── */}
+      <Modal
+        visible={completeTripModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !isSubmittingComplete && setCompleteTripModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.otpModalCard, { maxHeight: '92%', width: '92%', paddingVertical: 18, paddingHorizontal: 16 }]}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
+              {/* Header */}
+              <View style={{ alignItems: 'center', marginBottom: 12 }}>
+                <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: '#ECFDF5', alignItems: 'center', justifyContent: 'center', marginBottom: 8, borderWidth: 2, borderColor: '#A7F3D0' }}>
+                  <Ionicons name="checkmark-done-circle" size={32} color="#10B981" />
+                </View>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: COLORS.textPrimary }}>Complete Trip & Final Bill</Text>
+                <Text style={{ fontSize: 12, color: COLORS.gray500, marginTop: 2 }}>Booking #{activeRide?.booking_ref || ''}</Text>
+              </View>
+
+              {/* Trip Subtype Badge */}
+              <View style={{ flexDirection: 'row', justifyContent: 'center', marginBottom: 12 }}>
+                <View style={{ backgroundColor: activeRide?.trip_sub_type === 'hourly' ? '#EFF6FF' : '#FEF3C7', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: activeRide?.trip_sub_type === 'hourly' ? '#BFDBFE' : '#FDE68A' }}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: activeRide?.trip_sub_type === 'hourly' ? '#1D4ED8' : '#B45309' }}>
+                    {activeRide?.trip_sub_type === 'hourly' ? `⏱️ Hourly Rental (${activeRide.package_hours || 1} hrs)` : `🚗 ${activeRide?.trip_type === 'round_trip' ? 'Round Trip' : 'Drop Taxi / Point-to-Point'}`}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Booked Route Distance */}
+              <View style={{ backgroundColor: '#F8FAFC', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 14 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={{ fontSize: 12, color: COLORS.gray600 }}>Initial Booked Distance:</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textPrimary }}>
+                    {Number(activeRide?.original_distance_km || activeRide?.distance_km || 0).toFixed(1)} km
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 12, color: COLORS.gray600 }}>Initial Booked Fare:</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textPrimary }}>
+                    ₹{Math.round(Number(activeRide?.base_package_fare || activeRide?.fare_estimate || activeRide?.final_fare || 0))}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Actual Distance Input Field */}
+              <View style={{ marginBottom: 14 }}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textPrimary, marginBottom: 4 }}>
+                  Actual Distance Traveled (KM)
+                </Text>
+                <Text style={{ fontSize: 11, color: COLORS.gray500, marginBottom: 8 }}>
+                  Customer route change or extra stops? Enter actual odometer KM:
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 10, borderWidth: 1.5, borderColor: COLORS.primary || '#FBBF24', paddingHorizontal: 12, height: 48 }}>
+                  <Ionicons name="speedometer-outline" size={20} color={COLORS.primary || '#D97706'} style={{ marginRight: 8 }} />
+                  <TextInput
+                    style={{ flex: 1, fontSize: 16, fontWeight: '700', color: COLORS.textPrimary }}
+                    value={enteredActualDistance}
+                    onChangeText={setEnteredActualDistance}
+                    keyboardType="numeric"
+                    placeholder="Enter actual km"
+                    placeholderTextColor="#94A3B8"
+                  />
+                  <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.gray500 }}>KM</Text>
+                </View>
+              </View>
+
+              {/* Live Fare Calculation Breakdown */}
+              {(() => {
+                const origKm = Number(activeRide?.original_distance_km || activeRide?.distance_km || 0)
+                const enteredKm = parseFloat(enteredActualDistance) || origKm
+                const isHourly = activeRide?.trip_sub_type === 'hourly' || Number(activeRide?.package_hours) > 0
+                const pkgHours = Number(activeRide?.package_hours) || 1
+                const includedKm = isHourly ? (pkgHours * (Number(activeRide?.hourly_package_km) || 10)) : origKm
+                const extraKm = Math.max(0, enteredKm - includedKm)
+                const perKmRate = Number(activeRide?.extra_km_rate || activeRide?.per_km_rate || 15)
+                const extraKmFare = Math.round(extraKm * perKmRate)
+
+                // Overtime for hourly
+                let extraMins = Number(activeRide?.extra_mins || 0)
+                let extraMinFare = Number(activeRide?.extra_min_fare || 0)
+                if (isHourly && activeRide?.started_at) {
+                  const startSec = Math.floor(new Date(activeRide.started_at).getTime() / 1000)
+                  const nowSec = Math.floor(Date.now() / 1000)
+                  const elapsedMins = Math.max(0, Math.floor((nowSec - startSec) / 60))
+                  const pkgMins = pkgHours * 60
+                  extraMins = Math.max(0, elapsedMins - pkgMins)
+                  const minRate = Number(activeRide?.extra_min_rate || 2)
+                  extraMinFare = Math.round(extraMins * minRate)
+                }
+
+                const baseFare = Number(activeRide?.base_package_fare || (isHourly ? (pkgHours * Number(activeRide?.hourly_rate || 250)) : (activeRide?.fare_estimate || activeRide?.final_fare || 0)))
+                const pickupCharge = (activeRide?.pickup_charge_accepted && activeRide?.pickup_charge) ? Number(activeRide.pickup_charge) : 0
+                const onlinePaid = Number(activeRide?.online_paid || 0)
+                const discount = Number(activeRide?.discount_amount || 0)
+                const totalFinal = Math.max(0, Math.round(baseFare + extraKmFare + extraMinFare + pickupCharge - discount))
+                const cashToCollect = Math.max(0, Math.round(totalFinal - onlinePaid))
+
+                return (
+                  <View style={{ backgroundColor: '#F0FDF4', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#BBF7D0', marginBottom: 16 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#166534', marginBottom: 8, letterSpacing: 0.5 }}>
+                      FINAL INVOICE PREVIEW
+                    </Text>
+
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={{ fontSize: 12, color: '#374151' }}>
+                        {isHourly ? `Base Package (${pkgHours} hrs / ${includedKm} km)` : `Booked Route (${origKm.toFixed(1)} km)`}
+                      </Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#111827' }}>₹{Math.round(baseFare)}</Text>
+                    </View>
+
+                    {isHourly && extraMins > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#D97706' }}>
+                          Overtime ({extraMins} mins @ ₹{activeRide?.extra_min_rate || 2}/m)
+                        </Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+ ₹{extraMinFare}</Text>
+                      </View>
+                    )}
+
+                    {extraKm > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#D97706' }}>
+                          Extra Distance ({extraKm.toFixed(1)} km @ ₹{perKmRate}/km)
+                        </Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+ ₹{extraKmFare}</Text>
+                      </View>
+                    )}
+
+                    {pickupCharge > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#7C3AED' }}>
+                          Pickup Charge ({activeRide?.extra_pickup_distance_km || 0} km extra)
+                        </Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C3AED' }}>+ ₹{Math.round(pickupCharge)}</Text>
+                      </View>
+                    )}
+
+                    {discount > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#059669' }}>Coupon Discount</Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#059669' }}>- ₹{Math.round(discount)}</Text>
+                      </View>
+                    )}
+
+                    <View style={{ height: 1, backgroundColor: '#A7F3D0', marginVertical: 8 }} />
+
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '800', color: '#111827' }}>Total Trip Bill</Text>
+                      <Text style={{ fontSize: 14, fontWeight: '900', color: '#111827' }}>₹{totalFinal}</Text>
+                    </View>
+
+                    {onlinePaid > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#2563EB' }}>Already Paid Online</Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#2563EB' }}>- ₹{Math.round(onlinePaid)}</Text>
+                      </View>
+                    )}
+
+                    <View style={{ backgroundColor: '#FEF3C7', padding: 8, borderRadius: 8, marginTop: 6, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={{ fontSize: 12, fontWeight: '800', color: '#92400E' }}>Collect Cash from Customer:</Text>
+                      <Text style={{ fontSize: 16, fontWeight: '900', color: '#B45309' }}>₹{cashToCollect}</Text>
+                    </View>
+                  </View>
+                )
+              })()}
+
+              {/* Action Buttons */}
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <TouchableOpacity
+                  style={{ flex: 1, paddingVertical: 13, borderRadius: 10, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' }}
+                  onPress={() => setCompleteTripModalVisible(false)}
+                  disabled={isSubmittingComplete}
+                >
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.gray600 }}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{ flex: 2, paddingVertical: 13, borderRadius: 10, backgroundColor: '#10B981', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }}
+                  onPress={handleConfirmCompleteTrip}
+                  disabled={isSubmittingComplete}
+                >
+                  {isSubmittingComplete ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark-done" size={18} color="#FFFFFF" />
+                      <Text style={{ fontSize: 14, fontWeight: '800', color: '#FFFFFF' }}>Complete & Collect</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Vehicle Details Modal Sheet (Quick Action) ── */}
+      <Modal
+        visible={vehicleModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setVehicleModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.detailSheet}>
+            <View style={styles.sheetHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="car-sport" size={20} color={COLORS.primary} />
+                <Text style={styles.sheetTitle}>Vehicle & Registration</Text>
+              </View>
+              <TouchableOpacity onPress={() => setVehicleModalVisible(false)} style={styles.sheetCloseBtn}>
+                <Ionicons name="close" size={20} color={COLORS.gray600} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Vehicle Badge Hero */}
+              <View style={styles.vehicleModalHero}>
+                <View style={styles.vehicleIconCircle}>
+                  <Ionicons name="car" size={32} color="#4F46E5" />
+                </View>
+                <Text style={styles.vehicleHeroTitle}>
+                  {driver?.make || 'Toyota'} {driver?.model || 'Etios'}
+                </Text>
+                <View style={styles.vehiclePlatePill}>
+                  <Text style={styles.vehiclePlateText}>{driver?.plate_no || 'TN-01-AB-1234'}</Text>
+                </View>
+              </View>
+
+              {/* Specs & Status Table */}
+              <View style={styles.sheetSection}>
+                <Text style={styles.sheetSectionTitle}>VEHICLE SPECIFICATIONS</Text>
+                <View style={styles.sheetRow}>
+                  <Text style={styles.sheetLabel}>Vehicle Type</Text>
+                  <Text style={styles.sheetValue}>{driver?.vehicle_type || 'Cab'}</Text>
+                </View>
+                <View style={styles.sheetRow}>
+                  <Text style={styles.sheetLabel}>Color</Text>
+                  <Text style={styles.sheetValue}>{driver?.color || 'White'}</Text>
+                </View>
+                <View style={styles.sheetRow}>
+                  <Text style={styles.sheetLabel}>Commercial Registration</Text>
+                  <Text style={[styles.sheetValue, { color: '#10B981', fontWeight: '800' }]}>Approved & Verified ✓</Text>
+                </View>
+                <View style={styles.sheetRow}>
+                  <Text style={styles.sheetLabel}>Operating Territory</Text>
+                  <Text style={styles.sheetValue}>{currentCity || 'Tamil Nadu'}</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.primaryActionBtn, { backgroundColor: COLORS.primary, marginTop: 12 }]}
+                onPress={() => setVehicleModalVisible(false)}
+              >
+                <Text style={[styles.primaryActionText, { color: '#0F172A', fontWeight: '900' }]}>Close Details</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    </View>
   )
 }
 
@@ -2502,9 +3451,10 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
+    overflow: 'visible',
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
+    position: 'relative',
   },
   avatarImg: {
     width: 44,
@@ -2515,6 +3465,16 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     color: COLORS.white,
+  },
+  avatarStatusPip: {
+    position: 'absolute',
+    bottom: -1,
+    right: -1,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: COLORS.white,
   },
   driverName: {
     fontSize: 16,
@@ -2539,6 +3499,25 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: COLORS.gray600,
     fontWeight: '600',
+  },
+  headerOnlinePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  headerOnlineDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  headerOnlineText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   notifBtn: {
     width: 38,
@@ -2576,24 +3555,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  onlineCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  /* Telemetry Card */
+  telemetryCard: {
+    backgroundColor: '#0F172A',
     marginHorizontal: 16,
     marginTop: 14,
     padding: 16,
     borderRadius: RADIUS.xl,
-    borderWidth: 1.5,
-    ...SHADOW.small,
+    borderWidth: 1,
+    borderColor: '#1E293B',
+    ...SHADOW.medium,
   },
-  onlineCardActive: {
-    backgroundColor: '#ECFDF5',
-    borderColor: '#A7F3D0',
-  },
-  onlineCardInactive: {
-    backgroundColor: COLORS.white,
-    borderColor: '#E2E8F0',
+  telemetryTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   statusBeacon: {
     width: 14,
@@ -2607,52 +3583,225 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
   },
-  onlineTitle: {
+  telemetryCardTitle: {
     fontSize: 14,
     fontWeight: '800',
-    color: COLORS.textPrimary,
+    color: '#FFFFFF',
+    letterSpacing: 0.2,
   },
-  onlineSub: {
+  telemetryCardSub: {
     fontSize: 11,
-    color: COLORS.gray600,
-    marginTop: 2,
+    color: '#94A3B8',
+    marginTop: 3,
+    lineHeight: 15,
   },
-  goalCard: {
+  telemetryDivider: {
+    height: 1,
+    backgroundColor: '#1E293B',
+    marginVertical: 12,
+  },
+  telemetryPillsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  telemetryPill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(30, 41, 59, 0.7)',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  telemetryPillText: {
+    flex: 1,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#CBD5E1',
+  },
+  /* Today's Summary Card */
+  todaySummaryCard: {
     backgroundColor: COLORS.white,
     marginHorizontal: 16,
     marginTop: 12,
-    padding: 14,
+    padding: 16,
     borderRadius: RADIUS.xl,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     ...SHADOW.small,
   },
-  goalTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.gray700,
+  todaySummaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
   },
-  goalValue: {
+  todayIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  todaySummaryTitle: {
     fontSize: 14,
-    fontWeight: '900',
-    color: '#10B981',
+    fontWeight: '800',
+    color: COLORS.textPrimary,
   },
-  progressBar: {
-    height: 8,
-    backgroundColor: '#F1F5F9',
-    borderRadius: 4,
+  todayGrossText: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  targetProgressContainer: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: RADIUS.lg,
+    padding: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  targetLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.gray600,
+  },
+  percentBadge: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  percentBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#15803D',
+  },
+  progressBarTrack: {
+    height: 7,
+    backgroundColor: '#E2E8F0',
+    borderRadius: 3.5,
     overflow: 'hidden',
   },
-  progressFill: {
+  progressBarFill: {
     height: '100%',
     backgroundColor: '#10B981',
-    borderRadius: 4,
+    borderRadius: 3.5,
   },
-  goalSub: {
+  targetSubText: {
     fontSize: 10,
     color: COLORS.gray500,
     fontWeight: '600',
     marginTop: 6,
+  },
+  todayMetricsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  todayMetricBox: {
+    flex: 1,
+    minWidth: '30%',
+    backgroundColor: '#F8FAFC',
+    borderRadius: RADIUS.md,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  todayMetricVal: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginTop: 2,
+  },
+  todayMetricLbl: {
+    fontSize: 9.5,
+    fontWeight: '600',
+    color: COLORS.gray500,
+    marginTop: 1,
+  },
+  /* Live Ride Summary Card */
+  liveRideSummaryCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: RADIUS.lg,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  liveRideCustomerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  liveRideAvatarWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  liveRideAvatarText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#D97706',
+  },
+  liveRideCustomerName: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.textPrimary,
+  },
+  livePaymentPill: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  livePaymentText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#15803D',
+  },
+  liveDistanceText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.gray600,
+  },
+  liveRoutePreview: {
+    backgroundColor: COLORS.white,
+    padding: 10,
+    borderRadius: RADIUS.md,
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 10,
+  },
+  resumeTripBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#FEF3C7',
+    paddingVertical: 10,
+    borderRadius: RADIUS.md,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  resumeTripBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#92400E',
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -3077,71 +4226,284 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.white,
   },
-  statsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    paddingHorizontal: 16,
-    gap: 10,
-  },
-  statBox: {
-    flex: 1,
-    minWidth: '45%',
-    backgroundColor: COLORS.white,
-    padding: 14,
-    borderRadius: RADIUS.xl,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    alignItems: 'center',
-    ...SHADOW.small,
-  },
-  statIconBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 6,
-  },
-  statVal: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: COLORS.textPrimary,
-  },
-  statLbl: {
-    fontSize: 11,
-    color: COLORS.gray500,
-    fontWeight: '600',
-    marginTop: 2,
-  },
+  /* Quick Actions Grid */
   quickGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     paddingHorizontal: 16,
-    gap: 10,
+    gap: 8,
   },
   quickTile: {
-    flex: 1,
-    minWidth: '30%',
+    width: '23%',
     backgroundColor: COLORS.white,
-    padding: 12,
-    borderRadius: RADIUS.lg,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+    borderRadius: RADIUS.xl,
     alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#E2E8F0',
     ...SHADOW.small,
   },
   quickIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 6,
   },
   quickLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     color: COLORS.textPrimary,
+    textAlign: 'center',
+  },
+  /* 7-Day Performance Weekly Bar Chart */
+  performanceCard: {
+    backgroundColor: COLORS.white,
+    marginHorizontal: 16,
+    padding: 16,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    ...SHADOW.small,
+  },
+  chartHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 16,
+  },
+  chartTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.gray600,
+  },
+  chartTotal: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginTop: 2,
+  },
+  chartPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: RADIUS.md,
+  },
+  chartPillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  chartBarsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    height: 90,
+    paddingBottom: 4,
+  },
+  chartBarCol: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  chartBarVal: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: COLORS.gray500,
+    marginBottom: 4,
+  },
+  chartBarTrack: {
+    width: 22,
+    height: 60,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 6,
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
+  },
+  chartBarFill: {
+    width: '100%',
+    borderRadius: 6,
+  },
+  chartBarLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.gray500,
+    marginTop: 6,
+  },
+  chartBarLabelActive: {
+    color: '#F59E0B',
+    fontWeight: '900',
+  },
+  perfStatsDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+    marginVertical: 14,
+  },
+  perfStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  perfStatItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  perfStatDividerV: {
+    width: 1,
+    height: 28,
+    backgroundColor: '#F1F5F9',
+  },
+  perfStatVal: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  perfStatLbl: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: COLORS.gray500,
+    marginTop: 2,
+  },
+  /* Recent Rides */
+  recentRideCard: {
+    backgroundColor: COLORS.white,
+    padding: 14,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 10,
+    ...SHADOW.small,
+  },
+  recentRideTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  recentRef: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.primary,
+    fontFamily: 'monospace',
+  },
+  recentStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  recentStatusText: {
+    fontSize: 9.5,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
+  recentRoute: {
+    backgroundColor: '#F8FAFC',
+    padding: 8,
+    borderRadius: RADIUS.md,
+    gap: 4,
+    marginBottom: 8,
+  },
+  recentRouteLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  recentRouteText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.gray700,
+  },
+  recentBottom: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  recentDate: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    color: COLORS.gray500,
+  },
+  recentFare: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  emptyRecentCard: {
+    backgroundColor: COLORS.white,
+    marginHorizontal: 16,
+    padding: 24,
+    borderRadius: RADIUS.xl,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...SHADOW.small,
+  },
+  emptyRecentTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.textPrimary,
+    marginTop: 8,
+  },
+  emptyRecentSub: {
+    fontSize: 11,
+    color: COLORS.gray500,
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  viewAllText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: COLORS.primary,
+  },
+  /* Vehicle Details Modal Sheet */
+  vehicleModalHero: {
+    alignItems: 'center',
+    paddingVertical: 18,
+    backgroundColor: '#F8FAFC',
+    borderRadius: RADIUS.xl,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  vehicleIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+  },
+  vehicleHeroTitle: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  vehiclePlatePill: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  vehiclePlateText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#92400E',
+    letterSpacing: 1,
+    fontFamily: 'monospace',
   },
   modalOverlay: {
     flex: 1,
@@ -3411,6 +4773,381 @@ const styles = StyleSheet.create({
     letterSpacing: 6,
     textAlign: 'center',
     marginBottom: 8,
+  },
+
+  /* Trip Status Timeline */
+  tripTimelineCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: RADIUS.lg,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  tripTimelineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  timelineStep: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  timelineNode: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timelineNodeDone: {
+    backgroundColor: '#10B981',
+  },
+  timelineNodePending: {
+    backgroundColor: '#E2E8F0',
+  },
+  timelineNodeInner: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#94A3B8',
+  },
+  timelineNodeLabelActive: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  timelineNodeLabelPending: {
+    fontSize: 9.5,
+    fontWeight: '600',
+    color: '#94A3B8',
+  },
+  timelineLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: '#E2E8F0',
+    marginHorizontal: 4,
+    marginBottom: 14,
+  },
+  timelineLineDone: {
+    backgroundColor: '#10B981',
+  },
+
+  /* Incoming Sheet Additional Elements */
+  countdownBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEE2E2',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  incomingCustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+    backgroundColor: '#F8FAFC',
+    padding: 10,
+    borderRadius: RADIUS.lg,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  incomingAvatarWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFC700',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  incomingCustName: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  custRatingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  custRatingText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  incomingPaymentText: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  incomingTypePill: {
+    backgroundColor: '#EDE9FE',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  incomingTypeText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#7C3AED',
+    letterSpacing: 0.3,
+  },
+  incomingFareRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+    paddingHorizontal: 4,
+  },
+  incomingFareLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.5,
+  },
+  incomingDistanceBadge: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  incomingCategoryText: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+    fontWeight: '600',
+  },
+
+  /* ── CITYONETAXI HERO BRAND HEADER ── */
+  heroContainer: {
+    backgroundColor: '#FFC700',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 22,
+    position: 'relative',
+    overflow: 'visible',
+  },
+  headerMapLines: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    opacity: 0.16,
+  },
+  mapGridLine1: {
+    position: 'absolute',
+    top: 20,
+    left: -40,
+    width: SCREEN_WIDTH + 80,
+    height: 18,
+    backgroundColor: '#FFFFFF',
+    transform: [{ rotate: '-12deg' }],
+  },
+  mapGridLine2: {
+    position: 'absolute',
+    top: 70,
+    left: -20,
+    width: SCREEN_WIDTH + 40,
+    height: 14,
+    backgroundColor: '#FFFFFF',
+    transform: [{ rotate: '18deg' }],
+  },
+  mapGridLine3: {
+    position: 'absolute',
+    bottom: 6,
+    left: -50,
+    width: SCREEN_WIDTH + 100,
+    height: 20,
+    backgroundColor: '#FFFFFF',
+    transform: [{ rotate: '-6deg' }],
+  },
+  mapGridBox1: {
+    position: 'absolute',
+    top: 30,
+    right: 50,
+    width: 50,
+    height: 40,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  heroTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    zIndex: 3,
+  },
+  heroBrandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  taxiBadgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: RADIUS.full,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 199, 0, 0.4)',
+  },
+  taxiBadgeText: {
+    color: '#FFC700',
+    fontSize: 11.5,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
+  driverTagPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(15, 23, 42, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: RADIUS.full,
+  },
+  driverTagText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: 0.5,
+  },
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  heroRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  heroActionBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    ...SHADOW.small,
+  },
+  notifBadgeDot: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    backgroundColor: '#DC2626',
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  notifBadgeDotText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  heroAvatarBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#0F172A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    position: 'relative',
+    ...SHADOW.small,
+  },
+  heroAvatarImg: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+  },
+  heroAvatarInitial: {
+    color: '#FFC700',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  heroOnlineDot: {
+    position: 'absolute',
+    bottom: -1,
+    right: -1,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  heroTextRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginTop: 2,
+  },
+  heroGreeting: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: -0.3,
+  },
+  heroHeadline: {
+    fontSize: 12.5,
+    color: '#334155',
+    fontWeight: '700',
+    marginTop: 1,
+  },
+  heroMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
+  heroRatingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  heroRatingText: {
+    fontSize: 10.5,
+    fontWeight: '900',
+    color: '#FFC700',
+  },
+  heroVehicleText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  heroCarGraphicWrap: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  miniCarBadge: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 })
 

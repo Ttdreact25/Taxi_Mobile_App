@@ -7,13 +7,27 @@ import * as Location from 'expo-location'
 import { bookingsAPI, bookingAPI } from '../api/api'
 
 // Major Tamil Nadu & South India Cities and Hubs for instant offline/zero-latency search
-const TAMIL_NADU_HUBS = [
+// Major Tamil Nadu & South India Cities and Hubs for instant offline/zero-latency search
+export const TAMIL_NADU_HUBS = [
   { name: 'Chennai Central Railway Station (MAS)', address: 'Kannappar Thidal, Periyamet, Chennai, Tamil Nadu', lat: 13.0827, lng: 80.2707, tag: 'Railway Station 🚆' },
   { name: 'Chennai International Airport (MAA)', address: 'GST Road, Meenambakkam, Chennai, Tamil Nadu', lat: 12.9941, lng: 80.1709, tag: 'Airport ✈️' },
   { name: 'CMBT Bus Terminus Koyambedu', address: 'Jawaharlal Nehru Rd, Koyambedu, Chennai, Tamil Nadu', lat: 13.0692, lng: 80.2057, tag: 'Bus Stand 🚌' },
   { name: 'Kilambakkam Bus Terminus (KCBT)', address: 'GST Road, Kilambakkam, Vandalur, Chennai, Tamil Nadu', lat: 12.8682, lng: 80.0772, tag: 'Bus Stand 🚌' },
-  { name: 'T. Nagar (Thyagaraya Nagar)', address: 'T. Nagar, Chennai, Tamil Nadu', lat: 13.0418, lng: 80.2341, tag: 'Shopping / Commercial 🛍️' },
+  { name: 'Tambaram Railway Station', address: 'GST Road, East Tambaram, Chennai, Tamil Nadu', lat: 12.9249, lng: 80.1197, tag: 'Railway Station 🚆' },
+  { name: 'Egmore Railway Station (MS)', address: 'Gandhi Irwin Rd, Egmore, Chennai, Tamil Nadu', lat: 13.0784, lng: 80.2612, tag: 'Railway Station 🚆' },
+  { name: 'T. Nagar (Ranganathan Street)', address: 'T. Nagar, Chennai, Tamil Nadu', lat: 13.0418, lng: 80.2341, tag: 'Shopping / Commercial 🛍️' },
   { name: 'Marina Beach', address: 'Kamarajar Salai, Triplicane, Chennai, Tamil Nadu', lat: 13.0500, lng: 80.2824, tag: 'Landmark 📍' },
+  { name: 'Phoenix Marketcity Mall Velachery', address: 'Velachery Rd, Indira Gandhi Nagar, Velachery, Chennai, Tamil Nadu', lat: 12.9918, lng: 80.2170, tag: 'Shopping Mall 🛍️' },
+  { name: 'Express Avenue Mall Royapettah', address: 'Club House Rd, Royapettah, Chennai, Tamil Nadu', lat: 13.0587, lng: 80.2642, tag: 'Shopping Mall 🛍️' },
+  { name: 'VR Chennai Mall Anna Nagar', address: 'Jawaharlal Nehru Rd, Anna Nagar West, Chennai, Tamil Nadu', lat: 13.0850, lng: 80.1982, tag: 'Shopping Mall 🛍️' },
+  { name: 'TIDEL Park (OMR)', address: 'Rajiv Gandhi Salai, Taramani, Chennai, Tamil Nadu', lat: 12.9892, lng: 80.2489, tag: 'IT Park / Tech Hub 🏢' },
+  { name: 'SIPCOT IT Park Siruseri', address: 'OMR, Siruseri, Chennai, Tamil Nadu', lat: 12.8258, lng: 80.2185, tag: 'IT Park / Tech Hub 🏢' },
+  { name: 'DLF Cybercity Porur', address: 'Mount Poonamallee Rd, Manapakkam, Porur, Chennai, Tamil Nadu', lat: 13.0232, lng: 80.1654, tag: 'IT Park / Tech Hub 🏢' },
+  { name: 'Olympia Tech Park Guindy', address: 'SIDCO Industrial Estate, Guindy, Chennai, Tamil Nadu', lat: 13.0118, lng: 80.2052, tag: 'IT Park / Tech Hub 🏢' },
+  { name: 'IIT Madras Adyar', address: 'Sardar Patel Rd, Guindy, Chennai, Tamil Nadu', lat: 12.9915, lng: 80.2337, tag: 'College / University 🎓' },
+  { name: 'Apollo Main Hospital Greams Road', address: 'Greams Lane, Thousand Lights, Chennai, Tamil Nadu', lat: 13.0583, lng: 80.2505, tag: 'Hospital 🏥' },
+  { name: 'MIOT International Hospital', address: 'Mount Poonamallee Rd, Manapakkam, Chennai, Tamil Nadu', lat: 13.0194, lng: 80.1772, tag: 'Hospital 🏥' },
+  { name: 'Kapaleeshwarar Temple Mylapore', address: 'Vadakku Mada Veedi, Mylapore, Chennai, Tamil Nadu', lat: 13.0335, lng: 80.2694, tag: 'Temple / Spiritual 🛕' },
   { name: 'Madurai City', address: 'Madurai, Tamil Nadu, India', lat: 9.9252, lng: 78.1198, tag: 'City 🏙️' },
   { name: 'Madurai Meenakshi Amman Temple', address: 'Madurai Main, Madurai, Tamil Nadu', lat: 9.9195, lng: 78.1193, tag: 'Temple / Spiritual 🛕' },
   { name: 'Madurai Junction Railway Station', address: 'Railway Colony, Madurai, Tamil Nadu', lat: 9.9168, lng: 78.1118, tag: 'Railway Station 🚆' },
@@ -40,6 +54,32 @@ const TAMIL_NADU_HUBS = [
   { name: 'Pondicherry (Puducherry)', address: 'Puducherry, India', lat: 11.9416, lng: 79.8083, tag: 'City 🏙️' },
   { name: 'Bengaluru (Bangalore)', address: 'Bengaluru, Karnataka, India', lat: 12.9716, lng: 77.5946, tag: 'City 🏙️' },
 ]
+
+/**
+ * Get popular destinations sorted by distance from current location
+ * Used to immediately show suggestions when destination input is clicked/focused
+ */
+export const getPopularDestinations = (userLat = null, userLng = null) => {
+  const uLat = userLat || 13.0827
+  const uLng = userLng || 80.2707
+  return TAMIL_NADU_HUBS.map(hub => {
+    const dist = calculateDistanceKm(uLat, uLng, hub.lat, hub.lng)
+    return {
+      place_id: `popular_${hub.lat}_${hub.lng}_${encodeURIComponent(hub.name)}`,
+      description: `${hub.name}, ${hub.address}`,
+      structured_formatting: {
+        main_text: hub.name,
+        secondary_text: hub.address,
+      },
+      geometry: { location: { lat: hub.lat, lng: hub.lng } },
+      latitude: hub.lat,
+      longitude: hub.lng,
+      distance_km: dist,
+      category_tag: hub.tag,
+      is_popular: true,
+    }
+  }).sort((a, b) => a.distance_km - b.distance_km)
+}
 
 // Haversine distance in KM
 export const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
@@ -216,7 +256,7 @@ export const searchPlacesService = async (query, userLat = null, userLng = null,
       const nTimeout = setTimeout(() => nController.abort(), 3500)
       const nRes = await fetch(nomUrl, {
         signal: nController.signal,
-        headers: { 'User-Agent': 'CityDropTaxiApp/1.0 (contact@toptechsoftwaresolutions.in)' }
+        headers: { 'User-Agent': 'CityOneTaxiApp/1.0 (contact@toptechsoftwaresolutions.in)' }
       })
       clearTimeout(nTimeout)
 
@@ -285,6 +325,8 @@ export const searchPlacesService = async (query, userLat = null, userLng = null,
   return results.sort((a, b) => (a.distance_km || 999) - (b.distance_km || 999))
 }
 
+const _reverseCache = new Map()
+
 /**
  * Universal Reverse Geocode Coordinates to Human-Readable Address
  * @param {number} latitude
@@ -296,9 +338,17 @@ export const reverseGeocodeService = async (latitude, longitude) => {
   const lng = parseFloat(longitude)
   if (!lat || !lng || isNaN(lat) || isNaN(lng)) return 'Select Location'
 
-  // 1. Try Expo Native Location Reverse Geocoding
+  const cacheKey = `${lat.toFixed(4)}_${lng.toFixed(4)}`
+  if (_reverseCache.has(cacheKey)) {
+    return _reverseCache.get(cacheKey)
+  }
+
+  // 1. Try Expo Native Location Reverse Geocoding with strict 1.5s race timeout
   try {
-    const results = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lng })
+    const results = await Promise.race([
+      Location.reverseGeocodeAsync({ latitude: lat, longitude: lng }),
+      new Promise((_, r) => setTimeout(() => r(null), 1500))
+    ])
     if (results && results.length > 0) {
       const r = results[0]
       const parts = [
@@ -308,24 +358,21 @@ export const reverseGeocodeService = async (latitude, longitude) => {
         r.city,
       ].filter(Boolean)
       const addr = parts.join(', ')
-      if (addr && addr.length > 3) return addr
+      if (addr && addr.length > 3) {
+        _reverseCache.set(cacheKey, addr)
+        return addr
+      }
     }
   } catch (e) {}
 
-  // 2. Try Backend Reverse Geocode API
-  try {
-    const backendRes = await bookingAPI.reverseGeocode(lat, lng)
-    const bAddr = backendRes.data?.formatted_address || backendRes.data?.address
-    if (bAddr && !bAddr.includes('Location near')) {
-      return bAddr
-    }
-  } catch (e) {}
-
-  // 3. Try BigDataCloud Reverse Geocoding (Fast, Free, No API key)
+  // 2. Try BigDataCloud Reverse Geocoding (Ultra fast ~150ms HTTP CDN response)
   try {
     const bdcUrl = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`
-    const bdcRes = await fetch(bdcUrl)
-    if (bdcRes.ok) {
+    const bdcRes = await Promise.race([
+      fetch(bdcUrl),
+      new Promise((_, r) => setTimeout(() => r(null), 1800))
+    ])
+    if (bdcRes && bdcRes.ok) {
       const bdcData = await bdcRes.json()
       const locality = bdcData.locality || bdcData.city || bdcData.principalSubdivision
       const admin = bdcData.localityInfo?.administrative || []
@@ -335,8 +382,20 @@ export const reverseGeocodeService = async (latitude, longitude) => {
 
       const parts = [neighborhood, locality, city, state].filter((val, idx, arr) => val && arr.indexOf(val) === idx)
       if (parts.length > 0) {
-        return parts.join(', ')
+        const addr = parts.join(', ')
+        _reverseCache.set(cacheKey, addr)
+        return addr
       }
+    }
+  } catch (e) {}
+
+  // 3. Try Backend Reverse Geocode API
+  try {
+    const backendRes = await bookingAPI.reverseGeocode(lat, lng)
+    const bAddr = backendRes.data?.formatted_address || backendRes.data?.address
+    if (bAddr && !bAddr.includes('Location near')) {
+      _reverseCache.set(cacheKey, bAddr)
+      return bAddr
     }
   } catch (e) {}
 
@@ -344,7 +403,7 @@ export const reverseGeocodeService = async (latitude, longitude) => {
   try {
     const nomUrl = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`
     const nomRes = await fetch(nomUrl, {
-      headers: { 'User-Agent': 'CityDropTaxiApp/1.0 (contact@toptechsoftwaresolutions.in)' }
+      headers: { 'User-Agent': 'CityOneTaxiApp/1.0 (contact@toptechsoftwaresolutions.in)' }
     })
     if (nomRes.ok) {
       const nomData = await nomRes.json()

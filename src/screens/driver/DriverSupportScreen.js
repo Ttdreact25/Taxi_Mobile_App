@@ -5,8 +5,9 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { supportAPI } from '../../api/api'
 import { COLORS } from '../../constants/theme'
+import { SkeletonList } from '../../components/common/Skeleton'
+import EmptyState from '../../components/common/EmptyState'
 
 const DriverSupportScreen = ({ navigation }) => {
   const [tickets, setTickets] = useState([])
@@ -119,13 +120,16 @@ const DriverSupportScreen = ({ navigation }) => {
         </View>
 
         {loading ? (
-          <ActivityIndicator size="small" color={COLORS.primary} style={{ marginTop: 20 }} />
+          <SkeletonList count={3} height={90} />
         ) : tickets.length === 0 ? (
-          <View style={styles.emptyWrap}>
-            <Ionicons name="chatbubbles-outline" size={44} color={COLORS.gray400} />
-            <Text style={styles.emptyTitle}>No Open Support Tickets</Text>
-            <Text style={styles.emptyDesc}>Have an inquiry regarding payouts, toll adjustments, or fare issues? Raise a ticket above.</Text>
-          </View>
+          <EmptyState
+            icon="chatbubbles-outline"
+            title="No Support Tickets"
+            subtitle="Have an inquiry regarding payouts, toll adjustments, or fare issues? Raise a ticket above."
+            buttonText="Raise Ticket"
+            onPress={() => setShowModal(true)}
+            compact
+          />
         ) : (
           tickets.map((t) => (
             <View key={t.id} style={styles.ticketCard}>
@@ -227,7 +231,7 @@ const styles = StyleSheet.create({
   refreshBtn: {
     padding: 6,
     borderRadius: 8,
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#FEF3C7',
   },
   scrollContent: {
     padding: 16,
@@ -405,21 +409,21 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   adminReplyBox: {
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#FFFBEB',
     borderRadius: 8,
     padding: 10,
     marginTop: 8,
     borderWidth: 1,
-    borderColor: '#DBEAFE',
+    borderColor: '#FDE68A',
   },
   adminReplyLabel: {
     fontSize: 10,
     fontWeight: '800',
-    color: '#1E40AF',
+    color: '#B45309',
   },
   adminReplyText: {
     fontSize: 11,
-    color: '#1E3A8A',
+    color: '#92400E',
     marginTop: 2,
   },
   modalOverlay: {

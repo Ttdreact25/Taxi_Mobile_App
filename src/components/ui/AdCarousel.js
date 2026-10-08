@@ -8,11 +8,10 @@ import {
   Dimensions,
   ImageBackground,
   Linking,
-  Alert,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
-import { adsAPI } from '../../api/api'
-import { COLORS, RADIUS, SPACING } from '../../constants/theme'
+import { adsAPI, resolveAssetUrl } from '../../api/api'
+import { COLORS, RADIUS } from '../../constants/theme'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 const CARD_MARGIN = 16
@@ -20,11 +19,11 @@ const CARD_GAP = 12
 const CARD_WIDTH = SCREEN_WIDTH - CARD_MARGIN * 2
 
 const PALETTES = [
-  { bg: '#1E1B4B', badgeBg: 'rgba(238, 242, 255, 0.20)', badgeBorder: 'rgba(255,255,255,0.25)', badgeText: '#E0E7FF', btnText: '#1E1B4B', icon: 'sparkles' },
-  { bg: '#064E3B', badgeBg: 'rgba(209, 250, 229, 0.20)', badgeBorder: 'rgba(255,255,255,0.25)', badgeText: '#A7F3D0', btnText: '#064E3B', icon: 'flash' },
-  { bg: '#1E3A8A', badgeBg: 'rgba(219, 234, 254, 0.20)', badgeBorder: 'rgba(255,255,255,0.25)', badgeText: '#BFDBFE', btnText: '#1E3A8A', icon: 'shield-checkmark' },
-  { bg: '#4C1D95', badgeBg: 'rgba(243, 232, 255, 0.20)', badgeBorder: 'rgba(255,255,255,0.25)', badgeText: '#E9D5FF', btnText: '#4C1D95', icon: 'gift' },
-  { bg: '#78350F', badgeBg: 'rgba(254, 215, 170, 0.20)', badgeBorder: 'rgba(255,255,255,0.25)', badgeText: '#FED7AA', btnText: '#78350F', icon: 'flame' },
+  { bg: '#4E9B80', badgeBg: 'rgba(255, 255, 255, 0.25)', badgeBorder: 'rgba(255,255,255,0.4)', badgeText: '#FFFFFF', btnBg: '#FFFFFF', btnText: '#1B4D3E', icon: 'sparkles' },
+  { bg: '#0F766E', badgeBg: 'rgba(255, 255, 255, 0.22)', badgeBorder: 'rgba(255,255,255,0.3)', badgeText: '#FFFFFF', btnBg: '#FFFFFF', btnText: '#0F766E', icon: 'flash' },
+  { bg: '#D97706', badgeBg: 'rgba(255, 255, 255, 0.25)', badgeBorder: 'rgba(255,255,255,0.4)', badgeText: '#FFFFFF', btnBg: '#1E293B', btnText: '#FFFFFF', icon: 'car-sport' },
+  { bg: '#0F172A', badgeBg: 'rgba(245, 158, 11, 0.25)', badgeBorder: 'rgba(245, 158, 11, 0.5)', badgeText: '#FFC700', btnBg: '#F59E0B', btnText: '#0F172A', icon: 'shield-checkmark' },
+  { bg: '#4C1D95', badgeBg: 'rgba(255, 255, 255, 0.22)', badgeBorder: 'rgba(255,255,255,0.3)', badgeText: '#FFFFFF', btnBg: '#FFFFFF', btnText: '#4C1D95', icon: 'gift' },
 ]
 
 const formatCategory = (cat = '') => {
@@ -50,7 +49,7 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
     return true
   })
 
-  // Start auto-slide (every 3.5s)
+  // Start smooth auto-slide (every 4 seconds)
   const startAutoSlide = useCallback(() => {
     stopAutoSlide()
     if (!filteredAds || filteredAds.length <= 1) return
@@ -68,7 +67,7 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
         } catch {}
         return nextIdx
       })
-    }, 3500)
+    }, 5000)
   }, [filteredAds])
 
   const stopAutoSlide = () => {
@@ -81,7 +80,6 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
     return () => stopAutoSlide()
   }, [startAutoSlide])
 
-  // Pause on user touch, resume 3.5s after interaction finishes
   const handleScrollBegin = () => {
     isInteracting.current = true
     stopAutoSlide()
@@ -98,7 +96,7 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
     stopAutoSlide()
     resumeTimer.current = setTimeout(() => {
       startAutoSlide()
-    }, 3500)
+    }, 5000)
   }
 
   const handleBannerPress = (ad) => {
@@ -112,7 +110,6 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
     }
 
     if (navigation && redirect) {
-      // Map standard action names
       const routeMap = {
         Booking: 'Booking',
         Book: 'Booking',
@@ -138,7 +135,6 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
       } catch {}
     }
 
-    // Default Fallback
     if (navigation) {
       if (userRole === 'customer') {
         navigation.navigate('Booking')
@@ -172,7 +168,8 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
         renderItem={({ item, index }) => {
           const theme = PALETTES[index % PALETTES.length]
           const categoryTitle = formatCategory(item.category)
-          const imgUrl = item.banner_image_url || item.banner_image
+          const rawImg = item.banner_image_url || item.banner_image
+          const imgUrl = resolveAssetUrl(rawImg) || rawImg
           const hasImage = Boolean(imgUrl)
 
           const renderCardContent = () => (
@@ -191,8 +188,10 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
               </View>
 
               {/* Title & Subtitle */}
-              <View style={{ marginVertical: 4 }}>
-                <Text style={styles.bannerTitle} numberOfLines={1}>{item.title || 'Special Promotion'}</Text>
+              <View style={{ marginVertical: 6 }}>
+                <Text style={styles.bannerTitle} numberOfLines={1}>
+                  {item.title || 'Special Promotion'}
+                </Text>
                 <Text style={styles.bannerSub} numberOfLines={2}>
                   {item.description || 'Tap to explore exclusive partner rewards & offers.'}
                 </Text>
@@ -200,7 +199,7 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
 
               {/* Bottom CTA Action Button */}
               <View style={styles.ctaRow}>
-                <View style={styles.ctaBtn}>
+                <View style={[styles.ctaBtn, { backgroundColor: theme.btnBg }]}>
                   <Text style={[styles.ctaBtnText, { color: theme.btnText }]}>
                     {item.cta_text || (userRole === 'customer' ? 'Claim Offer' : 'View Bonus')}
                   </Text>
@@ -235,7 +234,7 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
         }}
       />
 
-      {/* Modern Center Expanding Indicator Dots */}
+      {/* Professional Center Expanding Indicator Dots */}
       {filteredAds.length > 1 && (
         <View style={styles.paginationRow}>
           {filteredAds.map((_, idx) => (
@@ -255,20 +254,20 @@ const AdCarousel = ({ ads = [], userRole = 'customer', navigation }) => {
 
 const styles = StyleSheet.create({
   container: {
-    marginVertical: 4,
+    marginVertical: 6,
   },
   flatListContent: {
     paddingHorizontal: CARD_MARGIN,
     gap: CARD_GAP,
   },
   bannerCard: {
-    height: 160,
+    height: 154,
     borderRadius: RADIUS.xxl,
     overflow: 'hidden',
     position: 'relative',
     shadowColor: '#0F172A',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.14,
+    shadowOpacity: 0.12,
     shadowRadius: 10,
     elevation: 4,
   },
@@ -281,7 +280,7 @@ const styles = StyleSheet.create({
   },
   overlayWithImage: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.62)',
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
   },
   bannerContent: {
     flex: 1,
@@ -324,8 +323,8 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
     color: '#FFFFFF',
-    letterSpacing: 0.2,
-    textShadowColor: 'rgba(0, 0, 0, 0.7)',
+    letterSpacing: 0.1,
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
@@ -335,7 +334,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
     lineHeight: 16,
     fontWeight: '600',
-    textShadowColor: 'rgba(0, 0, 0, 0.7)',
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
   },
@@ -346,7 +345,6 @@ const styles = StyleSheet.create({
   ctaBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: RADIUS.full,
@@ -366,7 +364,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 6,
-    marginTop: 10,
+    marginTop: 8,
   },
   dot: {
     height: 5,

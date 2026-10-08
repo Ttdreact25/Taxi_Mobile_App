@@ -8,10 +8,12 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Modal,
+  TextInput,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { paymentAPI } from '../../api/api'
+import { paymentAPI, reviewsAPI, resolveAssetUrl } from '../../api/api'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 
 const DriverPaymentScreen = ({ navigation, route }) => {
@@ -21,6 +23,11 @@ const DriverPaymentScreen = ({ navigation, route }) => {
   const [confirming, setConfirming] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [driverQR, setDriverQR] = useState(null)
+  const [showReviewModal, setShowReviewModal] = useState(false)
+  const [customerRating, setCustomerRating] = useState(5)
+  const [customerComment, setCustomerComment] = useState('')
+  const [submittingReview, setSubmittingReview] = useState(false)
+  const [hasReviewedCustomer, setHasReviewedCustomer] = useState(false)
   const pollRef = useRef(null)
 
   const loadStatus = useCallback(async (silent = false) => {
@@ -66,6 +73,9 @@ const DriverPaymentScreen = ({ navigation, route }) => {
         setConfirmed(true)
         Alert.alert('Payment Received 🎉', 'Cash payment confirmed! Earnings recorded in your wallet.')
         loadStatus(true)
+        setTimeout(() => {
+          setShowReviewModal(true)
+        }, 1200)
       } else {
         Alert.alert('Error', res.data?.message || 'Could not confirm cash payment.')
       }
@@ -84,6 +94,9 @@ const DriverPaymentScreen = ({ navigation, route }) => {
         setConfirmed(true)
         Alert.alert('Payment Received 🎉', 'UPI QR payment confirmed! Earnings recorded.')
         loadStatus(true)
+        setTimeout(() => {
+          setShowReviewModal(true)
+        }, 1200)
       } else {
         Alert.alert('Error', res.data?.message || 'Could not confirm QR payment.')
       }
@@ -91,6 +104,38 @@ const DriverPaymentScreen = ({ navigation, route }) => {
       Alert.alert('Error', 'Payment confirmation failed.')
     } finally {
       setConfirming(false)
+    }
+  }
+
+  const handleSubmitCustomerReview = async () => {
+    const booking = data?.booking
+    if (!booking) return
+    setSubmittingReview(true)
+    try {
+      const res = await reviewsAPI.submit({
+        booking_id: booking.id,
+        reviewee_id: booking.customer_id,
+        role: 'customer',
+        rating: customerRating,
+        comment: customerComment.trim() || undefined,
+      })
+      if (res.data?.status === 'success') {
+        setHasReviewedCustomer(true)
+        setShowReviewModal(false)
+        Alert.alert(
+          'Feedback Submitted ⭐',
+          `Thank you for rating ${booking.customer_name || 'the passenger'}!`,
+          [{ text: 'OK', onPress: () => navigation.navigate('DashboardHome') }]
+        )
+      } else {
+        setShowReviewModal(false)
+        navigation.navigate('DashboardHome')
+      }
+    } catch {
+      setShowReviewModal(false)
+      navigation.navigate('DashboardHome')
+    } finally {
+      setSubmittingReview(false)
     }
   }
 
@@ -195,10 +240,65 @@ const DriverPaymentScreen = ({ navigation, route }) => {
         {/* Fare Breakdown Card */}
         <View style={styles.card}>
           <Text style={styles.cardSectionTitle}>PAYMENT & COMMISSION BREAKDOWN</Text>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Total Trip Fare</Text>
-            <Text style={styles.detailValue}>₹{totalFare}</Text>
-          </View>
+          {Boolean(booking.trip_sub_type === 'hourly' || Number(booking.package_hours) > 0) ? (
+            <>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Hourly Package ({booking.package_hours || 1} hrs)</Text>
+                <Text style={styles.detailValue}>₹{Math.round(Number(booking.base_package_fare || (booking.package_hours * (booking.hourly_rate || 250))))}</Text>
+              </View>
+              {Number(booking.extra_mins) > 0 && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Overtime ({booking.extra_mins} mins @ ₹{booking.extra_min_rate || 2}/min)</Text>
+                  <Text style={[styles.detailValue, { color: '#D97706', fontWeight: '700' }]}>+ ₹{Math.round(Number(booking.extra_min_fare || (booking.extra_mins * (booking.extra_min_rate || 2))))}</Text>
+                </View>
+              )}
+              {Number(booking.extra_km) > 0 && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>Extra Distance ({Number(booking.extra_km).toFixed(1)} km @ ₹{booking.extra_km_rate || 15}/km)</Text>
+                  <Text style={[styles.detailValue, { color: '#D97706', fontWeight: '700' }]}>+ ₹{Math.round(Number(booking.extra_km_fare || (booking.extra_km * (booking.extra_km_rate || 15))))}</Text>
+                </View>
+              )}
+              <View style={styles.detailRow}>
+                <Text style={[styles.detailLabel, { fontWeight: '700' }]}>Total Trip Fare</Text>
+                <Text style={[styles.detailValue, { fontWeight: '800' }]}>₹{totalFare}</Text>
+              </View>
+            </>
+          ) : (
+            <>
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>
+                  Booked Route Fare ({Number(booking.original_distance_km || (Number(booking.extra_km) > 0 ? (Number(booking.distance_km) - Number(booking.extra_km)) : booking.distance_km) || 0).toFixed(1)} km)
+                </Text>
+                <Text style={styles.detailValue}>
+                  ₹{Math.max(0, Math.round(totalFare - Number(booking.extra_km_fare || 0) - Number(booking.pickup_charge || 0) + discountAmount))}
+                </Text>
+              </View>
+              {Number(booking.extra_km) > 0 && (
+                <View style={styles.detailRow}>
+                  <Text style={styles.detailLabel}>
+                    Extra Route Distance ({Number(booking.extra_km).toFixed(1)} km @ ₹{booking.extra_km_rate || booking.per_km_rate || 15}/km)
+                  </Text>
+                  <Text style={[styles.detailValue, { color: '#D97706', fontWeight: '700' }]}>
+                    + ₹{Math.round(Number(booking.extra_km_fare))}
+                  </Text>
+                </View>
+              )}
+              <View style={styles.detailRow}>
+                <Text style={[styles.detailLabel, { fontWeight: '700' }]}>Total Trip Fare</Text>
+                <Text style={[styles.detailValue, { fontWeight: '800' }]}>₹{totalFare}</Text>
+              </View>
+            </>
+          )}
+          {Number(booking.pickup_charge) > 0 && (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>
+                Pickup Charge (Extra {booking.extra_pickup_distance_km || ((Number(booking.pickup_distance_km) > 2) ? (Number(booking.pickup_distance_km) - 2).toFixed(1) : 0)} km)
+              </Text>
+              <Text style={[styles.detailValue, { color: '#7C3AED', fontWeight: '700' }]}>
+                + ₹{Math.round(Number(booking.pickup_charge))}
+              </Text>
+            </View>
+          )}
           {discountAmount > 0 && (
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Coupon Discount</Text>
@@ -270,13 +370,124 @@ const DriverPaymentScreen = ({ navigation, route }) => {
         {/* Finish / Return to Dashboard Button */}
         <TouchableOpacity
           style={styles.doneBtn}
-          onPress={() => navigation.navigate('DashboardHome')}
+          onPress={() => {
+            if (!hasReviewedCustomer && isPaid) {
+              setShowReviewModal(true)
+            } else {
+              navigation.navigate('DashboardHome')
+            }
+          }}
         >
           <Text style={styles.doneBtnText}>
-            {isPaid ? 'Done & Return to Dashboard' : 'Skip / Return to Dashboard'}
+            {isPaid ? (hasReviewedCustomer ? 'Done & Return to Dashboard' : 'Rate Rider & Finish →') : 'Skip / Return to Dashboard'}
           </Text>
         </TouchableOpacity>
       </ScrollView>
+
+      {/* ── Driver Reviews Customer Modal ── */}
+      <Modal
+        visible={showReviewModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => {
+          setShowReviewModal(false)
+          navigation.navigate('DashboardHome')
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.reviewModalCard}>
+            <View style={styles.reviewHeader}>
+              <View style={styles.starBadgeIcon}>
+                <Ionicons name="star" size={24} color="#F59E0B" />
+              </View>
+              <Text style={styles.reviewModalTitle}>Rate Your Passenger</Text>
+              <Text style={styles.reviewModalSub}>Help build a trusted CityOneTaxi community</Text>
+            </View>
+
+            {/* Customer Snapshot */}
+            <View style={styles.passengerSnapshot}>
+              <View style={styles.passengerAvatar}>
+                {booking?.customer_avatar ? (
+                  <Image source={{ uri: resolveAssetUrl(booking.customer_avatar) }} style={styles.avatarImg} />
+                ) : (
+                  <Text style={styles.avatarLetter}>
+                    {((booking?.customer_name || 'P')?.[0] || 'P').toUpperCase()}
+                  </Text>
+                )}
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.passengerName}>{booking?.customer_name || 'Passenger'}</Text>
+                <Text style={styles.passengerBookingRef}>Trip #{booking?.booking_ref || ''}</Text>
+              </View>
+            </View>
+
+            {/* Star Selector */}
+            <View style={styles.starRow}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <TouchableOpacity
+                  key={star}
+                  onPress={() => setCustomerRating(star)}
+                  style={{ padding: 6 }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={star <= customerRating ? 'star' : 'star-outline'}
+                    size={38}
+                    color="#F59E0B"
+                  />
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={styles.ratingDescriptor}>
+              {customerRating === 5 ? '⭐⭐⭐⭐⭐ Excellent Passenger' :
+               customerRating === 4 ? '⭐⭐⭐⭐ Good Passenger' :
+               customerRating === 3 ? '⭐⭐⭐ Average Experience' :
+               customerRating === 2 ? '⭐⭐ Below Expectations' : '⭐ Poor Experience'}
+            </Text>
+
+            {/* Feedback TextInput */}
+            <View style={{ width: '100%', marginTop: 12, marginBottom: 16 }}>
+              <Text style={styles.inputLabel}>Feedback & Notes (Optional):</Text>
+              <TextInput
+                style={styles.reviewInput}
+                placeholder="E.g., On-time at pickup, polite behavior, smooth drop-off..."
+                placeholderTextColor="#94A3B8"
+                multiline
+                numberOfLines={3}
+                value={customerComment}
+                onChangeText={setCustomerComment}
+              />
+            </View>
+
+            {/* Action Buttons */}
+            <TouchableOpacity
+              style={[styles.submitReviewBtn, submittingReview && { opacity: 0.7 }]}
+              onPress={handleSubmitCustomerReview}
+              disabled={submittingReview}
+            >
+              {submittingReview ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <>
+                  <Ionicons name="checkmark-circle" size={18} color="#0F172A" style={{ marginRight: 6 }} />
+                  <Text style={styles.submitReviewBtnText}>Submit Passenger Rating ⭐</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.skipReviewBtn}
+              onPress={() => {
+                setShowReviewModal(false)
+                navigation.navigate('DashboardHome')
+              }}
+              disabled={submittingReview}
+            >
+              <Text style={styles.skipReviewBtnText}>Skip for Now</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -372,7 +583,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 20,
@@ -488,7 +699,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     padding: 14,
     borderRadius: RADIUS.lg,
   },
@@ -507,6 +718,141 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.gray600,
     fontWeight: '700',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    justifyContent: 'flex-end',
+  },
+  reviewModalCard: {
+    backgroundColor: COLORS.white,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 22,
+    alignItems: 'center',
+    ...SHADOW.large,
+  },
+  reviewHeader: {
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  starBadgeIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
+  },
+  reviewModalTitle: {
+    fontSize: 19,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  reviewModalSub: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  passengerSnapshot: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 14,
+  },
+  passengerAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: COLORS.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarImg: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
+  avatarLetter: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: COLORS.white,
+  },
+  passengerName: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  passengerBookingRef: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  starRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginVertical: 4,
+  },
+  ratingDescriptor: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#D97706',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  inputLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 6,
+  },
+  reviewInput: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 13,
+    color: '#0F172A',
+    minHeight: 70,
+    textAlignVertical: 'top',
+  },
+  submitReviewBtn: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFC700',
+    paddingVertical: 14,
+    borderRadius: 14,
+    ...SHADOW.small,
+  },
+  submitReviewBtnText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  skipReviewBtn: {
+    marginTop: 10,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  skipReviewBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#94A3B8',
   },
 })
 

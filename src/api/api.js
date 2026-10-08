@@ -64,7 +64,7 @@ export const clearFcmToken = async () => {
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 15000,
+  timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -167,6 +167,14 @@ export const vehicleAPI = {
 }
 export const vehicleTypesAPI = vehicleAPI
 
+// ── Cities & Location Detection ───────────────────────────────
+export const citiesAPI = {
+  list:           (params) => api.get('/?endpoint=cities&action=list', { params }),
+  detect:         (lat, lng) => api.get(`/?endpoint=cities&action=detect&lat=${lat}&lng=${lng}`),
+  detectLocation: (lat, lng) => api.get(`/?endpoint=cities&action=detect&lat=${lat}&lng=${lng}`),
+  getCity:        (id) => api.get(`/?endpoint=cities&action=get&id=${id}`),
+}
+
 // ── Bookings ──────────────────────────────────────────────────
 export const bookingAPI = {
   fareEstimate:       (data) => api.post('/?endpoint=bookings&action=fare_estimate', data),
@@ -176,6 +184,7 @@ export const bookingAPI = {
   driverTrips:        (params) => api.get('/?endpoint=bookings&action=driver_trips', { params }),
   updateStatus:       (id, data) => api.put(`/?endpoint=bookings&action=update_status&id=${id}`, data),
   cancel:             (id, data) => api.delete(`/?endpoint=bookings&action=cancel&id=${id}`, { data }),
+  acceptPickupCharge: (id) => api.post(`/?endpoint=bookings&action=accept_pickup_charge&id=${id}`),
   autocomplete:       (query, lat, lng, sessionToken) => api.get(`/?endpoint=bookings&action=places_autocomplete&query=${encodeURIComponent(query)}${lat ? `&lat=${lat}&lng=${lng}` : ''}${sessionToken ? `&session_token=${sessionToken}` : ''}`),
   placesAutocomplete: (query, lat, lng, sessionToken) => api.get(`/?endpoint=bookings&action=places_autocomplete&query=${encodeURIComponent(query)}${lat ? `&lat=${lat}&lng=${lng}` : ''}${sessionToken ? `&session_token=${sessionToken}` : ''}`),
   placeDetails:       (placeId, sessionToken) => api.get(`/?endpoint=bookings&action=place_details&place_id=${encodeURIComponent(placeId)}${sessionToken ? `&session_token=${sessionToken}` : ''}`),
@@ -204,6 +213,7 @@ export const driverAPI = {
   pendingRides:   () => api.get('/?endpoint=driver&action=pending_rides'),
   dismissCancelledTrip: (tripId) => api.post('/?endpoint=driver&action=dismiss_cancellation', { trip_id: tripId }),
   respondLongTrip:(id, action, reason) => api.post('/?endpoint=long_trips&action=respond_long_trip', { id, action, reason }),
+  updateProfile:  (data) => api.post('/?endpoint=driver&action=update_profile', data),
   getDocuments: async () => {
     try {
       const res = await api.get('/?endpoint=driver&action=get_documents')
@@ -216,6 +226,7 @@ export const driverAPI = {
     const anyDoc = data.license_front_image || data.license_front_url ||
                    data.aadhaar_front_image || data.aadhaar_front_url ||
                    data.rc_book_image || data.rc_book_url ||
+                   data.permit_image || data.permit_url ||
                    data.insurance_image || data.vehicle_photo ||
                    data.profile_selfie || data.avatar || ''
 
@@ -224,6 +235,7 @@ export const driverAPI = {
 
     const payload = {
       ...data,
+      service_types: data.service_types || undefined,
       // DL aliases
       license_no: data.license_no || data.dl_number || 'TN-01-2026-DRV',
       license_expiry: data.license_expiry || data.dl_expiry || '',
@@ -238,15 +250,31 @@ export const driverAPI = {
       aadhaar_front: data.aadhaar_front_image || data.aadhaar_front_url || anyDoc,
       aadhaar_back_image: data.aadhaar_back_image || data.aadhaar_back_url || data.aadhaar_back || '',
       aadhaar_back: data.aadhaar_back_image || data.aadhaar_back_url || '',
-      // RC Book aliases
+      // RC Book aliases (No expiry required)
       rc_book_image: data.rc_book_image || data.rc_book_url || data.rc_book || '',
       rc_book: data.rc_book_image || data.rc_book_url || '',
       rc_back_image: data.rc_back_image || data.rc_back_url || data.rc_back || '',
       rc_back: data.rc_back_image || data.rc_back_url || '',
-      // Insurance & Vehicle aliases
+      rc_expiry: data.rc_expiry || data.rc_expire_date || '',
+      // Commercial Vehicle Permit & Expiry
+      permit_image: data.permit_image || data.permit_url || data.permit || '',
+      permit: data.permit_image || data.permit_url || '',
+      permit_expiry: data.permit_expiry || data.permit_expire_date || '',
+      // Insurance & Vehicle aliases & Expiry
       insurance_image: data.insurance_image || data.insurance_url || data.insurance || '',
       insurance: data.insurance_image || data.insurance_url || '',
+      insurance_expiry: data.insurance_expiry || data.insurance_expire_date || '',
       vehicle_photo: data.vehicle_photo || data.vehicle_photo_url || '',
+      // Digital Signature
+      signature_image: data.signature_image || data.signature || data.digital_signature || '',
+      signature: data.signature_image || data.signature || '',
+      // 5 Car Photos
+      car_images: data.car_images || [],
+      car_image_1: data.car_image_1 || '',
+      car_image_2: data.car_image_2 || '',
+      car_image_3: data.car_image_3 || '',
+      car_image_4: data.car_image_4 || '',
+      car_image_5: data.car_image_5 || '',
       police_verification_image: data.police_verification_image || data.police_verification_url || '',
       // Biometrics / Photos (fallback to anySelfie so Hostinger check passes)
       profile_selfie: data.profile_selfie || data.profile_selfie_url || anySelfie,
@@ -310,8 +338,14 @@ export const customerAPI = {
 
 // ── Coupons ───────────────────────────────────────────────────
 export const couponAPI = {
-  validate: (code, fare, vTypeId) => api.post('/?endpoint=coupons&action=validate', { code, fare, vehicle_type_id: vTypeId }),
-  active:   () => api.get('/?endpoint=coupons&action=active'),
+  validate: (dataOrCode, fare, vTypeId) => {
+    if (typeof dataOrCode === 'object' && dataOrCode !== null) {
+      return api.post('/?endpoint=coupons&action=validate', dataOrCode)
+    }
+    return api.post('/?endpoint=coupons&action=validate', { code: dataOrCode, fare, vehicle_type_id: vTypeId })
+  },
+  active: (params) => api.get('/?endpoint=coupons&action=active', { params }),
+  list:   (params) => api.get('/?endpoint=coupons&action=list', { params }),
 }
 export const couponsAPI = couponAPI
 
@@ -332,7 +366,13 @@ export const supportAPI = {
 // ── Advertisements & Banners ──────────────────────────────────
 export const adsAPI = {
   list:       (params) => api.get('/?endpoint=ads&action=list', { params }),
-  trackClick: (data) => api.post('/?endpoint=ads&action=track_click', data),
+  get:        (id) => api.get(`/?endpoint=ads&action=get&id=${id}`),
+  trackClick: (adIdOrData, userRole = 'customer') => {
+    if (typeof adIdOrData === 'object' && adIdOrData !== null) {
+      return api.post('/?endpoint=ads&action=track_click', adIdOrData)
+    }
+    return api.post('/?endpoint=ads&action=track_click', { ad_id: adIdOrData, user_role: userRole })
+  },
 }
 
 // ── Payment Processing ────────────────────────────────────────
@@ -348,8 +388,10 @@ export const paymentAPI = {
 
 // ── Reviews & Driver Ratings ─────────────────────────────────
 export const reviewsAPI = {
-  submit: (data) => api.post('/?endpoint=reviews&action=submit', data),
-  list:   (params) => api.get('/?endpoint=reviews&action=list', { params }),
+  submit:      (data) => api.post('/?endpoint=reviews&action=submit', data),
+  getStatus:   (bookingId) => api.get(`/?endpoint=reviews&action=status&booking_id=${bookingId}`),
+  listForUser: (userId, role) => api.get(`/?endpoint=reviews&action=user&user_id=${userId}&role=${role || 'driver'}`),
+  list:        (params) => api.get('/?endpoint=reviews&action=list', { params }),
 }
 
 // ── Long Trips & Shared Rides ────────────────────────────────
@@ -388,13 +430,6 @@ export const longTripAPI = {
   respondScheduledTrip:   (id, action, reason) => api.post('/?endpoint=driver&action=respond_scheduled_trip', { id, action, reason }),
 }
 
-// ── Cities & Location Detection ───────────────────────────────
-export const citiesAPI = {
-  list:           () => api.get('/?endpoint=cities&action=list'),
-  detectLocation: (lat, lng) => api.get(`/?endpoint=cities&action=detect&lat=${lat}&lng=${lng}`),
-  getCity:        (id) => api.get(`/?endpoint=cities&action=get&id=${id}`),
-}
-
 // ── Drivers Proximity ─────────────────────────────────────────
 export const driversAPI = {
   getNearby: (lat, lng, vTypeId, radius = 15) => api.get(`/?endpoint=drivers&action=nearby&lat=${lat}&lng=${lng}${vTypeId ? `&vehicle_type_id=${vTypeId}` : ''}&radius=${radius}`),
@@ -404,6 +439,20 @@ export const driversAPI = {
 export const settingsAPI = {
   get:  (key) => api.get(`/?endpoint=settings&action=get&key=${key}`),
   list: () => api.get('/?endpoint=settings&action=list'),
+  getAll: () => api.get('/?endpoint=settings'),
+  getDriverTarget: async () => {
+    try {
+      const res = await api.get('/?endpoint=settings')
+      const s = res.data?.settings || {}
+      return {
+        daily_target: Number(s.driver_daily_target || 2000),
+        daily_target_trips: Number(s.driver_daily_target_trips || 10),
+        target_bonus: Number(s.driver_target_bonus || 200),
+      }
+    } catch {
+      return { daily_target: 2000, daily_target_trips: 10, target_bonus: 200 }
+    }
+  },
 }
 
 // ── File Uploads & Multipart Helpers ──────────────────────────

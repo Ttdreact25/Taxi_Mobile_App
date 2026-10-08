@@ -1,14 +1,411 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, Image, ActivityIndicator, Alert, Platform, RefreshControl, Modal
+  TextInput, Image, ActivityIndicator, Alert, Platform, RefreshControl, Modal, PanResponder,
+  Linking
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
-import { driverAPI, uploadAPI, resolveAssetUrl } from '../../api/api'
+import { driverAPI, longTripAPI, uploadAPI, settingsAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { COLORS } from '../../constants/theme'
 import { useAuth } from '../../context/AuthContext'
+import { WebView } from 'react-native-webview'
+
+// ── Interactive Professional Finger Drawing Pad for Driver's Manual Digital Signature ──
+const DigitalSignaturePad = ({
+  signatureValue,
+  onSignatureChange,
+  onUploadPhoto,
+  onDrawingStart,
+  onDrawingEnd,
+}) => {
+  const [strokes, setStrokes] = useState([])
+  const [activeMode, setActiveMode] = useState('draw') // 'draw' | 'upload'
+  const [padWidth, setPadWidth] = useState(340)
+  const [padHeight, setPadHeight] = useState(190)
+  const [isCurrentlyDrawing, setIsCurrentlyDrawing] = useState(false)
+
+  const padWidthRef = useRef(340)
+  const padHeightRef = useRef(190)
+  const isDrawing = useRef(false)
+  const currentStroke = useRef([])
+  const allStrokesRef = useRef([])
+
+  const onDrawingStartRef = useRef(onDrawingStart)
+  const onDrawingEndRef = useRef(onDrawingEnd)
+  const onSignatureChangeRef = useRef(onSignatureChange)
+
+  useEffect(() => {
+    onDrawingStartRef.current = onDrawingStart
+    onDrawingEndRef.current = onDrawingEnd
+    onSignatureChangeRef.current = onSignatureChange
+  })
+
+  const exportSvgSignature = (strokeList) => {
+    if (!strokeList || strokeList.length === 0) return
+    let pathData = ''
+    strokeList.forEach(seg => {
+      if (!seg || seg.length === 0) return
+      if (seg.length === 1) {
+        pathData += ` M ${seg[0].x} ${seg[0].y} L ${seg[0].x + 0.5} ${seg[0].y}`
+        return
+      }
+      pathData += ` M ${seg[0].x} ${seg[0].y}`
+      for (let i = 1; i < seg.length; i++) {
+        pathData += ` L ${seg[i].x} ${seg[i].y}`
+      }
+    })
+    if (pathData.trim()) {
+      const curW = padWidthRef.current || 340
+      const curH = padHeightRef.current || 190
+      const svgMarkup = `<svg xmlns="http://www.w3.org/2000/svg" width="${curW}" height="${curH}" viewBox="0 0 ${curW} ${curH}"><rect width="100%" height="100%" fill="#FFFFFF"/><path d="${pathData}" stroke="#0F172A" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>`
+      const svgDataUri = 'data:image/svg+xml;utf8,' + encodeURIComponent(svgMarkup)
+      onSignatureChangeRef.current?.(svgDataUri)
+    }
+  }
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponderCapture: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onShouldBlockNativeResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        isDrawing.current = true
+        setIsCurrentlyDrawing(true)
+        onDrawingStartRef.current?.()
+        const { locationX, locationY } = evt.nativeEvent
+        const maxW = padWidthRef.current || 340
+        const maxH = padHeightRef.current || 190
+        const clampedX = Math.max(2, Math.min(maxW - 2, Math.round(locationX)))
+        const clampedY = Math.max(2, Math.min(maxH - 2, Math.round(locationY)))
+        const pt = { x: clampedX, y: clampedY }
+        currentStroke.current = [pt]
+        const updated = [...allStrokesRef.current, currentStroke.current]
+        allStrokesRef.current = updated
+        setStrokes(updated)
+      },
+      onPanResponderMove: (evt) => {
+        if (!isDrawing.current) return
+        const { locationX, locationY } = evt.nativeEvent
+        const maxW = padWidthRef.current || 340
+        const maxH = padHeightRef.current || 190
+        const clampedX = Math.max(2, Math.min(maxW - 2, Math.round(locationX)))
+        const clampedY = Math.max(2, Math.min(maxH - 2, Math.round(locationY)))
+
+        const cur = currentStroke.current
+        if (cur.length > 0) {
+          const last = cur[cur.length - 1]
+          const dx = clampedX - last.x
+          const dy = clampedY - last.y
+          // Ignore micro-movements < 2px to avoid jitter and redundant points
+          if (dx * dx + dy * dy < 4) return
+        }
+
+        const pt = { x: clampedX, y: clampedY }
+        cur.push(pt)
+        const updated = [...allStrokesRef.current]
+        updated[updated.length - 1] = [...cur]
+        allStrokesRef.current = updated
+        setStrokes(updated)
+      },
+      onPanResponderRelease: () => {
+        isDrawing.current = false
+        setIsCurrentlyDrawing(false)
+        onDrawingEndRef.current?.()
+        exportSvgSignature(allStrokesRef.current)
+      },
+      onPanResponderTerminate: () => {
+        isDrawing.current = false
+        setIsCurrentlyDrawing(false)
+        onDrawingEndRef.current?.()
+        exportSvgSignature(allStrokesRef.current)
+      },
+    })
+  ).current
+
+  const clearSignature = () => {
+    currentStroke.current = []
+    allStrokesRef.current = []
+    setStrokes([])
+    onSignatureChangeRef.current?.('')
+  }
+
+  const hasDrawn = strokes.length > 0 && strokes.some(s => s && s.length > 0)
+  const hasExistingSig = Boolean(signatureValue)
+  const isSigned = hasDrawn || hasExistingSig
+
+  return (
+    <View style={styles.sigContainer}>
+      {/* 1. Mode Selector Tabs */}
+      <View style={styles.sigModeSelector}>
+        <TouchableOpacity
+          style={[styles.sigModeTab, activeMode === 'draw' && styles.sigModeTabActive]}
+          onPress={() => setActiveMode('draw')}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name="create-outline"
+            size={16}
+            color={activeMode === 'draw' ? '#7C3AED' : '#64748B'}
+          />
+          <Text style={[styles.sigModeTabText, activeMode === 'draw' && styles.sigModeTabTextActive]}>
+            Draw on Screen
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.sigModeTab, activeMode === 'upload' && styles.sigModeTabActive]}
+          onPress={() => {
+            setActiveMode('upload')
+            if (!hasExistingSig) onUploadPhoto()
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name="camera-outline"
+            size={16}
+            color={activeMode === 'upload' ? '#7C3AED' : '#64748B'}
+          />
+          <Text style={[styles.sigModeTabText, activeMode === 'upload' && styles.sigModeTabTextActive]}>
+            Upload Paper Scan
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* 2. Drawing Mode or Upload Mode */}
+      {activeMode === 'draw' ? (
+        <View style={styles.sigPadWrapper}>
+          <View
+            style={[
+              styles.sigPad,
+              isCurrentlyDrawing && styles.sigPadActiveBorder
+            ]}
+            onLayout={(e) => {
+              const { width, height } = e.nativeEvent.layout
+              if (width > 50) {
+                setPadWidth(Math.round(width))
+                padWidthRef.current = Math.round(width)
+              }
+              if (height > 50) {
+                setPadHeight(Math.round(height))
+                padHeightRef.current = Math.round(height)
+              }
+            }}
+          >
+            {/* ── Layer 1: Visual Elements (strictly pointerEvents="none" so touches NEVER get hijacked) ── */}
+            <View style={StyleSheet.absoluteFill} pointerEvents="none">
+              {/* Corner Decorative Document Registration Markers */}
+              <View style={styles.sigCornerTL} />
+              <View style={styles.sigCornerTR} />
+              <View style={styles.sigCornerBL} />
+              <View style={styles.sigCornerBR} />
+
+              {/* If user hasn't drawn anything new and has an existing signature image */}
+              {!hasDrawn && hasExistingSig ? (
+                <View style={styles.sigExistingWrapper}>
+                  {signatureValue && (signatureValue.includes('.svg') || signatureValue.startsWith('data:image/svg+xml')) ? (
+                    <WebView
+                      originWhitelist={['*']}
+                      source={{
+                        html: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><style>body{margin:0;padding:0;background:transparent;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden;}img{max-width:90%;max-height:85%;object-fit:contain;}</style></head><body><img src="${signatureValue}" /></body></html>`
+                      }}
+                      style={styles.sigPreviewImg}
+                      scrollEnabled={false}
+                    />
+                  ) : (
+                    <Image
+                      source={{ uri: signatureValue }}
+                      style={styles.sigPreviewImg}
+                      resizeMode="contain"
+                    />
+                  )}
+                  <View style={styles.sigSavedBadge}>
+                    <Ionicons name="shield-checkmark" size={12} color="#059669" />
+                    <Text style={styles.sigSavedBadgeText}>Saved Signature</Text>
+                  </View>
+                </View>
+              ) : null}
+
+              {/* Signature Guideline Line */}
+              <View style={styles.sigGuidelineRow}>
+                <View style={styles.sigXMarkWrap}>
+                  <Text style={styles.sigXMark}>✕</Text>
+                </View>
+                <View style={styles.sigGuidelineDashed} />
+                <Text style={styles.sigGuidelineLabel}>Sign on the line</Text>
+              </View>
+
+              {/* Watermark Helper when empty */}
+              {!hasDrawn && !hasExistingSig && (
+                <View style={styles.sigWatermark}>
+                  <View style={styles.sigWatermarkIconCircle}>
+                    <Ionicons name="pencil" size={20} color="#7C3AED" />
+                  </View>
+                  <Text style={styles.sigWatermarkTitle}>Sign with your finger here</Text>
+                  <Text style={styles.sigWatermarkSub}>Draw smoothly inside this box</Text>
+                </View>
+              )}
+
+              {/* Smooth Ink Strokes Rendering */}
+              {strokes.map((stroke, strokeIdx) => (
+                <React.Fragment key={`stroke-${strokeIdx}`}>
+                  {stroke && stroke.map((pt, i) => {
+                    if (i === 0) {
+                      return (
+                        <View
+                          key={`cap-${strokeIdx}-${i}`}
+                          style={[styles.sigInkCap, { left: pt.x - 2, top: pt.y - 2 }]}
+                        />
+                      )
+                    }
+                    const p0 = stroke[i - 1]
+                    const dx = pt.x - p0.x
+                    const dy = pt.y - p0.y
+                    const dist = Math.sqrt(dx * dx + dy * dy)
+                    if (dist < 0.5) return null
+                    const angle = Math.atan2(dy, dx) * (180 / Math.PI)
+                    const midX = (p0.x + pt.x) / 2
+                    const midY = (p0.y + pt.y) / 2
+                    return (
+                      <React.Fragment key={`seg-${strokeIdx}-${i}`}>
+                        <View
+                          style={[
+                            styles.sigInkLine,
+                            {
+                              left: midX - dist / 2,
+                              top: midY - 1.75,
+                              width: dist,
+                              transform: [{ rotate: `${angle}deg` }],
+                            }
+                          ]}
+                        />
+                        <View
+                          style={[styles.sigInkCap, { left: pt.x - 2, top: pt.y - 2 }]}
+                        />
+                      </React.Fragment>
+                    )
+                  })}
+                </React.Fragment>
+              ))}
+            </View>
+
+            {/* ── Layer 2: Dedicated Transparent Touch Responder Overlay (NO child nodes, 100% stable coordinates) ── */}
+            <View
+              style={[StyleSheet.absoluteFill, { backgroundColor: 'transparent', zIndex: 999 }]}
+              collapsable={false}
+              {...panResponder.panHandlers}
+            />
+          </View>
+
+          {/* Action Toolbar */}
+          <View style={styles.sigToolbar}>
+            <TouchableOpacity
+              style={styles.sigBtnClear}
+              onPress={clearSignature}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="refresh" size={14} color="#EF4444" />
+              <Text style={styles.sigBtnClearText}>Clear / Redo</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.sigBtnUploadQuick}
+              onPress={onUploadPhoto}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="camera-outline" size={14} color="#2563EB" />
+              <Text style={styles.sigBtnUploadQuickText}>Upload Photo</Text>
+            </TouchableOpacity>
+
+            <View style={[styles.sigStatusBadge, isSigned ? styles.sigStatusBadgeSigned : styles.sigStatusBadgePending]}>
+              <Ionicons
+                name={isSigned ? "checkmark-circle" : "ellipse-outline"}
+                size={13}
+                color={isSigned ? "#059669" : "#94A3B8"}
+              />
+              <Text style={[styles.sigStatusBadgeText, isSigned ? { color: '#059669' } : { color: '#64748B' }]}>
+                {isSigned ? 'Signed ✓' : 'Unsigned'}
+              </Text>
+            </View>
+          </View>
+        </View>
+      ) : (
+        /* Upload Scan Mode */
+        <View style={styles.sigUploadContainer}>
+          {hasExistingSig ? (
+            <View style={styles.sigUploadedPreviewCard}>
+              {signatureValue && (signatureValue.includes('.svg') || signatureValue.startsWith('data:image/svg+xml')) ? (
+                <WebView
+                  originWhitelist={['*']}
+                  source={{
+                    html: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"><style>body{margin:0;padding:0;background:transparent;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden;}img{max-width:90%;max-height:85%;object-fit:contain;}</style></head><body><img src="${signatureValue}" /></body></html>`
+                  }}
+                  style={styles.sigUploadedImg}
+                  scrollEnabled={false}
+                />
+              ) : (
+                <Image
+                  source={{ uri: signatureValue }}
+                  style={styles.sigUploadedImg}
+                  resizeMode="contain"
+                />
+              )}
+              <View style={styles.sigUploadedActionsRow}>
+                <TouchableOpacity
+                  style={[styles.sigToolBtn, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}
+                  onPress={onUploadPhoto}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="camera" size={15} color="#059669" />
+                  <Text style={[styles.sigToolBtnText, { color: '#059669' }]}>Change Photo</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.sigToolBtn, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}
+                  onPress={clearSignature}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="trash-outline" size={15} color="#DC2626" />
+                  <Text style={[styles.sigToolBtnText, { color: '#DC2626' }]}>Remove</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={styles.sigUploadDropzone}
+              onPress={onUploadPhoto}
+              activeOpacity={0.85}
+            >
+              <View style={styles.sigUploadIconCircle}>
+                <Ionicons name="cloud-upload" size={26} color="#7C3AED" />
+              </View>
+              <Text style={styles.sigUploadTitle}>Upload Signature on Paper</Text>
+              <Text style={styles.sigUploadDesc}>
+                Sign on a blank white paper and take a clear photo or choose from gallery
+              </Text>
+              <View style={styles.sigUploadActionPill}>
+                <Ionicons name="camera" size={14} color="#FFFFFF" />
+                <Text style={styles.sigUploadActionPillText}>Take Photo / Choose Image</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* Compliance / Security Note */}
+      <View style={styles.sigSecurityNoteRow}>
+        <Ionicons name="shield-checkmark" size={12} color="#7C3AED" />
+        <Text style={styles.sigSecurityNoteText}>
+          Your digital signature is legally encrypted and used solely for partner onboarding verification.
+        </Text>
+      </View>
+    </View>
+  )
+}
 
 const DriverDocumentsScreen = ({ navigation }) => {
   const { user } = useAuth()
@@ -20,6 +417,14 @@ const DriverDocumentsScreen = ({ navigation }) => {
   const [pickerModalField, setPickerModalField] = useState(null)
   const [lightboxDoc, setLightboxDoc] = useState(null)
   const [isReuploading, setIsReuploading] = useState(false)
+  const [scrollEnabled, setScrollEnabled] = useState(true)
+  const [policyAccepted, setPolicyAccepted] = useState(false)
+  const scrollViewRef = useRef(null)
+  const [kycPolicyInfo, setKycPolicyInfo] = useState({
+    policy: '',
+    address: '',
+    phone: '',
+  })
 
   // Form State for KYC Upload
   const [form, setForm] = useState({
@@ -38,8 +443,13 @@ const DriverDocumentsScreen = ({ navigation }) => {
     rc_book_url: '',
     rc_back_image: '',
     rc_back_url: '',
+    rc_expiry: '',
+    permit_image: '',
+    permit_url: '',
+    permit_expiry: '',
     insurance_image: '',
     insurance_url: '',
+    insurance_expiry: '',
     vehicle_photo: '',
     vehicle_photo_url: '',
     police_verification_image: '',
@@ -48,6 +458,19 @@ const DriverDocumentsScreen = ({ navigation }) => {
     profile_selfie_url: '',
     avatar: '',
     avatar_url: '',
+    signature_image: '',
+    signature_url: '',
+    car_images: [],
+    car_image_1: '',
+    car_image_1_url: '',
+    car_image_2: '',
+    car_image_2_url: '',
+    car_image_3: '',
+    car_image_3_url: '',
+    car_image_4: '',
+    car_image_4_url: '',
+    car_image_5: '',
+    car_image_5_url: '',
   })
 
   const loadDocuments = useCallback(async (isRefresh = false) => {
@@ -61,6 +484,27 @@ const DriverDocumentsScreen = ({ navigation }) => {
         d = drvRes.data.driver || drvRes.data.data || drvRes.data.documents || {}
       }
 
+      // Extract KYC Policy, Hub Address and Helpline from response or system_settings
+      let pol = d.kyc_policy || drvRes?.data?.kyc_policy || ''
+      let addr = d.kyc_address || drvRes?.data?.kyc_address || ''
+      let ph = d.kyc_phone || drvRes?.data?.kyc_phone || ''
+
+      if (!pol || !addr || !ph) {
+        try {
+          const sysRes = await settingsAPI.getAll()
+          const s = sysRes?.data?.settings || {}
+          if (!pol) pol = s.driver_kyc_policy || ''
+          if (!addr) addr = s.driver_kyc_address || ''
+          if (!ph) ph = s.driver_kyc_phone || ''
+        } catch (e) {}
+      }
+
+      setKycPolicyInfo({
+        policy: pol || "1. Original Driving License (ஓட்டுநர் உரிமம்) மற்றும் RC Book தெளிவாக புகைப்படம் எடுத்து பதிவேற்றவும்.\n2. அனைத்து ஆவணங்களும் தெளிவாகவும், செல்லுபடியாகும் (valid) நிலையிலும் இருக்க வேண்டும்.\n3. ஆவணங்கள் பதிவேற்றிய பிறகு 24 மணி நேரத்திற்குள் Admin CRM மூலம் சரிபார்க்கப்படும்.\n4. ஏதேனும் சந்தேகம் இருப்பின் கீழே உள்ள அலுவலக முகவரி அல்லது தொலைபேசி எண்ணை தொடர்பு கொள்ளவும்.",
+        address: addr || "No. 12, Anna Salai, Near Mount Road Metro, Chennai, Tamil Nadu - 600002",
+        phone: ph || "+91 98765 43210",
+      })
+
       // Strict Driver KYC check:
       // A driver only has KYC approved if their commercial fleet docs (driving license or RC book) are actually present.
       const hasDriverKycDocs = Boolean(
@@ -71,20 +515,26 @@ const DriverDocumentsScreen = ({ navigation }) => {
       )
 
       let rawVerif = (d.verification_status || 'unsubmitted').toLowerCase()
-      // If no driver documents have been submitted, status cannot be approved
-      if (!hasDriverKycDocs && (rawVerif === 'approved' || rawVerif === 'verified')) {
+      const isExplicitlyApproved = (d.approval_status || '').toLowerCase() === 'approved' || rawVerif === 'approved' || rawVerif === 'verified'
+
+      // If no driver documents have been submitted and admin hasn't approved, status cannot be approved
+      if (!isExplicitlyApproved && !hasDriverKycDocs && (rawVerif === 'approved' || rawVerif === 'verified')) {
         rawVerif = 'unsubmitted'
       }
 
-      const drvVerif = (rawVerif === 'approved' || rawVerif === 'verified')
+      const drvVerif = isExplicitlyApproved
         ? 'approved'
         : (rawVerif === 'rejected' ? 'rejected' : (rawVerif === 'pending' ? 'pending' : 'unsubmitted'))
 
+      if (d.policy_accepted || drvVerif === 'approved' || drvVerif === 'pending') {
+        setPolicyAccepted(true)
+      }
+
       const merged = {
         ...d,
-        approval_status: d.approval_status || 'pending',
+        approval_status: isExplicitlyApproved ? 'approved' : (d.approval_status || 'pending'),
         verification_status: drvVerif,
-        rejection_reason: d.rejection_reason || null,
+        rejection_reason: isExplicitlyApproved ? null : (d.rejection_reason || null),
       }
 
       setProfile(merged)
@@ -104,16 +554,34 @@ const DriverDocumentsScreen = ({ navigation }) => {
         rc_book_url: merged.rc_book_url || prev.rc_book_url,
         rc_back_image: merged.rc_back_image || prev.rc_back_image,
         rc_back_url: merged.rc_back_url || prev.rc_back_url,
+        rc_expiry: merged.rc_expiry || prev.rc_expiry || '',
+        permit_image: merged.permit_image || prev.permit_image || '',
+        permit_url: merged.permit_url || prev.permit_url || '',
+        permit_expiry: merged.permit_expiry || prev.permit_expiry || '',
         insurance_image: merged.insurance_image || prev.insurance_image,
         insurance_url: merged.insurance_url || prev.insurance_url,
-        vehicle_photo: merged.vehicle_photo || prev.vehicle_photo,
-        vehicle_photo_url: merged.vehicle_photo_url || prev.vehicle_photo_url,
+        insurance_expiry: merged.insurance_expiry || prev.insurance_expiry || '',
+        vehicle_photo: merged.vehicle_photo || merged.car_image_1 || (Array.isArray(merged.car_images) ? merged.car_images[0] : '') || prev.vehicle_photo,
+        vehicle_photo_url: merged.vehicle_photo_url || merged.car_image_1_url || (Array.isArray(merged.car_image_urls) ? merged.car_image_urls[0] : '') || prev.vehicle_photo_url,
         police_verification_image: merged.police_verification_image || prev.police_verification_image,
         police_verification_url: merged.police_verification_url || prev.police_verification_url,
         profile_selfie: merged.profile_selfie || prev.profile_selfie,
         profile_selfie_url: merged.profile_selfie_url || prev.profile_selfie_url,
         avatar: merged.avatar || prev.avatar,
         avatar_url: merged.profile_photo_url || merged.avatar_url || prev.avatar_url,
+        signature_image: merged.signature_image || merged.signature || prev.signature_image || '',
+        signature_url: merged.signature_url || merged.signature_image_url || merged.signature_image || prev.signature_url || '',
+        car_images: merged.car_images || prev.car_images || [],
+        car_image_1: merged.car_image_1 || (Array.isArray(merged.car_images) ? merged.car_images[0] : '') || prev.car_image_1 || '',
+        car_image_1_url: merged.car_image_1_url || (Array.isArray(merged.car_image_urls) ? merged.car_image_urls[0] : '') || prev.car_image_1_url || '',
+        car_image_2: merged.car_image_2 || (Array.isArray(merged.car_images) ? merged.car_images[1] : '') || prev.car_image_2 || '',
+        car_image_2_url: merged.car_image_2_url || (Array.isArray(merged.car_image_urls) ? merged.car_image_urls[1] : '') || prev.car_image_2_url || '',
+        car_image_3: merged.car_image_3 || (Array.isArray(merged.car_images) ? merged.car_images[2] : '') || prev.car_image_3 || '',
+        car_image_3_url: merged.car_image_3_url || (Array.isArray(merged.car_image_urls) ? merged.car_image_urls[2] : '') || prev.car_image_3_url || '',
+        car_image_4: merged.car_image_4 || (Array.isArray(merged.car_images) ? merged.car_images[3] : '') || prev.car_image_4 || '',
+        car_image_4_url: merged.car_image_4_url || (Array.isArray(merged.car_image_urls) ? merged.car_image_urls[3] : '') || prev.car_image_4_url || '',
+        car_image_5: merged.car_image_5 || (Array.isArray(merged.car_images) ? merged.car_images[4] : '') || prev.car_image_5 || '',
+        car_image_5_url: merged.car_image_5_url || (Array.isArray(merged.car_image_urls) ? merged.car_image_urls[4] : '') || prev.car_image_5_url || '',
       }))
     } catch (e) {
       console.log('Driver documents load error', e)
@@ -157,30 +625,27 @@ const DriverDocumentsScreen = ({ navigation }) => {
         }
       }
 
+      const isAvatarOrSelfie = fieldKey === 'avatar' || fieldKey === 'profile_selfie'
       const options = {
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        quality: 0.5,
+        mediaTypes: ['images'],
+        allowsEditing: isAvatarOrSelfie,
+        aspect: isAvatarOrSelfie ? [1, 1] : undefined,
+        quality: 0.7,
+        base64: true,
       }
 
       const result = useCamera
         ? await ImagePicker.launchCameraAsync(options)
         : await ImagePicker.launchImageLibraryAsync(options)
 
-      if (!result.canceled && result.assets[0]?.uri) {
+      if (!result.canceled && result.assets && result.assets[0]?.uri) {
         setUploadingField(fieldKey)
         const localUri = result.assets[0].uri
-        const filename = localUri.split('/').pop() || `${fieldKey}.jpg`
-        const match = /\.(\w+)$/.exec(filename)
-        const mimeType = match ? `image/${match[1].toLowerCase()}` : 'image/jpeg'
-
-        const formData = new FormData()
-        formData.append('file', {
-          uri: Platform.OS === 'android' ? localUri : localUri.replace('file://', ''),
-          name: filename,
-          type: mimeType,
+        const formData = createUploadFormData(localUri, {
+          prefix: fieldKey,
+          type: 'kyc',
+          asset: result.assets[0],
         })
-        formData.append('type', 'kyc')
 
         const uploadRes = await uploadAPI.upload(formData, 'kyc')
         const data = uploadRes.data || {}
@@ -189,15 +654,33 @@ const DriverDocumentsScreen = ({ navigation }) => {
           const relativePath = data.path || data.filename || data.file_name || data.relative_path || data.url
           const fullUrl = data.url || localUri
 
-          const urlKey = fieldKey.includes('_image')
-            ? fieldKey.replace('_image', '_url')
-            : `${fieldKey}_url`
+          let urlKey = `${fieldKey}_url`
+          if (fieldKey === 'signature_image') {
+            urlKey = 'signature_url'
+          } else if (fieldKey.endsWith('_image')) {
+            urlKey = fieldKey.replace('_image', '_url')
+          }
 
-          setForm(prev => ({
-            ...prev,
-            [fieldKey]: relativePath,
-            [urlKey]: fullUrl,
-          }))
+          setForm(prev => {
+            const next = {
+              ...prev,
+              [fieldKey]: relativePath,
+              [urlKey]: fullUrl,
+              [`${fieldKey}_url`]: fullUrl,
+            }
+            if (fieldKey === 'car_image_1' || fieldKey === 'vehicle_photo') {
+              next.vehicle_photo = relativePath
+              next.vehicle_photo_url = fullUrl
+              next.car_image_1 = relativePath
+              next.car_image_1_url = fullUrl
+            }
+            if (fieldKey === 'signature_image') {
+              next.signature_image = relativePath
+              next.signature_url = fullUrl
+              next.signature = relativePath
+            }
+            return next
+          })
 
           Alert.alert('Photo Attached ✓', 'Photo attached successfully! Tap "Submit Documents for Verification" below to save.')
         } else {
@@ -205,8 +688,16 @@ const DriverDocumentsScreen = ({ navigation }) => {
         }
       }
     } catch (err) {
-      console.log('Upload error', err)
-      Alert.alert('Upload Error', 'Failed to upload photo. Please check internet connection and try again.')
+      console.log('Driver document upload error:', err)
+      const errorMsg = err?.message || 'Failed to upload photo.'
+      Alert.alert(
+        'Upload Error',
+        `${errorMsg}\n\nPlease check connection or try again.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Retry', onPress: () => performImageCapture(useCamera) }
+        ]
+      )
     } finally {
       setUploadingField(null)
     }
@@ -263,25 +754,132 @@ const DriverDocumentsScreen = ({ navigation }) => {
       return
     }
 
-    if (!form.license_no.trim()) {
-      Alert.alert('Missing Driving License', 'Please enter your Driving License Number (e.g. TN-01-2024-1234567)')
+    // ── 1. MANDATORY POLICY ACCEPTANCE CHECK ───────────────────
+    if (!policyAccepted) {
+      Alert.alert(
+        'Policy Acceptance Required / விதிமுறை ஒப்புதல் தேவை',
+        'Please read the Driver KYC Policy paragraph at the top and check "I have read and agree to the Policy" before submitting your documents.\n\nமேலே உள்ள விதிமுறைகளை முழுமையாக படித்து ஒப்புக்கொண்ட பின்னரே ஆவணங்களைச் சமர்ப்பிக்க முடியும்.',
+        [
+          {
+            text: 'Read Policy Now / படித்து ஒப்புக்கொள்ளவும்',
+            onPress: () => {
+              scrollViewRef.current?.scrollTo?.({ y: 0, animated: true })
+            }
+          }
+        ]
+      )
       return
     }
 
-    const hasAnyDoc = Boolean(
-      form.license_front_image || form.license_front_url ||
-      form.aadhaar_front_image || form.aadhaar_front_url ||
-      form.avatar || form.avatar_url || form.rc_book_image
-    )
+    // ── 2. MANDATORY DETAILS & DOCUMENTS (ALL REQUIRED) ────────
+    // Driving License Number
+    if (!form.license_no || !form.license_no.trim()) {
+      Alert.alert('Missing Driving License / ஓட்டுநர் உரிம எண் தேவை', 'Please enter your Driving License Number (e.g. TN-01-2024-1234567).')
+      return
+    }
 
-    if (!hasAnyDoc) {
-      Alert.alert('Attach Document Photos', 'Please tap on the photo cards (Profile, DL, Aadhaar) and attach clear photos before submitting for verification.')
+    // Driving License Expiry
+    if (!form.license_expiry || !form.license_expiry.trim()) {
+      Alert.alert('License Expiry Date Required / உரிம காலாவதி தேதி தேவை', 'Please enter your Driving License Expiry Date (YYYY-MM-DD).')
+      return
+    }
+
+    // Driving License Front Photo
+    if (!form.license_front_image && !form.license_front_url && !profile?.license_front_image && !profile?.license_front_url) {
+      Alert.alert('Driving License (Front) Required', 'Please attach a clear photo of your Driving License (Front side).')
+      return
+    }
+
+    // Driving License Back Photo
+    if (!form.license_back_image && !form.license_back_url && !profile?.license_back_image && !profile?.license_back_url) {
+      Alert.alert('Driving License (Back) Required', 'Please attach a clear photo of your Driving License (Back side).')
+      return
+    }
+
+    // Aadhaar Number
+    if (!form.aadhaar_no || !form.aadhaar_no.trim()) {
+      Alert.alert('Aadhaar Number Required / ஆதார் எண் தேவை', 'Please enter your 12-digit Aadhaar Card Number.')
+      return
+    }
+
+    // Aadhaar Front Photo
+    if (!form.aadhaar_front_image && !form.aadhaar_front_url && !profile?.aadhaar_front_image && !profile?.aadhaar_front_url) {
+      Alert.alert('Aadhaar Card (Front) Required', 'Please attach a clear photo of your Aadhaar Card (Front side).')
+      return
+    }
+
+    // Aadhaar Back Photo
+    if (!form.aadhaar_back_image && !form.aadhaar_back_url && !profile?.aadhaar_back_image && !profile?.aadhaar_back_url) {
+      Alert.alert('Aadhaar Card (Back) Required', 'Please attach a clear photo of your Aadhaar Card (Back side).')
+      return
+    }
+
+    // RC Book Front Photo
+    if (!form.rc_book_image && !form.rc_book_url && !profile?.rc_book_image && !profile?.rc_book_url) {
+      Alert.alert('RC Book (Front) Required', 'Please attach a clear photo of your Vehicle RC Book (Front side).')
+      return
+    }
+
+    // RC Book Back Photo
+    if (!form.rc_back_image && !form.rc_back_url && !profile?.rc_back_image && !profile?.rc_back_url) {
+      Alert.alert('RC Book (Back) Required', 'Please attach a clear photo of your Vehicle RC Book (Back side).')
+      return
+    }
+
+    // Commercial Taxi Permit Photo
+    if (!form.permit_image && !form.permit_url && !profile?.permit_image && !profile?.permit_url) {
+      Alert.alert('Commercial Taxi Permit Photo Required', 'Please upload or capture a clear photo of your Commercial Taxi Permit.')
+      return
+    }
+
+    // Commercial Taxi Permit Expiry Date
+    if (!form.permit_expiry || !form.permit_expiry.trim()) {
+      Alert.alert('Permit Expiry Date Required / பெர்மிட் காலாவதி தேதி தேவை', 'Please enter your Commercial Taxi Permit Expiry Date (YYYY-MM-DD).')
+      return
+    }
+
+    // Vehicle Insurance Photo
+    if (!form.insurance_image && !form.insurance_url && !profile?.insurance_image && !profile?.insurance_url) {
+      Alert.alert('Vehicle Insurance Photo Required', 'Please attach a clear photo of your valid Vehicle Insurance certificate.')
+      return
+    }
+
+    // Vehicle Insurance Expiry Date
+    if (!form.insurance_expiry || !form.insurance_expiry.trim()) {
+      Alert.alert('Insurance Expiry Date Required / இன்சூரன்ஸ் காலாவதி தேதி தேவை', 'Please enter your Vehicle Insurance Expiry Date (YYYY-MM-DD).')
+      return
+    }
+
+    // Driver Profile Photo or Live Selfie
+    const hasProfilePhoto = Boolean(
+      form.profile_selfie || form.profile_selfie_url ||
+      form.avatar || form.avatar_url ||
+      profile?.profile_selfie || profile?.profile_selfie_url ||
+      profile?.profile_photo || profile?.avatar
+    )
+    if (!hasProfilePhoto) {
+      Alert.alert('Profile Photo / Selfie Required', 'Please capture or upload your official Driver Profile Photo or Biometric Selfie.')
+      return
+    }
+
+    // 5 Vehicle Inspection Photos
+    const carPhotosCount = [form.car_image_1, form.car_image_2, form.car_image_3, form.car_image_4, form.car_image_5].filter(Boolean).length
+    if (carPhotosCount < 5) {
+      Alert.alert('5 Vehicle Inspection Photos Required', `Please capture all 5 vehicle inspection photos (${carPhotosCount}/5 added). All 5 angles (Front, Rear, Left, Right, Interior) are mandatory.`)
+      return
+    }
+
+    // Digital Signature
+    if (!form.signature_image && !form.signature_url && !profile?.signature_image && !profile?.signature_url) {
+      Alert.alert('Digital Signature Required / கையொப்பம் தேவை', 'Please draw your digital signature or upload your signature photo before submitting.')
       return
     }
 
     setSubmitting(true)
     try {
       const payload = {
+        policy_accepted: 1,
+        kyc_policy_agreed: 1,
         license_no: form.license_no.trim(),
         license_expiry: form.license_expiry.trim(),
         aadhaar_no: form.aadhaar_no.trim(),
@@ -300,10 +898,24 @@ const DriverDocumentsScreen = ({ navigation }) => {
         rc_book_url: form.rc_book_url,
         rc_back_image: form.rc_back_image,
         rc_back_url: form.rc_back_url,
+        rc_expiry: (form.rc_expiry || '').trim(),
+        permit_image: form.permit_image,
+        permit_url: form.permit_url,
+        permit_expiry: form.permit_expiry.trim(),
         insurance_image: form.insurance_image,
         insurance_url: form.insurance_url,
-        vehicle_photo: form.vehicle_photo,
-        vehicle_photo_url: form.vehicle_photo_url,
+        insurance_expiry: form.insurance_expiry.trim(),
+        vehicle_photo: form.vehicle_photo || form.car_image_1 || '',
+        vehicle_photo_url: form.vehicle_photo_url || form.car_image_1_url || '',
+        car_images: [form.car_image_1 || form.vehicle_photo, form.car_image_2, form.car_image_3, form.car_image_4, form.car_image_5].filter(Boolean),
+        car_image_1: form.car_image_1 || form.vehicle_photo || '',
+        car_image_2: form.car_image_2 || '',
+        car_image_3: form.car_image_3 || '',
+        car_image_4: form.car_image_4 || '',
+        car_image_5: form.car_image_5 || '',
+        signature_image: form.signature_image || form.signature_url || '',
+        signature: form.signature_image || form.signature_url || '',
+        digital_signature: form.signature_image || form.signature_url || '',
         police_verification_image: form.police_verification_image,
         police_verification_url: form.police_verification_url,
         profile_selfie: form.profile_selfie,
@@ -314,10 +926,18 @@ const DriverDocumentsScreen = ({ navigation }) => {
       }
 
       // Submit to both driver and customer verification endpoints
-      await Promise.allSettled([
+      const results = await Promise.allSettled([
         driverAPI.submitDocuments(payload),
-        longTripAPI.submitVerification(payload)
+        longTripAPI?.submitVerification ? longTripAPI.submitVerification(payload) : Promise.resolve()
       ])
+
+      const driverResult = results[0]
+      if (driverResult.status === 'rejected') {
+        const longTripResult = results[1]
+        if (longTripResult.status === 'rejected') {
+          throw driverResult.reason || new Error('Failed to submit documents. Please try again.')
+        }
+      }
 
       setProfile(prev => ({
         ...prev,
@@ -367,8 +987,8 @@ const DriverDocumentsScreen = ({ navigation }) => {
       subtitle: 'Official partner identification photo',
       uri: getImageUri(profile?.profile_photo_url || profile?.avatar_url || form.avatar_url, profile?.avatar || form.avatar),
       icon: 'person-circle',
-      iconColor: '#4F46E5',
-      bgColor: '#EEF2FF',
+      iconColor: '#D97706',
+      bgColor: '#FEF3C7',
     },
     {
       id: 'profile_selfie',
@@ -434,22 +1054,76 @@ const DriverDocumentsScreen = ({ navigation }) => {
       bgColor: '#F0FDF4',
     },
     {
+      id: 'permit',
+      title: 'Commercial Taxi Permit',
+      subtitle: 'Official state / transport permit certificate',
+      uri: getImageUri(profile?.permit_url || form.permit_url, profile?.permit_image || form.permit_image),
+      icon: 'ribbon-outline',
+      iconColor: '#7C3AED',
+      bgColor: '#F5F3FF',
+    },
+    {
       id: 'insurance',
       title: 'Vehicle Insurance Policy',
       subtitle: 'Active commercial comprehensive cover',
       uri: getImageUri(profile?.insurance_url || form.insurance_url, profile?.insurance_image || form.insurance_image),
       icon: 'shield-checkmark',
-      iconColor: '#2563EB',
-      bgColor: '#EFF6FF',
+      iconColor: '#D97706',
+      bgColor: '#FFF8E7',
     },
     {
-      id: 'vehicle_photo',
-      title: 'Vehicle Full Photo',
-      subtitle: 'Commercial taxi front/side view',
-      uri: getImageUri(profile?.vehicle_photo_url || form.vehicle_photo_url, profile?.vehicle_photo || form.vehicle_photo),
-      icon: 'car',
-      iconColor: '#2563EB',
-      bgColor: '#EFF6FF',
+      id: 'car_image_1',
+      title: 'Car Inspection (1/5 Front)',
+      subtitle: 'Front bumper, hood & number plate view',
+      uri: getImageUri(profile?.car_image_1_url || form.car_image_1_url, profile?.car_image_1 || form.car_image_1),
+      icon: 'car-sport-outline',
+      iconColor: '#0284C7',
+      bgColor: '#E0F2FE',
+    },
+    {
+      id: 'car_image_2',
+      title: 'Car Inspection (2/5 Rear)',
+      subtitle: 'Rear trunk & tail lights view',
+      uri: getImageUri(profile?.car_image_2_url || form.car_image_2_url, profile?.car_image_2 || form.car_image_2),
+      icon: 'car-sport-outline',
+      iconColor: '#0284C7',
+      bgColor: '#E0F2FE',
+    },
+    {
+      id: 'car_image_3',
+      title: 'Car Inspection (3/5 Left Side)',
+      subtitle: 'Driver side doors & body panels',
+      uri: getImageUri(profile?.car_image_3_url || form.car_image_3_url, profile?.car_image_3 || form.car_image_3),
+      icon: 'car-sport-outline',
+      iconColor: '#0284C7',
+      bgColor: '#E0F2FE',
+    },
+    {
+      id: 'car_image_4',
+      title: 'Car Inspection (4/5 Right Side)',
+      subtitle: 'Passenger side doors & body panels',
+      uri: getImageUri(profile?.car_image_4_url || form.car_image_4_url, profile?.car_image_4 || form.car_image_4),
+      icon: 'car-sport-outline',
+      iconColor: '#0284C7',
+      bgColor: '#E0F2FE',
+    },
+    {
+      id: 'car_image_5',
+      title: 'Car Inspection (5/5 Interior)',
+      subtitle: 'Dashboard, front & rear passenger seats',
+      uri: getImageUri(profile?.car_image_5_url || form.car_image_5_url, profile?.car_image_5 || form.car_image_5),
+      icon: 'sparkles-outline',
+      iconColor: '#0284C7',
+      bgColor: '#E0F2FE',
+    },
+    {
+      id: 'digital_signature',
+      title: "Driver's Digital Signature",
+      subtitle: 'Legally binding signed authorization',
+      uri: getImageUri(profile?.signature_url || profile?.signature_image_url || form.signature_url, form.signature_image || profile?.signature_image),
+      icon: 'pencil-outline',
+      iconColor: '#7C3AED',
+      bgColor: '#F5F3FF',
     },
   ]
 
@@ -481,6 +1155,8 @@ const DriverDocumentsScreen = ({ navigation }) => {
       </View>
 
       <ScrollView
+        ref={scrollViewRef}
+        scrollEnabled={scrollEnabled}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
@@ -492,6 +1168,112 @@ const DriverDocumentsScreen = ({ navigation }) => {
           />
         }
       >
+        {/* ── TOP: DRIVER KYC POLICY & GUIDELINES (ADMIN CONFIGURED) ── */}
+        <View style={styles.policyCard}>
+          <View style={styles.policyHeaderRow}>
+            <View style={styles.policyIconWrap}>
+              <Ionicons name="shield-checkmark" size={20} color="#4F46E5" />
+            </View>
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={styles.policyCardTitle}>Driver Verification Policy & Rules</Text>
+              <Text style={styles.policyCardSub}>ஓட்டுநர் சரிபார்ப்பு கொள்கை & வழிகாட்டுதல்கள்</Text>
+            </View>
+            <View style={styles.policyOfficialBadge}>
+              <Text style={styles.policyOfficialBadgeText}>OFFICIAL</Text>
+            </View>
+          </View>
+
+          {/* Formatted Guidelines Body Text (Preserves Tamil Unicode and line breaks) */}
+          <View style={styles.policyBodyWrap}>
+            <Text style={styles.policyText}>
+              {kycPolicyInfo.policy || '1. Please upload valid Commercial Driving License, RC Book, Insurance & Selfie.\n2. All documents are reviewed and approved by the Admin team.'}
+            </Text>
+          </View>
+
+          {/* Verification Hub Address & Driver Helpline Phone */}
+          <View style={styles.policyMetaContainer}>
+            {/* Hub Address */}
+            <View style={styles.policyMetaItem}>
+              <View style={[styles.policyMetaIconCircle, { backgroundColor: '#EEF2FF' }]}>
+                <Ionicons name="location" size={15} color="#4F46E5" />
+              </View>
+              <View style={{ flex: 1, marginLeft: 8 }}>
+                <Text style={styles.policyMetaLabel}>VERIFICATION HUB / அலுவலக முகவரி:</Text>
+                <Text style={styles.policyAddressValue}>
+                  {kycPolicyInfo.address || 'No. 12, Anna Salai, Near Mount Road Metro, Chennai, Tamil Nadu - 600002'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Helpline Phone Number */}
+            <View style={styles.policyMetaItem}>
+              <View style={[styles.policyMetaIconCircle, { backgroundColor: '#ECFDF5' }]}>
+                <Ionicons name="call" size={15} color="#059669" />
+              </View>
+              <View style={{ flex: 1, marginLeft: 8 }}>
+                <Text style={styles.policyMetaLabel}>DRIVER HELPLINE / உதவி எண்:</Text>
+                <Text style={styles.policyPhoneValue}>
+                  {kycPolicyInfo.phone || '+91 98765 43210'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.policyCallBtn}
+                activeOpacity={0.8}
+                onPress={() => {
+                  const num = (kycPolicyInfo.phone || '+919876543210').replace(/\s+/g, '')
+                  Linking.openURL(`tel:${num}`).catch(() => {
+                    Alert.alert('Phone Call', `Helpline number: ${kycPolicyInfo.phone}`)
+                  })
+                }}
+              >
+                <Ionicons name="call" size={12} color="#FFFFFF" />
+                <Text style={styles.policyCallBtnText}>Call</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Interactive Policy Read & Acceptance Box */}
+          {!isReadOnlyMode && (
+            <TouchableOpacity
+              style={[
+                styles.policyAcceptBox,
+                policyAccepted && styles.policyAcceptBoxActive
+              ]}
+              activeOpacity={0.85}
+              onPress={() => setPolicyAccepted(!policyAccepted)}
+            >
+              <View style={[
+                styles.policyCheckbox,
+                policyAccepted && styles.policyCheckboxActive
+              ]}>
+                {policyAccepted && <Ionicons name="checkmark" size={15} color="#FFFFFF" />}
+              </View>
+              <View style={{ flex: 1, marginLeft: 10 }}>
+                <Text style={[
+                  styles.policyAcceptTitle,
+                  policyAccepted && { color: '#047857' }
+                ]}>
+                  I have read and agree to this Policy
+                </Text>
+                <Text style={styles.policyAcceptSub}>
+                  மேலே உள்ள விதிமுறைகளை முழுமையாக படித்து ஒப்புக்கொள்கிறேன் *
+                </Text>
+              </View>
+              <View style={[
+                styles.policyStatusPill,
+                policyAccepted ? styles.policyStatusPillActive : styles.policyStatusPillPending
+              ]}>
+                <Text style={[
+                  styles.policyStatusPillText,
+                  policyAccepted ? { color: '#047857' } : { color: '#B45309' }
+                ]}>
+                  {policyAccepted ? '✓ ACCEPTED' : 'MANDATORY *'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+        </View>
+
         {/* ── 1. STATUS BANNER ───────────────────────────────────────── */}
         {isApproved ? (
           <View style={[styles.statusBanner, { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }]}>
@@ -545,18 +1327,18 @@ const DriverDocumentsScreen = ({ navigation }) => {
             </View>
           </View>
         ) : (
-          <View style={[styles.statusBanner, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}>
-            <View style={[styles.statusIconWrap, { backgroundColor: '#2563EB' }]}>
+          <View style={[styles.statusBanner, { backgroundColor: '#FFF8E7', borderColor: '#FDE68A' }]}>
+            <View style={[styles.statusIconWrap, { backgroundColor: '#D97706' }]}>
               <Ionicons name="document-attach" size={28} color="#FFFFFF" />
             </View>
             <View style={{ flex: 1, marginLeft: 12 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={[styles.statusBannerTitle, { color: '#1E40AF' }]}> KYC Submission Required</Text>
-                <View style={[styles.approvedPill, { backgroundColor: '#DBEAFE' }]}>
-                  <Text style={[styles.approvedPillText, { color: '#1D4ED8' }]}>ONE-TIME UPLOAD</Text>
+                <Text style={[styles.statusBannerTitle, { color: '#0F172A' }]}> KYC Submission Required</Text>
+                <View style={[styles.approvedPill, { backgroundColor: '#FEF3C7' }]}>
+                  <Text style={[styles.approvedPillText, { color: '#B45309' }]}>ONE-TIME UPLOAD</Text>
                 </View>
               </View>
-              <Text style={[styles.statusBannerDesc, { color: '#1E40AF' }]}>
+              <Text style={[styles.statusBannerDesc, { color: '#475569' }]}>
                 Please attach clear photos of your Profile, DL, Aadhaar, RC Book, Insurance & Vehicle to activate your driver account.
               </Text>
             </View>
@@ -574,8 +1356,8 @@ const DriverDocumentsScreen = ({ navigation }) => {
             {/* Credentials Summary Card */}
             <View style={styles.card}>
               <View style={styles.cardHeaderRow}>
-                <View style={[styles.cardHeaderIcon, { backgroundColor: '#EEF2FF' }]}>
-                  <Ionicons name="shield-checkmark" size={20} color="#4F46E5" />
+                <View style={[styles.cardHeaderIcon, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="shield-checkmark" size={20} color="#D97706" />
                 </View>
                 <View style={{ flex: 1, marginLeft: 10 }}>
                   <Text style={styles.cardTitle}>Verified Credential Information</Text>
@@ -594,6 +1376,18 @@ const DriverDocumentsScreen = ({ navigation }) => {
                     <Text style={styles.infoValue}>{profile?.license_expiry || form.license_expiry}</Text>
                   </View>
                 )}
+                {Boolean(profile?.permit_expiry || form.permit_expiry) && (
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>Permit Expiry Date:</Text>
+                    <Text style={styles.infoValue}>{profile?.permit_expiry || form.permit_expiry}</Text>
+                  </View>
+                )}
+                {Boolean(profile?.insurance_expiry || form.insurance_expiry) && (
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>Insurance Expiry Date:</Text>
+                    <Text style={styles.infoValue}>{profile?.insurance_expiry || form.insurance_expiry}</Text>
+                  </View>
+                )}
                 <View style={styles.infoRow}>
                   <Text style={styles.infoLabel}>Aadhaar Card No:</Text>
                   <Text style={styles.infoValue}>{profile?.aadhaar_no || form.aadhaar_no || 'XXXX-XXXX-XXXX'}</Text>
@@ -610,8 +1404,8 @@ const DriverDocumentsScreen = ({ navigation }) => {
               </View>
             </View>
 
-            {/* 10 Document Verification Cards */}
-            <Text style={styles.sectionHeaderTitle}>Submitted Identification Documents (10 Slots)</Text>
+            {/* Document Verification Cards */}
+            <Text style={styles.sectionHeaderTitle}>Submitted Identification Documents ({readOnlyDocs.length} Slots)</Text>
             <View style={{ gap: 12, marginTop: 8 }}>
               {readOnlyDocs.map((doc, idx) => (
                 <View key={doc.id} style={styles.readOnlyDocCard}>
@@ -672,7 +1466,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
               style={[
                 styles.submitBtn, 
                 { 
-                  backgroundColor: isRejected ? '#DC2626' : (isApproved ? '#2563EB' : COLORS.primary), 
+                  backgroundColor: isRejected ? '#DC2626' : (isApproved ? '#059669' : COLORS.primary), 
                   marginTop: 16 
                 }
               ]}
@@ -727,8 +1521,8 @@ const DriverDocumentsScreen = ({ navigation }) => {
             {/* ── 1. DRIVER PROFILE & LIVE SELFIE ─────────────────────── */}
             <View style={styles.card}>
               <View style={styles.cardHeaderRow}>
-                <View style={[styles.cardHeaderIcon, { backgroundColor: '#EEF2FF' }]}>
-                  <Ionicons name="person-circle" size={20} color="#4F46E5" />
+                <View style={[styles.cardHeaderIcon, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="person-circle" size={20} color="#D97706" />
                 </View>
                 <View style={{ flex: 1, marginLeft: 10 }}>
                   <Text style={styles.cardTitle}>1. Profile Photo & Live Selfie *</Text>
@@ -756,7 +1550,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
                         ) : (
                           <>
                             <View style={styles.tileIconCircle}>
-                              <Ionicons name="camera-reverse" size={20} color="#4F46E5" />
+                              <Ionicons name="camera-reverse" size={20} color="#D97706" />
                             </View>
                             <Text style={styles.placeholderTitle}>Profile Photo</Text>
                             <Text style={styles.placeholderSub}>Tap to Upload</Text>
@@ -827,9 +1621,9 @@ const DriverDocumentsScreen = ({ navigation }) => {
                 </View>
 
                 <View>
-                  <Text style={styles.inputLabel}>License Expiry Date (YYYY-MM-DD)</Text>
+                  <Text style={styles.inputLabel}>License Expiry Date * (YYYY-MM-DD)</Text>
                   <View style={styles.inputWrapper}>
-                    <Ionicons name="calendar-outline" size={18} color="#64748B" style={{ marginRight: 8 }} />
+                    <Ionicons name="calendar-outline" size={18} color="#059669" style={{ marginRight: 8 }} />
                     <TextInput
                       style={styles.textInputInner}
                       placeholder="YYYY-MM-DD (e.g. 2030-12-31)"
@@ -1063,15 +1857,76 @@ const DriverDocumentsScreen = ({ navigation }) => {
               </View>
             </View>
 
-            {/* ── 5. VEHICLE INSURANCE & VEHICLE PHOTO ────────────────── */}
+            {/* ── 5. COMMERCIAL VEHICLE PERMIT ──────────────────────── */}
             <View style={styles.card}>
               <View style={styles.cardHeaderRow}>
-                <View style={[styles.cardHeaderIcon, { backgroundColor: '#EFF6FF' }]}>
-                  <Ionicons name="shield-checkmark" size={20} color="#2563EB" />
+                <View style={[styles.cardHeaderIcon, { backgroundColor: '#F5F3FF' }]}>
+                  <Ionicons name="ribbon" size={20} color="#7C3AED" />
                 </View>
                 <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={styles.cardTitle}>5. Insurance & Vehicle Photo *</Text>
-                  <Text style={styles.cardSub}>Commercial insurance policy & full vehicle photo</Text>
+                  <Text style={styles.cardTitle}>5. Commercial Taxi Permit *</Text>
+                  <Text style={styles.cardSub}>Valid transport permit document & expiration date</Text>
+                </View>
+              </View>
+
+              <View style={{ marginTop: 14 }}>
+                <View style={styles.photoGrid}>
+                  {/* Permit Photo */}
+                  <TouchableOpacity
+                    style={[styles.uploadTile, { width: '100%' }]}
+                    onPress={() => handlePickImage('permit_image')}
+                    activeOpacity={0.8}
+                  >
+                    {form.permit_url || form.permit_image ? (
+                      <View style={styles.previewWrap}>
+                        <Image source={{ uri: getImageUri(form.permit_url, form.permit_image) }} style={styles.previewImg} />
+                        <View style={[styles.previewTag, { backgroundColor: '#7C3AED' }]}><Text style={styles.previewTagText}>PERMIT DOC ✓</Text></View>
+                      </View>
+                    ) : (
+                      <View style={styles.placeholderWrap}>
+                        {uploadingField === 'permit_image' ? (
+                          <ActivityIndicator color={COLORS.primary} />
+                        ) : (
+                          <>
+                            <View style={[styles.tileIconCircle, { backgroundColor: '#F5F3FF' }]}>
+                              <Ionicons name="ribbon-outline" size={18} color="#7C3AED" />
+                            </View>
+                            <Text style={styles.placeholderTitle}>Commercial Permit Document</Text>
+                            <Text style={styles.placeholderSub}>Tap to Capture / Upload</Text>
+                          </>
+                        )}
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                {/* Permit Expiry Date Input */}
+                <View style={{ marginTop: 12 }}>
+                  <Text style={styles.inputLabel}>Permit Expiry Date * (YYYY-MM-DD)</Text>
+                  <View style={styles.inputWrapper}>
+                    <Ionicons name="calendar-outline" size={18} color="#7C3AED" style={{ marginRight: 8 }} />
+                    <TextInput
+                      style={styles.textInputInner}
+                      placeholder="e.g. 2028-12-31"
+                      placeholderTextColor="#94A3B8"
+                      value={form.permit_expiry}
+                      onChangeText={(val) => setForm(prev => ({ ...prev, permit_expiry: val }))}
+                      autoCapitalize="none"
+                    />
+                  </View>
+                </View>
+              </View>
+            </View>
+
+            {/* ── 6. VEHICLE INSURANCE & VEHICLE PHOTO ────────────────── */}
+            <View style={styles.card}>
+              <View style={styles.cardHeaderRow}>
+                <View style={[styles.cardHeaderIcon, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="shield-checkmark" size={20} color="#D97706" />
+                </View>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={styles.cardTitle}>6. Insurance Policy & Details *</Text>
+                  <Text style={styles.cardSub}>Commercial insurance policy document & expiration date</Text>
                 </View>
               </View>
 
@@ -1079,14 +1934,14 @@ const DriverDocumentsScreen = ({ navigation }) => {
                 <View style={styles.photoGrid}>
                   {/* Insurance */}
                   <TouchableOpacity
-                    style={styles.uploadTile}
+                    style={[styles.uploadTile, { width: '100%' }]}
                     onPress={() => handlePickImage('insurance_image')}
                     activeOpacity={0.8}
                   >
                     {form.insurance_url || form.insurance_image ? (
                       <View style={styles.previewWrap}>
                         <Image source={{ uri: getImageUri(form.insurance_url, form.insurance_image) }} style={styles.previewImg} />
-                        <View style={styles.previewTag}><Text style={styles.previewTagText}>INSURANCE ✓</Text></View>
+                        <View style={styles.previewTag}><Text style={styles.previewTagText}>INSURANCE POLICY ✓</Text></View>
                       </View>
                     ) : (
                       <View style={styles.placeholderWrap}>
@@ -1094,39 +1949,195 @@ const DriverDocumentsScreen = ({ navigation }) => {
                           <ActivityIndicator color={COLORS.primary} />
                         ) : (
                           <>
-                            <View style={[styles.tileIconCircle, { backgroundColor: '#EFF6FF' }]}>
-                              <Ionicons name="shield-checkmark" size={18} color="#2563EB" />
+                            <View style={[styles.tileIconCircle, { backgroundColor: '#FEF3C7' }]}>
+                              <Ionicons name="shield-checkmark" size={18} color="#D97706" />
                             </View>
-                            <Text style={styles.placeholderTitle}>Insurance Policy</Text>
-                            <Text style={styles.placeholderSub}>Upload Policy Scan</Text>
+                            <Text style={styles.placeholderTitle}>Insurance Policy Document</Text>
+                            <Text style={styles.placeholderSub}>Upload Policy Certificate Scan</Text>
+                          </>
+                        )}
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                {/* Insurance Expiry Date Input */}
+                <View style={{ marginTop: 12 }}>
+                  <Text style={styles.inputLabel}>Vehicle Insurance Expiry Date * (YYYY-MM-DD)</Text>
+                  <View style={styles.inputWrapper}>
+                    <Ionicons name="calendar-outline" size={18} color="#D97706" style={{ marginRight: 8 }} />
+                    <TextInput
+                      style={styles.textInputInner}
+                      placeholder="e.g. 2026-11-30"
+                      placeholderTextColor="#94A3B8"
+                      value={form.insurance_expiry}
+                      onChangeText={(val) => setForm(prev => ({ ...prev, insurance_expiry: val }))}
+                      autoCapitalize="none"
+                    />
+                  </View>
+                </View>
+              </View>
+            </View>
+
+            {/* ── 7. 5 VEHICLE INSPECTION PHOTOS ─────────────────────── */}
+            <View style={styles.card}>
+              <View style={styles.cardHeaderRow}>
+                <View style={[styles.cardHeaderIcon, { backgroundColor: '#E0F2FE' }]}>
+                  <Ionicons name="car-sport" size={20} color="#0284C7" />
+                </View>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={styles.cardTitle}>7. Vehicle Photos (5 Angles) *</Text>
+                    <View style={styles.badgeCountPill}>
+                      <Text style={styles.badgeCountText}>
+                        {[form.car_image_1, form.car_image_2, form.car_image_3, form.car_image_4, form.car_image_5].filter(Boolean).length}/5 Added
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.cardSub}>Front, Rear, Left, Right & Interior cabin inspection</Text>
+                </View>
+              </View>
+
+              <View style={{ marginTop: 14 }}>
+                <View style={styles.photoGrid}>
+                  {/* Photo 1: Front */}
+                  <TouchableOpacity
+                    style={styles.uploadTile}
+                    onPress={() => handlePickImage('car_image_1')}
+                    activeOpacity={0.8}
+                  >
+                    {form.car_image_1_url || form.car_image_1 ? (
+                      <View style={styles.previewWrap}>
+                        <Image source={{ uri: getImageUri(form.car_image_1_url, form.car_image_1) }} style={styles.previewImg} />
+                        <View style={styles.previewTag}><Text style={styles.previewTagText}>1. FRONT ✓</Text></View>
+                      </View>
+                    ) : (
+                      <View style={styles.placeholderWrap}>
+                        {uploadingField === 'car_image_1' ? (
+                          <ActivityIndicator color={COLORS.primary} />
+                        ) : (
+                          <>
+                            <View style={[styles.tileIconCircle, { backgroundColor: '#E0F2FE' }]}>
+                              <Ionicons name="car-sport" size={18} color="#0284C7" />
+                            </View>
+                            <Text style={styles.placeholderTitle}>1. Front View</Text>
+                            <Text style={styles.placeholderSub}>Bumper & Plate</Text>
                           </>
                         )}
                       </View>
                     )}
                   </TouchableOpacity>
 
-                  {/* Vehicle Photo */}
+                  {/* Photo 2: Rear */}
                   <TouchableOpacity
                     style={styles.uploadTile}
-                    onPress={() => handlePickImage('vehicle_photo')}
+                    onPress={() => handlePickImage('car_image_2')}
                     activeOpacity={0.8}
                   >
-                    {form.vehicle_photo_url || form.vehicle_photo ? (
+                    {form.car_image_2_url || form.car_image_2 ? (
                       <View style={styles.previewWrap}>
-                        <Image source={{ uri: getImageUri(form.vehicle_photo_url, form.vehicle_photo) }} style={styles.previewImg} />
-                        <View style={styles.previewTag}><Text style={styles.previewTagText}>VEHICLE PHOTO ✓</Text></View>
+                        <Image source={{ uri: getImageUri(form.car_image_2_url, form.car_image_2) }} style={styles.previewImg} />
+                        <View style={styles.previewTag}><Text style={styles.previewTagText}>2. REAR ✓</Text></View>
                       </View>
                     ) : (
                       <View style={styles.placeholderWrap}>
-                        {uploadingField === 'vehicle_photo' ? (
+                        {uploadingField === 'car_image_2' ? (
                           <ActivityIndicator color={COLORS.primary} />
                         ) : (
                           <>
-                            <View style={[styles.tileIconCircle, { backgroundColor: '#EFF6FF' }]}>
-                              <Ionicons name="car" size={18} color="#2563EB" />
+                            <View style={[styles.tileIconCircle, { backgroundColor: '#E0F2FE' }]}>
+                              <Ionicons name="car-sport" size={18} color="#0284C7" />
                             </View>
-                            <Text style={styles.placeholderTitle}>Vehicle Photo</Text>
-                            <Text style={styles.placeholderSub}>Front / Side View</Text>
+                            <Text style={styles.placeholderTitle}>2. Rear View</Text>
+                            <Text style={styles.placeholderSub}>Trunk & Lights</Text>
+                          </>
+                        )}
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                <View style={[styles.photoGrid, { marginTop: 10 }]}>
+                  {/* Photo 3: Left */}
+                  <TouchableOpacity
+                    style={styles.uploadTile}
+                    onPress={() => handlePickImage('car_image_3')}
+                    activeOpacity={0.8}
+                  >
+                    {form.car_image_3_url || form.car_image_3 ? (
+                      <View style={styles.previewWrap}>
+                        <Image source={{ uri: getImageUri(form.car_image_3_url, form.car_image_3) }} style={styles.previewImg} />
+                        <View style={styles.previewTag}><Text style={styles.previewTagText}>3. LEFT SIDE ✓</Text></View>
+                      </View>
+                    ) : (
+                      <View style={styles.placeholderWrap}>
+                        {uploadingField === 'car_image_3' ? (
+                          <ActivityIndicator color={COLORS.primary} />
+                        ) : (
+                          <>
+                            <View style={[styles.tileIconCircle, { backgroundColor: '#E0F2FE' }]}>
+                              <Ionicons name="car" size={18} color="#0284C7" />
+                            </View>
+                            <Text style={styles.placeholderTitle}>3. Left Side</Text>
+                            <Text style={styles.placeholderSub}>Driver Doors</Text>
+                          </>
+                        )}
+                      </View>
+                    )}
+                  </TouchableOpacity>
+
+                  {/* Photo 4: Right */}
+                  <TouchableOpacity
+                    style={styles.uploadTile}
+                    onPress={() => handlePickImage('car_image_4')}
+                    activeOpacity={0.8}
+                  >
+                    {form.car_image_4_url || form.car_image_4 ? (
+                      <View style={styles.previewWrap}>
+                        <Image source={{ uri: getImageUri(form.car_image_4_url, form.car_image_4) }} style={styles.previewImg} />
+                        <View style={styles.previewTag}><Text style={styles.previewTagText}>4. RIGHT SIDE ✓</Text></View>
+                      </View>
+                    ) : (
+                      <View style={styles.placeholderWrap}>
+                        {uploadingField === 'car_image_4' ? (
+                          <ActivityIndicator color={COLORS.primary} />
+                        ) : (
+                          <>
+                            <View style={[styles.tileIconCircle, { backgroundColor: '#E0F2FE' }]}>
+                              <Ionicons name="car" size={18} color="#0284C7" />
+                            </View>
+                            <Text style={styles.placeholderTitle}>4. Right Side</Text>
+                            <Text style={styles.placeholderSub}>Passenger Doors</Text>
+                          </>
+                        )}
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                </View>
+
+                {/* Photo 5: Interior */}
+                <View style={{ marginTop: 10 }}>
+                  <TouchableOpacity
+                    style={[styles.uploadTile, { width: '100%' }]}
+                    onPress={() => handlePickImage('car_image_5')}
+                    activeOpacity={0.8}
+                  >
+                    {form.car_image_5_url || form.car_image_5 ? (
+                      <View style={[styles.previewWrap, { height: 130 }]}>
+                        <Image source={{ uri: getImageUri(form.car_image_5_url, form.car_image_5) }} style={styles.previewImg} />
+                        <View style={styles.previewTag}><Text style={styles.previewTagText}>5. CABIN / INTERIOR ✓</Text></View>
+                      </View>
+                    ) : (
+                      <View style={[styles.placeholderWrap, { height: 110 }]}>
+                        {uploadingField === 'car_image_5' ? (
+                          <ActivityIndicator color={COLORS.primary} />
+                        ) : (
+                          <>
+                            <View style={[styles.tileIconCircle, { backgroundColor: '#E0F2FE' }]}>
+                              <Ionicons name="sparkles" size={18} color="#0284C7" />
+                            </View>
+                            <Text style={styles.placeholderTitle}>5. Cabin & Seats Interior</Text>
+                            <Text style={styles.placeholderSub}>Dashboard, Clean Seats & Interior view</Text>
                           </>
                         )}
                       </View>
@@ -1136,7 +2147,76 @@ const DriverDocumentsScreen = ({ navigation }) => {
               </View>
             </View>
 
-            {/* ── 6. SUBMIT BUTTON ───────────────────────────────────── */}
+            {/* ── 8. DRIVER DIGITAL SIGNATURE ────────────────────────── */}
+            <View style={styles.card}>
+              <View style={styles.cardHeaderRow}>
+                <View style={[styles.cardHeaderIcon, { backgroundColor: '#F5F3FF' }]}>
+                  <Ionicons name="pencil" size={20} color="#7C3AED" />
+                </View>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={styles.cardTitle}>8. Driver Digital Signature *</Text>
+                  <Text style={styles.cardSub}>Sign below with your finger or upload signature paper scan</Text>
+                </View>
+              </View>
+
+              <View style={{ marginTop: 14 }}>
+                <DigitalSignaturePad
+                  signatureValue={form.signature_url || form.signature_image || profile?.signature_url || profile?.signature_image_url || profile?.signature_image}
+                  onSignatureChange={(sigDataUri) => {
+                    setForm(prev => ({
+                      ...prev,
+                      signature_image: sigDataUri,
+                      signature_url: sigDataUri,
+                      signature: sigDataUri,
+                    }))
+                  }}
+                  onDrawingStart={() => setScrollEnabled(false)}
+                  onDrawingEnd={() => setScrollEnabled(true)}
+                  onUploadPhoto={() => handlePickImage('signature_image')}
+                />
+              </View>
+            </View>
+
+            {/* ── MANDATORY POLICY CONFIRMATION BEFORE SUBMIT ──────────── */}
+            <TouchableOpacity
+              style={[
+                styles.bottomPolicyConsentCard,
+                policyAccepted ? styles.bottomPolicyConsentCardActive : styles.bottomPolicyConsentCardError
+              ]}
+              activeOpacity={0.85}
+              onPress={() => setPolicyAccepted(!policyAccepted)}
+            >
+              <View style={[
+                styles.policyCheckbox,
+                policyAccepted && styles.policyCheckboxActive
+              ]}>
+                {policyAccepted && <Ionicons name="checkmark" size={15} color="#FFFFFF" />}
+              </View>
+              <View style={{ flex: 1, marginLeft: 10 }}>
+                <Text style={styles.bottomConsentTitle}>
+                  Mandatory KYC Policy Declaration *
+                </Text>
+                <Text style={styles.bottomConsentDesc}>
+                  I confirm that I have read the complete Driver KYC Policy paragraph at the top, and all submitted details & document photos are 100% genuine and valid.
+                </Text>
+                <Text style={styles.bottomConsentTamil}>
+                  மேலே உள்ள விதிமுறைகளை படித்துவிட்டேன். நான் சமர்ப்பிக்கும் ஆவணங்கள் உண்மையானவை என ஒப்புக்கொள்கிறேன்.
+                </Text>
+              </View>
+              <View style={[
+                styles.policyStatusPill,
+                policyAccepted ? styles.policyStatusPillActive : styles.policyStatusPillPending
+              ]}>
+                <Text style={[
+                  styles.policyStatusPillText,
+                  policyAccepted ? { color: '#047857' } : { color: '#B45309' }
+                ]}>
+                  {policyAccepted ? '✓ AGREED' : 'CHECK TO SUBMIT'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {/* ── SUBMIT BUTTON ───────────────────────────────────────── */}
             <TouchableOpacity
               style={[
                 styles.submitBtn,
@@ -1186,7 +2266,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
                 style={styles.lightboxCloseBtn}
                 onPress={() => setLightboxDoc(null)}
               >
-                <Ionicons name="close" size={20} color="#FFFFFF" />
+                <Ionicons name="close" size={20} color="#0F172A" />
               </TouchableOpacity>
             </View>
             {lightboxDoc?.uri ? (
@@ -1226,7 +2306,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
             <View style={styles.modalHeaderRow}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                 <View style={styles.modalHeaderIconWrap}>
-                  <Ionicons name="camera-reverse" size={20} color="#2563EB" />
+                  <Ionicons name="camera-reverse" size={20} color="#D97706" />
                 </View>
                 <View>
                   <Text style={styles.modalSheetTitle}>Attach Document Photo</Text>
@@ -1249,8 +2329,8 @@ const DriverDocumentsScreen = ({ navigation }) => {
                 onPress={() => performImageCapture(true)}
                 activeOpacity={0.75}
               >
-                <View style={[styles.modalOptionIconCircle, { backgroundColor: '#EFF6FF' }]}>
-                  <Ionicons name="camera" size={24} color="#2563EB" />
+                <View style={[styles.modalOptionIconCircle, { backgroundColor: '#FEF3C7' }]}>
+                  <Ionicons name="camera" size={24} color="#D97706" />
                 </View>
                 <View style={{ flex: 1, marginLeft: 14 }}>
                   <Text style={styles.modalOptionTitle}>Take Photo (Camera)</Text>
@@ -1349,7 +2429,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
   },
   scrollContent: {
     padding: 16,
@@ -1500,8 +2580,10 @@ const styles = StyleSheet.create({
     height: 160,
     borderRadius: 12,
     overflow: 'hidden',
-    backgroundColor: '#0F172A',
+    backgroundColor: '#F1F5F9',
     position: 'relative',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   readOnlyThumbImg: {
     width: '100%',
@@ -1606,7 +2688,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
@@ -1650,15 +2732,28 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.5,
   },
+  badgeCountPill: {
+    backgroundColor: '#E0F2FE',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+  },
+  badgeCountText: {
+    color: '#0284C7',
+    fontSize: 10,
+    fontWeight: '800',
+  },
   submitBtn: {
-    backgroundColor: '#2563EB',
+    backgroundColor: COLORS.primary,
     borderRadius: 16,
     paddingVertical: 15,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 14,
-    shadowColor: '#2563EB',
+    shadowColor: COLORS.primaryDark,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -1687,7 +2782,7 @@ const styles = StyleSheet.create({
   // Lightbox Modal
   lightboxOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 16,
@@ -1695,24 +2790,29 @@ const styles = StyleSheet.create({
   lightboxCard: {
     width: '100%',
     maxHeight: '85%',
-    backgroundColor: '#0F172A',
+    backgroundColor: '#FFFFFF',
     borderRadius: 20,
     overflow: 'hidden',
-    padding: 14,
+    padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 10,
   },
   lightboxHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingBottom: 10,
+    paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    borderBottomColor: '#F1F5F9',
   },
   lightboxTitle: {
-    color: '#FFFFFF',
-    fontSize: 14,
+    color: '#0F172A',
+    fontSize: 15,
     fontWeight: '800',
     flex: 1,
   },
@@ -1720,7 +2820,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1730,7 +2830,7 @@ const styles = StyleSheet.create({
     marginVertical: 12,
   },
   lightboxDoneBtn: {
-    backgroundColor: '#2563EB',
+    backgroundColor: COLORS.primary,
     paddingVertical: 12,
     borderRadius: 12,
     alignItems: 'center',
@@ -1779,7 +2879,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 10,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -1839,5 +2939,596 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#475569',
+  },
+
+  // ── Digital Signature Pad Professional Styles ─────────────────
+  sigContainer: {
+    width: '100%',
+  },
+  sigModeSelector: {
+    flexDirection: 'row',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    padding: 3,
+    marginBottom: 12,
+  },
+  sigModeTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 9,
+    borderRadius: 9,
+    gap: 6,
+  },
+  sigModeTabActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  sigModeTabText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  sigModeTabTextActive: {
+    fontWeight: '800',
+    color: '#7C3AED',
+  },
+  sigPadWrapper: {
+    width: '100%',
+  },
+  sigPad: {
+    width: '100%',
+    height: 190,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    overflow: 'hidden',
+    position: 'relative',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  sigPadActiveBorder: {
+    borderColor: '#7C3AED',
+  },
+  sigCornerTL: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    width: 14,
+    height: 14,
+    borderTopWidth: 2,
+    borderLeftWidth: 2,
+    borderColor: '#CBD5E1',
+  },
+  sigCornerTR: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 14,
+    height: 14,
+    borderTopWidth: 2,
+    borderRightWidth: 2,
+    borderColor: '#CBD5E1',
+  },
+  sigCornerBL: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    width: 14,
+    height: 14,
+    borderBottomWidth: 2,
+    borderLeftWidth: 2,
+    borderColor: '#CBD5E1',
+  },
+  sigCornerBR: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    width: 14,
+    height: 14,
+    borderBottomWidth: 2,
+    borderRightWidth: 2,
+    borderColor: '#CBD5E1',
+  },
+  sigExistingWrapper: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sigPreviewImg: {
+    width: '90%',
+    height: '75%',
+  },
+  sigSavedBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  sigSavedBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  sigInkLine: {
+    position: 'absolute',
+    height: 3.5,
+    borderRadius: 2,
+    backgroundColor: '#0F172A',
+  },
+  sigInkCap: {
+    position: 'absolute',
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#0F172A',
+  },
+  sigGuidelineRow: {
+    position: 'absolute',
+    bottom: 28,
+    left: 20,
+    right: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sigXMarkWrap: {
+    width: 18,
+    alignItems: 'center',
+  },
+  sigXMark: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#94A3B8',
+  },
+  sigGuidelineDashed: {
+    flex: 1,
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#CBD5E1',
+    borderStyle: 'dashed',
+  },
+  sigGuidelineLabel: {
+    fontSize: 10,
+    color: '#94A3B8',
+    fontWeight: '600',
+  },
+  sigWatermark: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sigWatermarkIconCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#F5F3FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  sigWatermarkTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  sigWatermarkSub: {
+    fontSize: 11,
+    color: '#94A3B8',
+    marginTop: 2,
+  },
+  sigToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    gap: 8,
+  },
+  sigBtnClear: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  sigBtnClearText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  sigBtnUploadQuick: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  sigBtnUploadQuickText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#2563EB',
+  },
+  sigStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  sigStatusBadgeSigned: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+  },
+  sigStatusBadgePending: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+  },
+  sigStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  sigUploadContainer: {
+    width: '100%',
+  },
+  sigUploadedPreviewCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    padding: 14,
+    alignItems: 'center',
+  },
+  sigUploadedImg: {
+    width: '100%',
+    height: 140,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+  },
+  sigUploadedActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+    width: '100%',
+    justifyContent: 'center',
+  },
+  sigToolBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  sigToolBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  sigUploadDropzone: {
+    backgroundColor: '#FAFAFA',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderStyle: 'dashed',
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sigUploadIconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#F5F3FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  sigUploadTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  sigUploadDesc: {
+    fontSize: 11,
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 4,
+    marginBottom: 14,
+    maxWidth: 260,
+  },
+  sigUploadActionPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#7C3AED',
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 20,
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 5,
+    elevation: 3,
+  },
+  sigUploadActionPillText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  sigSecurityNoteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+    paddingHorizontal: 4,
+  },
+  sigSecurityNoteText: {
+    fontSize: 10,
+    color: '#64748B',
+    flex: 1,
+    lineHeight: 14,
+  },
+
+  // ── Driver KYC Policy & Office Guidelines Styles ──
+  policyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E0E7FF',
+    padding: 14,
+    marginBottom: 14,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  policyHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  policyIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E0E7FF',
+  },
+  policyCardTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  policyCardSub: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    color: '#6366F1',
+    marginTop: 1,
+  },
+  policyOfficialBadge: {
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 0.5,
+    borderColor: '#C7D2FE',
+  },
+  policyOfficialBadgeText: {
+    fontSize: 8.5,
+    fontWeight: '800',
+    color: '#4F46E5',
+    letterSpacing: 0.5,
+  },
+  policyBodyWrap: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    padding: 12,
+    marginBottom: 10,
+  },
+  policyText: {
+    fontSize: 12.5,
+    color: '#1E293B',
+    lineHeight: 20,
+    letterSpacing: 0.1,
+    textAlign: 'left',
+  },
+  policyMetaContainer: {
+    gap: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    paddingTop: 10,
+  },
+  policyMetaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FAFAFA',
+    padding: 9,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  policyMetaIconCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  policyMetaLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.3,
+  },
+  policyAddressValue: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#1E293B',
+    marginTop: 1,
+    lineHeight: 16,
+  },
+  policyPhoneValue: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#059669',
+    marginTop: 1,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  policyCallBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#059669',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: 6,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  policyCallBtnText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+
+  // ── Policy Read & Acceptance Checkbox Styles ──
+  policyAcceptBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    padding: 11,
+    marginTop: 10,
+  },
+  policyAcceptBoxActive: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#10B981',
+  },
+  policyCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#94A3B8',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  policyCheckboxActive: {
+    borderColor: '#059669',
+    backgroundColor: '#059669',
+  },
+  policyAcceptTitle: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  policyAcceptSub: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748B',
+    marginTop: 2,
+  },
+  policyStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginLeft: 6,
+  },
+  policyStatusPillActive: {
+    backgroundColor: '#D1FAE5',
+  },
+  policyStatusPillPending: {
+    backgroundColor: '#FEF3C7',
+  },
+  policyStatusPillText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+
+  // Bottom consent declaration before submit
+  bottomPolicyConsentCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    padding: 13,
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  bottomPolicyConsentCardActive: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#22C55E',
+  },
+  bottomPolicyConsentCardError: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#F59E0B',
+  },
+  bottomConsentTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  bottomConsentDesc: {
+    fontSize: 11,
+    color: '#334155',
+    marginTop: 3,
+    lineHeight: 16,
+  },
+  bottomConsentTamil: {
+    fontSize: 10.5,
+    color: '#059669',
+    fontWeight: '600',
+    marginTop: 4,
+    lineHeight: 15,
   },
 })

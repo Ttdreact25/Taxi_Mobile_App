@@ -1,24 +1,30 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, Switch, Platform, Modal
+  TextInput, ActivityIndicator, Alert, Switch, Platform, Modal, Image
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as Location from 'expo-location'
-import MapView, { Marker } from 'react-native-maps'
+import MapView, { Marker, UrlTile } from 'react-native-maps'
+import UniversalRouteMap from '../../components/common/UniversalRouteMap'
 import { COLORS } from '../../constants/theme'
-import { vehicleTypesAPI, bookingAPI, longTripAPI, settingsAPI } from '../../api/api'
+import { vehicleTypesAPI, bookingAPI, longTripAPI, settingsAPI, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
 import { searchPlacesService, reverseGeocodeService } from '../../services/locationSearchService'
 
 const VEHICLE_ICONS = {
+  'Mini (3+1)': 'car-sport',
+  'Sedan (4+1)': 'car-sport',
+  'SUV (6+1)': 'bus',
+  'SUV XL (7+1)': 'bus',
+  'Mini': 'car-sport',
+  'Sedan': 'car-sport',
+  'SUV': 'bus',
+  'SUV XL': 'bus',
   'Bike': 'bicycle',
   'Scooty': 'bicycle',
   'Auto': 'car',
-  'Mini Car (3 Seater)': 'car-sport',
-  'Car (3 Seater)': 'car-sport',
-  'Car (7 Seater)': 'bus',
   'Standard': 'car',
 }
 
@@ -34,7 +40,7 @@ const QUICK_PRESETS = [
   { label: '🌌 10:30 PM', h: '10', m: '30', p: 'PM' },
 ]
 
-export default function LongTripScreen({ navigation }) {
+export default function LongTripScreen({ navigation, route }) {
   const { user } = useAuth()
   const sessionToken = useRef(Math.random().toString(36).substring(2))
   const debounceRef = useRef(null)
@@ -63,23 +69,29 @@ export default function LongTripScreen({ navigation }) {
   const mapRef = useRef(null)
   const geocodeTimerRef = useRef(null)
 
-  // 3 & 4. Booking Mode, Travel Date & Pickup Time
+  // 3 & 4. Outstation Trip Type, Travel Date & Pickup Time
   const todayStr = new Date().toISOString().split('T')[0]
   const tomorrowObj = new Date(Date.now() + 86400000)
   const tomorrowStr = tomorrowObj.toISOString().split('T')[0]
   const dayAfterObj = new Date(Date.now() + 86400000 * 2)
   const dayAfterStr = dayAfterObj.toISOString().split('T')[0]
 
+  const [outstationType, setOutstationType] = useState('one_way') // 'one_way' | 'round_trip'
   const [bookingMode, setBookingMode] = useState('schedule') // 'now' | 'schedule'
   const [passengerCount, setPassengerCount] = useState(1)
   const [payMethod, setPayMethod] = useState('cash')
   const [travelDate, setTravelDate] = useState(todayStr)
   const [pickupTime, setPickupTime] = useState('08:30') // 24hr string (HH:MM)
+  const [returnDate, setReturnDate] = useState(tomorrowStr)
+  const [returnTime, setReturnTime] = useState('18:00') // 24hr string (HH:MM)
+  const [gstEnabled, setGstEnabled] = useState(true)
 
   // Interactive Calendar & Clock Picker Modals
   const [showDatePicker, setShowDatePicker] = useState(false)
+  const [activeDateTarget, setActiveDateTarget] = useState('departure') // 'departure' | 'return'
   const [calDate, setCalDate] = useState(new Date())
   const [showTimePicker, setShowTimePicker] = useState(false)
+  const [activeTimeTarget, setActiveTimeTarget] = useState('departure') // 'departure' | 'return'
   const [clockHour, setClockHour] = useState('08')
   const [clockMinute, setClockMinute] = useState('30')
   const [clockPeriod, setClockPeriod] = useState('AM')
@@ -88,10 +100,10 @@ export default function LongTripScreen({ navigation }) {
   const [vehicleTypes, setVehicleTypes] = useState([])
   const [selectedType, setSelectedType] = useState(null)
 
-  // 6. Enable Sharing
+  // 6. Enable Sharing (240 KM threshold)
   const [isSharingEnabled, setIsSharingEnabled] = useState(false)
-  const [minSharingKm, setMinSharingKm] = useState(250)
-  const [longTripMinKm, setLongTripMinKm] = useState(130)
+  const [minSharingKm, setMinSharingKm] = useState(240)
+  const [longTripMinKm, setLongTripMinKm] = useState(50)
 
   // 7. Fare Summary & Estimation State
   const [fareEst, setFareEst] = useState(null)
@@ -126,7 +138,29 @@ export default function LongTripScreen({ navigation }) {
     locateCurrentPosition()
   }, [])
 
+  // Auto-fill route params when switched from Local Trip (130+ KM)
+  useEffect(() => {
+    if (route?.params?.pickupAddress) {
+      setPickup(route.params.pickupAddress)
+    }
+    if (route?.params?.pickupCoords) {
+      setPickupCoords(route.params.pickupCoords)
+    }
+    if (route?.params?.destAddress) {
+      setDestination(route.params.destAddress)
+    }
+    if (route?.params?.destCoords) {
+      setDestCoords(route.params.destCoords)
+    }
+    if (route?.params?.vehicleTypeId) {
+      setSelectedType(route.params.vehicleTypeId)
+    }
+  }, [route?.params])
+
   const locateCurrentPosition = async () => {
+    if (route?.params?.pickupAddress || pickup) {
+      return
+    }
     setIsLocating(true)
     try {
       const { status } = await Location.requestForegroundPermissionsAsync()
@@ -193,12 +227,12 @@ export default function LongTripScreen({ navigation }) {
     setActiveInput(null)
   }
 
-  // Automatic Calculation when Pickup, Destination, Vehicle Category or Time changes
+  // Automatic Calculation when Pickup, Destination, Vehicle Category, Trip Type, Dates or GST changes
   useEffect(() => {
     if (pickup && destination && selectedType) {
       calculateFareAndRoute()
     }
-  }, [pickup, destination, pickupCoords, destCoords, selectedType, travelDate, pickupTime])
+  }, [pickup, destination, pickupCoords, destCoords, selectedType, outstationType, gstEnabled, travelDate, pickupTime, returnDate, returnTime])
 
   const calculateFareAndRoute = async () => {
     if (!pickup || !destination || !selectedType) return
@@ -206,7 +240,7 @@ export default function LongTripScreen({ navigation }) {
     setDistanceError(null)
 
     try {
-      // Directly send addresses and coordinates to backend Google Maps Routing Service
+      const isRound = outstationType === 'round_trip'
       const r = await bookingAPI.fareEstimate({
         pickup_lat: pickupCoords?.lat || 0,
         pickup_lng: pickupCoords?.lng || 0,
@@ -216,26 +250,32 @@ export default function LongTripScreen({ navigation }) {
         dest_address: destination,
         vehicle_type_id: selectedType,
         is_long_trip: true,
+        is_round_trip: isRound,
+        trip_type: isRound ? 'outstation_round_trip' : 'outstation_one_way',
+        gst_enabled: gstEnabled,
+        departure_date: travelDate,
+        departure_time: pickupTime ? `${pickupTime}:00` : '08:30:00',
+        return_date: isRound ? returnDate : null,
+        return_time: isRound ? (returnTime ? `${returnTime}:00` : '18:00:00') : null,
+        waiting_mins: isRound ? 60 : 0,
         booking_time: pickupTime ? `${pickupTime}:00` : '08:30:00'
       })
 
       const data = r.data
       if (data?.status === 'success') {
-        const estData = data.data || data
+        const estData = data.estimate || data.data || data
         const selected = estData.selected || estData.estimates?.[0] || estData
-        const km = parseFloat(selected?.distance_km || estData.distance_km || estData.route?.distance_km || 0)
-        const mins = parseInt(selected?.traffic_duration_min || selected?.duration_min || estData.duration_min || estData.route?.duration_min || 0, 10)
-        const fare = parseFloat(selected?.final_fare || selected?.total_fare || selected?.estimated_fare || estData.final_fare || 0)
+        const singleKm = parseFloat(selected?.travel_distance_km || selected?.distance_km || estData.travel_distance_km || estData.distance_km || estData.route?.distance_km || 0)
 
-        if (km > 0 && km < longTripMinKm) {
-          setDistanceError(`Scheduled Long Trip is available for routes over ${longTripMinKm} km. Your route is ${km.toFixed(1)} km — please use Local Trip booking.`)
+        if (singleKm > 0 && singleKm < longTripMinKm) {
+          setDistanceError(`Outstation Trip requires route distance ≥ ${longTripMinKm} km. Your route is ${singleKm.toFixed(1)} km — please use Local Trip booking.`)
           setFareEst(null)
           return
         }
 
         setFareEst(estData)
 
-        if (km < minSharingKm) {
+        if (singleKm < minSharingKm) {
           setIsSharingEnabled(false)
         }
       } else {
@@ -399,7 +439,11 @@ export default function LongTripScreen({ navigation }) {
     if (clockPeriod === 'PM' && h < 12) h += 12
     if (clockPeriod === 'AM' && h === 12) h = 0
     const time24 = `${String(h).padStart(2, '0')}:${clockMinute}`
-    setPickupTime(time24)
+    if (activeTimeTarget === 'return') {
+      setReturnTime(time24)
+    } else {
+      setPickupTime(time24)
+    }
     setShowTimePicker(false)
   }
 
@@ -409,7 +453,11 @@ export default function LongTripScreen({ navigation }) {
     const m = String(calDate.getMonth() + 1).padStart(2, '0')
     const d = String(dayNum).padStart(2, '0')
     const dateStr = `${y}-${m}-${d}`
-    setTravelDate(dateStr)
+    if (activeDateTarget === 'return') {
+      setReturnDate(dateStr)
+    } else {
+      setTravelDate(dateStr)
+    }
     setShowDatePicker(false)
   }
 
@@ -430,7 +478,8 @@ export default function LongTripScreen({ navigation }) {
   const perMinRate = parseFloat(selectedEstimate?.price_per_min || selectedEstimate?.per_min_rate || selectedVehicleObj?.price_per_min || selectedVehicleObj?.per_min_rate || 2)
   const totalFare = parseFloat(selectedEstimate?.final_fare || selectedEstimate?.total_fare || selectedEstimate?.estimated_fare || fareEst?.final_fare || fareEst?.estimated_fare || ((distanceKm * perKmRate) + (durationMins * perMinRate) + baseFare) || 0)
 
-  const isEligibleForSharing = distanceKm >= minSharingKm
+  // Sharing option only shown when distance is 240 KM or more
+  const isEligibleForSharing = distanceKm >= minSharingKm || (parseFloat(fareEst?.distance_km || fareEst?.travel_distance_km || 0) >= minSharingKm)
 
   const hasMandatoryFields = Boolean(
     pickup.trim() &&
@@ -459,30 +508,20 @@ export default function LongTripScreen({ navigation }) {
       Alert.alert('Missing Field', 'Please select a vehicle category')
       return
     }
-    if (bookingMode === 'schedule' && (!travelDate || !pickupTime)) {
-      Alert.alert('Missing Field', 'Please select a valid Travel Date and Pickup Time')
-      return
-    }
-    if (distanceError) {
-      Alert.alert('Short Route', distanceError)
-      return
-    }
-
-    if (isSharingEnabled && user?.verification_status !== 'verified') {
-      Alert.alert(
-        'Identity Verification Required 🛡️',
-        'You cannot publish a shared ride without KYC approval by Admin. Please submit your Aadhaar KYC verification.',
-        [
-          { text: 'Verify Identity', onPress: () => navigation.navigate('IdentityVerification') },
-          { text: 'Cancel', style: 'cancel' }
-        ]
-      )
+    if (outstationType === 'round_trip' && (!returnDate || !returnTime)) {
+      Alert.alert('Missing Field', 'Please select a valid Return Date and Return Time for Round Trip.')
       return
     }
 
     if (isSubmittingRef.current || scheduling) return
     setScheduling(true)
     try {
+      const isRound = outstationType === 'round_trip'
+      const totalKmVal = parseFloat(fareEst?.total_distance_km || fareEst?.distance_km || (isRound ? distanceKm * 2 : distanceKm))
+      const finalAmountVal = Math.round(Number(fareEst?.final_amount ?? fareEst?.final_fare ?? totalFare))
+      const advanceVal = Math.round(Number(fareEst?.advance_online_payment ?? fareEst?.advance_payment_amount ?? Math.round(finalAmountVal * 0.1)))
+      const remainingVal = Math.max(0, Math.round(Number(fareEst?.remaining_amount_to_driver ?? (finalAmountVal - advanceVal))))
+
       const payload = {
         pickup_address: pickup.trim(),
         dest_address: destination.trim(),
@@ -494,15 +533,26 @@ export default function LongTripScreen({ navigation }) {
         travel_date: bookingMode === 'now' ? todayStr : travelDate,
         pickup_date: bookingMode === 'now' ? todayStr : travelDate,
         pickup_time: bookingMode === 'now' ? new Date().toTimeString().split(' ')[0] : (pickupTime.length === 5 ? `${pickupTime}:00` : pickupTime),
+        departure_date: travelDate,
+        departure_time: pickupTime,
+        return_date: isRound ? returnDate : null,
+        return_time: isRound ? returnTime : null,
         booking_type: bookingMode, // 'now' or 'schedule'
         passenger_count: passengerCount || 1,
-        trip_type: 'one_way',
+        trip_type: isRound ? 'round_trip' : 'one_way',
         is_shared: isSharingEnabled ? 1 : 0,
         is_long_trip: 1,
         payment_method: payMethod || 'cash',
-        estimated_fare: totalFare,
-        distance_km: distanceKm > 0 ? distanceKm : 0,
+        estimated_fare: finalAmountVal,
+        final_fare: finalAmountVal,
+        distance_km: totalKmVal,
         duration_min: durationMins > 0 ? durationMins : 0,
+        waiting_charge: fareEst?.waiting_charge || 0,
+        pickup_charge: fareEst?.pickup_charge || 0,
+        gst_enabled: gstEnabled ? 1 : 0,
+        gst_amount: gstEnabled ? (fareEst?.gst_amount || 0) : 0,
+        advance_payment_amount: advanceVal,
+        remaining_amount_to_driver: remainingVal,
       }
 
       const res = await longTripAPI.create(payload)
@@ -578,8 +628,33 @@ export default function LongTripScreen({ navigation }) {
 
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
 
-        {/* ── MODE SELECTOR (RIDE NOW VS SCHEDULE) ─────────────────── */}
+        {/* ── OUTSTATION TRIP TYPE (ONE WAY VS ROUND TRIP) ────────── */}
         <View style={styles.modeToggleCard}>
+          <TouchableOpacity
+            style={[styles.modeToggleBtn, outstationType === 'one_way' && styles.modeToggleBtnActive]}
+            onPress={() => setOutstationType('one_way')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="arrow-forward" size={16} color={outstationType === 'one_way' ? '#FFFFFF' : '#64748B'} />
+            <Text style={[styles.modeToggleBtnText, outstationType === 'one_way' && styles.modeToggleBtnTextActive]}>
+              One Way
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.modeToggleBtn, outstationType === 'round_trip' && styles.modeToggleBtnActive]}
+            onPress={() => setOutstationType('round_trip')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="swap-horizontal" size={16} color={outstationType === 'round_trip' ? '#FFFFFF' : '#64748B'} />
+            <Text style={[styles.modeToggleBtnText, outstationType === 'round_trip' && styles.modeToggleBtnTextActive]}>
+              Round Trip
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── MODE SELECTOR (RIDE NOW VS SCHEDULE) ─────────────────── */}
+        <View style={[styles.modeToggleCard, { marginTop: -6 }]}>
           <TouchableOpacity
             style={[styles.modeToggleBtn, bookingMode === 'now' && styles.modeToggleBtnActive]}
             onPress={() => setBookingMode('now')}
@@ -707,18 +782,30 @@ export default function LongTripScreen({ navigation }) {
           <View style={{ gap: 8 }}>
             {vehicleTypes.map(v => {
               const isSelected = selectedType === v.id
-              const vPricePerKm = v.price_per_km || v.per_km_rate || 15
-              const vPricePerMin = v.price_per_min || v.per_min_rate || 2
+              const isRound = outstationType === 'round_trip'
+              const vPricePerKm = isRound 
+                ? (v.round_trip_per_km || v.round_trip_fare || v.per_km_rate || 20)
+                : (v.one_way_per_km || v.one_way_fare || v.per_km_rate || 18)
+              const vCapacity = v.passenger_capacity || v.capacity || 4
               return (
                 <TouchableOpacity
                   key={v.id}
                   onPress={() => setSelectedType(v.id)}
                   style={[styles.vehicleCard, isSelected && styles.vehicleCardActive]}
                 >
-                  <Ionicons name={VEHICLE_ICONS[v.name] || 'car'} size={24} color={isSelected ? COLORS.primary : '#64748B'} />
+                  {v.icon_url ? (
+                    <Image
+                      source={{ uri: resolveAssetUrl(v.icon_url) }}
+                      style={{ width: 44, height: 34, resizeMode: 'contain', borderRadius: 4 }}
+                    />
+                  ) : (
+                    <Ionicons name={VEHICLE_ICONS[v.name] || 'car'} size={24} color={isSelected ? COLORS.primary : '#64748B'} />
+                  )}
                   <View style={{ flex: 1, marginLeft: 12 }}>
                     <Text style={[styles.vehicleName, isSelected && styles.vehicleNameActive]}>{v.name}</Text>
-                    <Text style={styles.vehicleRates}>₹{vPricePerKm}/km • ₹{vPricePerMin}/min {v.capacity ? `• ${v.capacity} Seats` : ''}</Text>
+                    <Text style={styles.vehicleRates}>
+                      ₹{vPricePerKm}/km ({isRound ? 'Round Trip' : 'One Way'}) • Min ₹{v.minimum_fare || v.min_fare || 50} • {vCapacity} Seats
+                    </Text>
                   </View>
                   {isSelected && <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />}
                 </TouchableOpacity>
@@ -832,7 +919,7 @@ export default function LongTripScreen({ navigation }) {
                     onPress={() => handleTogglePeriod('PM')}
                     activeOpacity={0.8}
                   >
-                    <Ionicons name="moon" size={14} color={isCurrentPM ? '#FFFFFF' : '#818CF8'} style={{ marginRight: 4 }} />
+                    <Ionicons name="moon" size={14} color={isCurrentPM ? '#FFFFFF' : '#D97706'} style={{ marginRight: 4 }} />
                     <Text style={[styles.periodPillText, isCurrentPM && styles.periodPillTextActive]}>PM (Evening/Night)</Text>
                   </TouchableOpacity>
                 </View>
@@ -845,7 +932,7 @@ export default function LongTripScreen({ navigation }) {
                 activeOpacity={0.8}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <View style={[styles.selectorIconWrap, { backgroundColor: '#EDE9FE' }]}>
+                  <View style={[styles.selectorIconWrap, { backgroundColor: '#FEF3C7' }]}>
                     <Ionicons name="time" size={20} color={COLORS.primary} />
                   </View>
                   <View>
@@ -859,8 +946,92 @@ export default function LongTripScreen({ navigation }) {
                 </View>
               </TouchableOpacity>
             </View>
+
+            {/* ── RETURN SCHEDULE (FOR ROUND TRIP) ────────────────────── */}
+            {outstationType === 'round_trip' && (
+              <View style={[styles.card, { borderColor: '#FDE68A', borderWidth: 1.5 }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="repeat" size={18} color="#D97706" />
+                    <Text style={[styles.cardTitle, { color: '#0F172A' }]}>Return Schedule *</Text>
+                  </View>
+                  <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 }}>
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: '#B45309' }}>ROUND TRIP</Text>
+                  </View>
+                </View>
+
+                {/* Return Date Selector Card */}
+                <TouchableOpacity
+                  style={[styles.dateSelectorCard, { marginBottom: 10 }]}
+                  onPress={() => {
+                    setActiveDateTarget('return')
+                    setShowDatePicker(true)
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={[styles.selectorIconWrap, { backgroundColor: '#FEF3C7' }]}>
+                      <Ionicons name="calendar" size={20} color={COLORS.primary} />
+                    </View>
+                    <View>
+                      <Text style={styles.selectorSubLabel}>Return Date</Text>
+                      <Text style={styles.selectorMainLabel}>{formatDateDisplay(returnDate)}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.changeActionBadge}>
+                    <Text style={styles.changeActionBadgeText}>Pick Date</Text>
+                    <Ionicons name="chevron-forward" size={13} color={COLORS.primary} />
+                  </View>
+                </TouchableOpacity>
+
+                {/* Return Time Selector Card */}
+                <TouchableOpacity
+                  style={styles.dateSelectorCard}
+                  onPress={() => {
+                    setActiveTimeTarget('return')
+                    setShowTimePicker(true)
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={[styles.selectorIconWrap, { backgroundColor: '#FEF3C7' }]}>
+                      <Ionicons name="time" size={20} color={COLORS.primary} />
+                    </View>
+                    <View>
+                      <Text style={styles.selectorSubLabel}>Return Time</Text>
+                      <Text style={styles.selectorMainLabel}>{formatTime12Hr(returnTime)}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.changeActionBadge}>
+                    <Text style={styles.changeActionBadgeText}>Pick Time</Text>
+                    <Ionicons name="chevron-forward" size={13} color={COLORS.primary} />
+                  </View>
+                </TouchableOpacity>
+              </View>
+            )}
           </>
         )}
+
+        {/* ── GST SETTINGS (OUTSTATION CUSTOMER TOGGLE) ────────────── */}
+        <View style={styles.card}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="receipt-outline" size={18} color={COLORS.primary} />
+                <Text style={styles.cardTitle}>Apply GST (5%)</Text>
+              </View>
+              <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                {gstEnabled ? 'GST is enabled by default. You can disable GST to reduce tax to ₹0.' : 'GST disabled (₹0 tax applied).'}
+              </Text>
+            </View>
+            <Switch
+              value={gstEnabled}
+              onValueChange={(val) => setGstEnabled(val)}
+              trackColor={{ false: '#CBD5E1', true: '#10B981' }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+        </View>
 
         {/* ── 6. ENABLE SHARING (ONLY IF DISTANCE >= 250 KM) ───────── */}
         {isEligibleForSharing && (
@@ -876,23 +1047,52 @@ export default function LongTripScreen({ navigation }) {
               <Switch
                 value={isSharingEnabled}
                 onValueChange={(val) => {
-                  if (val && user?.verification_status !== 'verified') {
+                  if (val) {
+                    if (user?.verification_status && user?.verification_status !== 'verified') {
+                      Alert.alert(
+                        'Identity Verification Required 🛡️',
+                        'Only Admin-verified passengers can publish a 50/50 Shared Trip. Please complete your Aadhaar KYC verification.',
+                        [
+                          { text: 'Verify Identity', onPress: () => navigation.navigate('IdentityVerification') },
+                          { text: 'Cancel', style: 'cancel' }
+                        ]
+                      )
+                      return
+                    }
+
+                    // Mandatory Full Fare Commitment Alert when enabling ride sharing
                     Alert.alert(
-                      'Identity Verification Required 🛡️',
-                      'Only Admin-verified passengers can publish a 50/50 Shared Trip. Please complete your Aadhaar KYC verification.',
+                      'Shared Outstation Trip Terms ⚠️',
+                      'When you enable ride sharing, any verified co-passenger can join your trip.\n\n⚠️ IMPORTANT RULE:\nIf NO other passenger joins your shared ride before departure time, YOU (the 1st customer who booked) must pay the FULL TRIP AMOUNT.\n\nDo you accept and want to enable ride sharing?',
                       [
-                        { text: 'Verify Identity', onPress: () => navigation.navigate('IdentityVerification') },
-                        { text: 'Cancel', style: 'cancel' }
+                        { text: 'Cancel', style: 'cancel', onPress: () => setIsSharingEnabled(false) },
+                        {
+                          text: 'I Agree & Enable',
+                          onPress: () => setIsSharingEnabled(true)
+                        }
                       ]
                     )
-                    return
+                  } else {
+                    setIsSharingEnabled(false)
                   }
-                  setIsSharingEnabled(val)
                 }}
                 trackColor={{ false: '#CBD5E1', true: COLORS.primary }}
                 thumbColor="#FFFFFF"
               />
             </View>
+
+            {/* Informative notice banner when sharing is enabled */}
+            {isSharingEnabled && (
+              <View style={styles.sharingWarningBanner}>
+                <Ionicons name="information-circle" size={18} color="#D97706" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.sharingWarningTitle}>Ride Share Policy Active</Text>
+                  <Text style={styles.sharingWarningText}>
+                    Other passengers can join this trip. If no other customer joins before departure time, you must pay the full trip fare.
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
         )}
 
@@ -900,54 +1100,132 @@ export default function LongTripScreen({ navigation }) {
         <View style={styles.summaryCard}>
           <View style={styles.summaryHeader}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Ionicons name="sparkles" size={16} color="#A5B4FC" />
+              <Ionicons name="sparkles" size={16} color={COLORS.primary} />
               <Text style={styles.summaryTitle}>Booking Summary</Text>
             </View>
             <View style={styles.scheduledTag}>
-              <Text style={styles.scheduledTagText}>LONG TRIP OUTSTATION</Text>
+              <Text style={styles.scheduledTagText}>
+                {outstationType === 'round_trip' ? 'OUTSTATION ROUND TRIP' : 'OUTSTATION ONE WAY'}
+              </Text>
             </View>
           </View>
 
-          <View style={{ backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 12, padding: 12, marginBottom: 10 }}>
+          <View style={{ backgroundColor: '#F8FAFC', borderRadius: 12, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: '#E2E8F0' }}>
             <Text style={styles.sumRouteText} numberOfLines={1}>📍 {pickup || 'Enter pickup location above'}</Text>
             <Text style={styles.sumArrow}>↓</Text>
             <Text style={styles.sumRouteText} numberOfLines={1}>🏁 {destination || 'Enter destination location above'}</Text>
           </View>
 
-          {/* Clean 3-Metric Summary: Distance, ETA, Total Fare */}
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 12, padding: 10, marginBottom: 10 }}>
-            <View style={{ width: '48%' }}>
-              <Text style={{ fontSize: 10, color: '#818CF8' }}>Distance (Road):</Text>
-              <Text style={{ fontSize: 13, fontWeight: '800', color: distanceKm > 0 ? '#4ADE80' : '#FFFFFF', marginTop: 1 }}>
-                {distanceKm > 0 ? `${distanceKm.toFixed(0)} KM` : (estimating ? 'Calculating...' : '—')}
-              </Text>
-            </View>
-            <View style={{ width: '48%' }}>
-              <Text style={{ fontSize: 10, color: '#818CF8' }}>Duration (ETA):</Text>
-              <Text style={{ fontSize: 13, fontWeight: '800', color: '#FFFFFF', marginTop: 1 }}>
-                {durationMins > 0 ? formatDuration(durationMins) : (estimating ? 'Calculating...' : '—')}
-              </Text>
-            </View>
-            <View style={{ width: '48%' }}>
-              <Text style={{ fontSize: 10, color: '#818CF8' }}>Vehicle Category:</Text>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: '#FFFFFF', marginTop: 1 }}>{selectedVehicleObj?.name || 'Standard'}</Text>
-            </View>
-            <View style={{ width: '48%' }}>
-              <Text style={{ fontSize: 10, color: '#818CF8' }}>Schedule:</Text>
-              <Text style={{ fontSize: 12, fontWeight: '700', color: '#FFFFFF', marginTop: 1 }}>{travelDate ? `${travelDate} ${formatTime12Hr(pickupTime)}` : 'Select date'}</Text>
-            </View>
-          </View>
+          {/* Itemized 12-field Booking Summary Breakdown */}
+          {(() => {
+            const isRound = outstationType === 'round_trip'
+            const tripTypeDisplay = isRound ? 'Outstation Round Trip' : 'Outstation One Way'
+            const vehicleDisplayName = selectedVehicleObj?.name || 'Standard'
+            const singleKmVal = parseFloat(fareEst?.travel_distance_km || fareEst?.distance_km || distanceKm || 0)
+            const totalKmVal = parseFloat(fareEst?.total_distance_km || (isRound ? singleKmVal * 2 : singleKmVal))
+            const durationDisplay = durationMins > 0 ? formatDuration(isRound ? durationMins * 2 : durationMins) : (estimating ? 'Calculating...' : '—')
+            const pickupChargeVal = Math.round(Number(fareEst?.pickup_charge || 0))
+            const waitingChargeVal = Math.round(Number(fareEst?.waiting_charge || (isRound ? 100 : 0)))
+            const gstAmountVal = gstEnabled ? Math.round(Number(fareEst?.gst_amount || (totalFare * 0.05))) : 0
+            const gstPercentVal = fareEst?.gst_percent || 5
+            const discVal = Math.round(Number(fareEst?.discount || 0))
+            const couponCodeVal = fareEst?.coupon_code || 'None'
+            const finalAmountVal = Math.round(Number(fareEst?.final_amount ?? fareEst?.final_fare ?? (totalFare + (isRound ? waitingChargeVal : 0) + (gstEnabled ? gstAmountVal : 0) - discVal)))
+            const advanceVal = Math.round(Number(fareEst?.advance_online_payment ?? fareEst?.advance_payment_amount ?? Math.round(finalAmountVal * 0.1)))
+            const remainingDriverVal = Math.max(0, Math.round(Number(fareEst?.remaining_amount_to_driver ?? (finalAmountVal - advanceVal))))
 
-          {/* Total Fare Card */}
-          <View style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 12, padding: 12, marginBottom: 14, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-            <View>
-              <Text style={{ fontSize: 12, fontWeight: '800', color: '#A5B4FC' }}>Estimated Total Fare:</Text>
-              <Text style={{ fontSize: 10, color: '#C7D2FE', marginTop: 1 }}>Exact backend Google Maps fare</Text>
-            </View>
-            <Text style={{ fontSize: 22, fontWeight: '900', color: '#4ADE80' }}>
-              {estimating ? '...' : `₹${Math.round(totalFare)}`}
-            </Text>
-          </View>
+            return (
+              <View style={{ gap: 6, marginBottom: 12 }}>
+                {/* 1. Trip Type */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '700' }}>Trip Type</Text>
+                  <Text style={{ fontSize: 12, color: '#0F172A', fontWeight: '800' }}>{tripTypeDisplay}</Text>
+                </View>
+
+                {/* 2. Vehicle */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '700' }}>Vehicle</Text>
+                  <Text style={{ fontSize: 12, color: '#0F172A', fontWeight: '800' }}>{vehicleDisplayName}</Text>
+                </View>
+
+                {/* 3. Distance */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '700' }}>Distance</Text>
+                  <Text style={{ fontSize: 12, color: '#0F172A', fontWeight: '800' }}>
+                    {isRound ? `${totalKmVal.toFixed(0)} KM (${singleKmVal.toFixed(0)} km + ${singleKmVal.toFixed(0)} km return)` : `${singleKmVal.toFixed(0)} KM`}
+                  </Text>
+                </View>
+
+                {/* 4. Duration */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '700' }}>Duration</Text>
+                  <Text style={{ fontSize: 12, color: '#0F172A', fontWeight: '800' }}>{durationDisplay}</Text>
+                </View>
+
+                {/* 5. Pickup Charge */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '700' }}>Pickup Charge</Text>
+                  <Text style={{ fontSize: 12, color: pickupChargeVal > 0 ? '#D97706' : '#10B981', fontWeight: '800' }}>
+                    {pickupChargeVal > 0 ? `₹${pickupChargeVal}` : '₹0 (Free)'}
+                  </Text>
+                </View>
+
+                {/* 6. Waiting Charge */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '700' }}>Waiting Charge</Text>
+                  <Text style={{ fontSize: 12, color: '#0F172A', fontWeight: '800' }}>₹{waitingChargeVal}</Text>
+                </View>
+
+                {/* 7. GST */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '700' }}>GST ({gstEnabled ? `${gstPercentVal}%` : 'Disabled'})</Text>
+                  <Text style={{ fontSize: 12, color: gstEnabled ? '#0F172A' : '#64748B', fontWeight: '800' }}>
+                    ₹{gstAmountVal}
+                  </Text>
+                </View>
+
+                {/* 8. Coupon */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '700' }}>Coupon</Text>
+                  <Text style={{ fontSize: 12, color: '#0F172A', fontWeight: '800' }}>{couponCodeVal}</Text>
+                </View>
+
+                {/* 9. Discount */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '700' }}>Discount</Text>
+                  <Text style={{ fontSize: 12, color: discVal > 0 ? '#059669' : '#0F172A', fontWeight: '800' }}>
+                    {discVal > 0 ? `-₹${discVal}` : '₹0'}
+                  </Text>
+                </View>
+
+                <View style={{ height: 1, backgroundColor: '#E2E8F0', marginVertical: 4 }} />
+
+                {/* 10. Final Amount */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: '#0F172A' }}>Final Amount</Text>
+                  <Text style={{ fontSize: 20, fontWeight: '900', color: COLORS.primary }}>
+                    ₹{estimating ? '...' : finalAmountVal}
+                  </Text>
+                </View>
+
+                {/* 11. Advance Online Payment */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: COLORS.primary, fontWeight: '700' }}>Advance Online Payment</Text>
+                  <Text style={{ fontSize: 13, color: COLORS.primary, fontWeight: '800' }}>
+                    ₹{estimating ? '...' : advanceVal}
+                  </Text>
+                </View>
+
+                {/* 12. Remaining Amount To Driver */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 12, color: '#D97706', fontWeight: '700' }}>Remaining Amount To Driver</Text>
+                  <Text style={{ fontSize: 13, color: '#D97706', fontWeight: '800' }}>
+                    ₹{estimating ? '...' : remainingDriverVal}
+                  </Text>
+                </View>
+              </View>
+            )
+          })()}
 
           {/* Confirm Long Trip Booking Button */}
           <TouchableOpacity
@@ -970,7 +1248,7 @@ export default function LongTripScreen({ navigation }) {
 
           {!isFormValid && (
             <View style={styles.validationHint}>
-              <Ionicons name="information-circle-outline" size={14} color="#FCD34D" />
+              <Ionicons name="information-circle-outline" size={14} color="#D97706" />
               <Text style={styles.validationHintText}>
                 {distanceError
                   ? distanceError
@@ -1259,18 +1537,10 @@ export default function LongTripScreen({ navigation }) {
 
           {/* Map View & Fixed Center Pin */}
           <View style={styles.mapCanvasWrap}>
-            <MapView
+            <UniversalRouteMap
               ref={mapRef}
-              style={[StyleSheet.absoluteFillObject, { width: '100%', height: '100%' }]}
               initialRegion={mapRegion}
-              onMapReady={() => {
-                mapRef.current?.animateToRegion(mapRegion, 300)
-              }}
-              onRegionChangeComplete={handleRegionChangeComplete}
-              showsUserLocation={true}
-              showsMyLocationButton={false}
-              showsCompass={false}
-              toolbarEnabled={false}
+              style={[StyleSheet.absoluteFillObject, { width: '100%', height: '100%' }]}
             />
 
             {/* Central Animated Pin Pointer */}
@@ -1342,7 +1612,7 @@ export default function LongTripScreen({ navigation }) {
 
               {/* Reference ID Badge */}
               <View style={styles.successRefBadge}>
-                <Ionicons name="ticket-outline" size={14} color="#4F46E5" />
+                <Ionicons name="ticket-outline" size={14} color="#D97706" />
                 <Text style={styles.successRefText}>Ref: #{confirmedTripData?.bookingRef}</Text>
               </View>
             </View>
@@ -1350,7 +1620,7 @@ export default function LongTripScreen({ navigation }) {
             {/* Schedule Date & Time Banner */}
             <View style={styles.scheduleBanner}>
               <View style={styles.scheduleBannerItem}>
-                <Ionicons name="calendar" size={18} color="#4F46E5" />
+                <Ionicons name="calendar" size={18} color="#D97706" />
                 <View>
                   <Text style={styles.scheduleBannerLabel}>DEPARTURE DATE</Text>
                   <Text style={styles.scheduleBannerValue}>{confirmedTripData?.travelDate}</Text>
@@ -1409,7 +1679,7 @@ export default function LongTripScreen({ navigation }) {
 
             {/* Helpful Notice */}
             <View style={styles.noticeCard}>
-              <Ionicons name="information-circle-outline" size={20} color="#0284C7" />
+              <Ionicons name="information-circle-outline" size={20} color="#D97706" />
               <Text style={styles.noticeText}>
                 Driver allocation and cab details will be assigned prior to departure time. You can monitor the status anytime from your trips tab.
               </Text>
@@ -1442,7 +1712,7 @@ export default function LongTripScreen({ navigation }) {
               }}
               activeOpacity={0.8}
             >
-              <Ionicons name="calendar-outline" size={18} color="#4F46E5" />
+              <Ionicons name="calendar-outline" size={18} color="#D97706" />
               <Text style={styles.tripsBtnText}>View Scheduled Trips</Text>
             </TouchableOpacity>
 
@@ -1474,7 +1744,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 17, fontWeight: '800', color: '#0F172A' },
   headerSub: { fontSize: 11, color: '#64748B', marginTop: 1 },
   scrollContent: { padding: 16, paddingBottom: 40 },
-  modeToggleCard: { flexDirection: 'row', backgroundColor: '#EDE9FE', borderRadius: 12, padding: 4, marginBottom: 14, gap: 4 },
+  modeToggleCard: { flexDirection: 'row', backgroundColor: '#FEF3C7', borderRadius: 12, padding: 4, marginBottom: 14, gap: 4 },
   modeToggleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRadius: 9, gap: 6 },
   modeToggleBtnActive: { backgroundColor: COLORS.primary, shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4, elevation: 3 },
   modeToggleBtnText: { fontSize: 13, fontWeight: '700', color: '#64748B' },
@@ -1493,13 +1763,13 @@ const styles = StyleSheet.create({
   errorText: { fontSize: 11, color: '#DC2626', fontWeight: '600', flex: 1 },
   rowGrid: { flexDirection: 'row', gap: 8, marginBottom: 10 },
   dateChip: { flex: 1, paddingVertical: 9, borderRadius: 10, borderWidth: 1.5, borderColor: '#E2E8F0', backgroundColor: '#F8FAFC', alignItems: 'center' },
-  dateChipActive: { borderColor: COLORS.primary, backgroundColor: '#EDE9FE' },
+  dateChipActive: { borderColor: COLORS.primary, backgroundColor: '#FFFBEB' },
   dateChipText: { fontSize: 12, fontWeight: '700', color: '#64748B' },
   dateChipTextActive: { color: COLORS.primary, fontWeight: '800' },
-  openPickerBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EDE9FE', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  openPickerBtnText: { fontSize: 11, fontWeight: '800', color: COLORS.primary },
+  openPickerBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  openPickerBtnText: { fontSize: 11, fontWeight: '800', color: '#B45309' },
   dateSelectorCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F8FAFC', borderWidth: 1.5, borderColor: '#E2E8F0', borderRadius: 12, padding: 12 },
-  selectorIconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#EDE9FE', alignItems: 'center', justifyContent: 'center' },
+  selectorIconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#FEF3C7', alignItems: 'center', justifyContent: 'center' },
   selectorSubLabel: { fontSize: 10, fontWeight: '700', color: '#64748B', textTransform: 'uppercase' },
   selectorMainLabel: { fontSize: 14, fontWeight: '800', color: '#0F172A', marginTop: 1 },
   changeActionBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#FFFFFF', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0' },
@@ -1512,22 +1782,45 @@ const styles = StyleSheet.create({
   periodPillText: { fontSize: 11, fontWeight: '700', color: '#64748B' },
   periodPillTextActive: { color: '#FFFFFF', fontWeight: '800' },
   vehicleCard: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 12, borderWidth: 1.5, borderColor: '#E2E8F0', backgroundColor: '#F8FAFC' },
-  vehicleCardActive: { borderColor: COLORS.primary, backgroundColor: '#FAF5FF' },
+  vehicleCardActive: { borderColor: COLORS.primary, backgroundColor: '#FFFBEB' },
   vehicleName: { fontSize: 13, fontWeight: '800', color: '#0F172A' },
   vehicleNameActive: { color: COLORS.primary },
   vehicleRates: { fontSize: 11, color: '#64748B', marginTop: 2 },
   sharingHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sharingCardActive: { borderColor: COLORS.primary, backgroundColor: '#FAF5FF' },
+  sharingCardActive: { borderColor: COLORS.primary, backgroundColor: '#FFFBEB' },
   splitTag: { backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
   splitTagText: { fontSize: 9, fontWeight: '800', color: '#16A34A' },
   sharingSub: { fontSize: 11, color: '#64748B', marginTop: 3 },
-  summaryCard: { backgroundColor: '#1E1B4B', borderRadius: 18, padding: 18 },
+  sharingWarningBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 10,
+  },
+  sharingWarningTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#92400E',
+    marginBottom: 2,
+  },
+  sharingWarningText: {
+    fontSize: 11,
+    color: '#B45309',
+    lineHeight: 16,
+    fontWeight: '500',
+  },
+  summaryCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 18, borderWidth: 1, borderColor: '#E2E8F0', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2 },
   summaryHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  summaryTitle: { fontSize: 13, fontWeight: '800', color: '#A5B4FC' },
-  scheduledTag: { backgroundColor: 'rgba(255,255,255,0.15)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  scheduledTagText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF' },
-  sumRouteText: { fontSize: 12, fontWeight: '700', color: '#FFFFFF' },
-  sumArrow: { fontSize: 10, color: '#A5B4FC', marginLeft: 14, marginVertical: 2 },
+  summaryTitle: { fontSize: 14, fontWeight: '900', color: '#0F172A' },
+  scheduledTag: { backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, borderColor: '#FDE68A' },
+  scheduledTagText: { fontSize: 10, fontWeight: '800', color: '#B45309' },
+  sumRouteText: { fontSize: 12, fontWeight: '700', color: '#0F172A' },
+  sumArrow: { fontSize: 10, color: '#94A3B8', marginLeft: 14, marginVertical: 2 },
   confirmBtn: {
     backgroundColor: COLORS.primary,
     borderRadius: 14,
@@ -1543,7 +1836,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   confirmBtnDisabled: {
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: '#94A3B8',
     shadowOpacity: 0,
     elevation: 0,
   },
@@ -1556,14 +1849,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(251, 191, 36, 0.12)',
+    backgroundColor: '#FEF3C7',
     padding: 10,
     borderRadius: 10,
     marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
   },
   validationHintText: {
     fontSize: 11,
-    color: '#FCD34D',
+    color: '#92400E',
     fontWeight: '600',
     flex: 1,
   },
@@ -1634,7 +1929,7 @@ const styles = StyleSheet.create({
   pickerSectionLabel: { fontSize: 11, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', marginTop: 10, marginBottom: 6 },
   timePresetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 6 },
   timePresetChip: { backgroundColor: '#F1F5F9', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0' },
-  timePresetChipActive: { backgroundColor: '#EDE9FE', borderColor: COLORS.primary },
+  timePresetChipActive: { backgroundColor: '#FEF3C7', borderColor: COLORS.primary },
   timePresetChipText: { fontSize: 11, fontWeight: '700', color: '#334155' },
   timePresetChipTextActive: { color: COLORS.primary, fontWeight: '800' },
   hoursGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
@@ -1657,8 +1952,8 @@ const styles = StyleSheet.create({
   successIconRing: { width: 110, height: 110, borderRadius: 55, backgroundColor: '#ECFDF5', alignItems: 'center', justifyContent: 'center', marginBottom: 14, borderWidth: 3, borderColor: '#A7F3D0' },
   successTitle: { fontSize: 24, fontWeight: '900', color: '#0F172A', marginBottom: 4, textAlign: 'center' },
   successSubtitle: { fontSize: 13, fontWeight: '600', color: '#64748B', textAlign: 'center', marginBottom: 12 },
-  successRefBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#EEF2FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: '#C7D2FE' },
-  successRefText: { fontSize: 12, fontWeight: '800', color: '#4F46E5', letterSpacing: 0.5 },
+  successRefBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FEF3C7', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: '#FDE68A' },
+  successRefText: { fontSize: 12, fontWeight: '800', color: '#B45309', letterSpacing: 0.5 },
 
   scheduleBanner: { width: '100%', flexDirection: 'row', alignItems: 'center', backgroundColor: '#F8FAFC', borderRadius: 16, padding: 14, borderWidth: 1.5, borderColor: '#E2E8F0', marginBottom: 16 },
   scheduleBannerItem: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -1671,10 +1966,10 @@ const styles = StyleSheet.create({
   vehicleInfo: { flex: 1 },
   summaryVehicleName: { fontSize: 16, fontWeight: '900', color: '#0F172A' },
   serviceTypeBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, alignSelf: 'flex-start', marginTop: 4 },
-  badgePrivate: { backgroundColor: '#EEF2FF', borderWidth: 1, borderColor: '#C7D2FE' },
+  badgePrivate: { backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FDE68A' },
   badgeShared: { backgroundColor: '#F3E8FF', borderWidth: 1, borderColor: '#DDD6FE' },
   serviceTypeBadgeText: { fontSize: 10, fontWeight: '800' },
-  badgeTextPrivate: { color: '#4F46E5' },
+  badgeTextPrivate: { color: '#B45309' },
   badgeTextShared: { color: '#7C3AED' },
   fareInfo: { alignItems: 'flex-end' },
   summaryFareAmount: { fontSize: 22, fontWeight: '900', color: '#059669' },
@@ -1690,13 +1985,13 @@ const styles = StyleSheet.create({
   routeStopLabel: { fontSize: 10, fontWeight: '800', color: '#94A3B8', letterSpacing: 0.5 },
   routeStopAddress: { fontSize: 13, fontWeight: '700', color: '#0F172A', marginTop: 1 },
 
-  noticeCard: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F0F9FF', padding: 12, borderRadius: 12, marginBottom: 18, borderWidth: 1, borderColor: '#BAE6FD' },
-  noticeText: { flex: 1, fontSize: 11, color: '#0369A1', lineHeight: 16, fontWeight: '500' },
+  noticeCard: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FFFBEB', padding: 12, borderRadius: 12, marginBottom: 18, borderWidth: 1, borderColor: '#FDE68A' },
+  noticeText: { flex: 1, fontSize: 11, color: '#92400E', lineHeight: 16, fontWeight: '500' },
 
-  ticketBtn: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#4F46E5', paddingVertical: 16, borderRadius: 16, marginBottom: 10, shadowColor: '#4F46E5', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 4 },
+  ticketBtn: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 16, marginBottom: 10, shadowColor: COLORS.primaryDark, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 4 },
   ticketBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '900', letterSpacing: 0.3 },
-  tripsBtn: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#EEF2FF', paddingVertical: 14, borderRadius: 16, marginBottom: 10, borderWidth: 1, borderColor: '#C7D2FE' },
-  tripsBtnText: { color: '#4F46E5', fontSize: 14, fontWeight: '800' },
+  tripsBtn: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#FFFBEB', paddingVertical: 14, borderRadius: 16, marginBottom: 10, borderWidth: 1, borderColor: '#FDE68A' },
+  tripsBtnText: { color: '#B45309', fontSize: 14, fontWeight: '800' },
   homeReturnBtn: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#F8FAFC', paddingVertical: 12, borderRadius: 16 },
   homeReturnBtnText: { color: '#64748B', fontSize: 13, fontWeight: '700' }
 })

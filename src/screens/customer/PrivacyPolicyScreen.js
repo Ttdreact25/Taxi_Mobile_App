@@ -21,7 +21,7 @@ const PrivacyPolicyScreen = ({ navigation }) => {
           onPress={() => navigation.goBack()}
           activeOpacity={0.8}
         >
-          <Ionicons name="arrow-back" size={20} color={COLORS.white} />
+          <Ionicons name="arrow-back" size={20} color={COLORS.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Privacy Policy</Text>
         <View style={{ width: 40 }} />
@@ -38,7 +38,7 @@ const PrivacyPolicyScreen = ({ navigation }) => {
           </View>
           <Text style={styles.bannerTitle}>Your Privacy Matters to Us</Text>
           <Text style={styles.bannerSub}>
-            CityDropTaxi is committed to protecting your personal data, privacy, and security in compliance with applicable laws and Google Play User Data Policies.
+            CityOneTaxi is committed to protecting your personal data, privacy, and security in compliance with applicable laws and Google Play User Data Policies.
           </Text>
           <View style={styles.badge}>
             <Text style={styles.badgeText}>Last Updated: September 2026</Text>
@@ -49,7 +49,7 @@ const PrivacyPolicyScreen = ({ navigation }) => {
         <View style={styles.sectionCard}>
           <Text style={styles.sectionHeading}>1. Introduction</Text>
           <Text style={styles.bodyText}>
-            This Privacy Policy describes how CityDropTaxi (&ldquo;we&rdquo;, &ldquo;our&rdquo;, or &ldquo;us&rdquo;) collects, uses, stores, and protects information obtained from riders (customers) and driver partners through the CityDropTaxi mobile applications, website, and related ride-hailing services.
+            This Privacy Policy describes how CityOneTaxi (&ldquo;we&rdquo;, &ldquo;our&rdquo;, or &ldquo;us&rdquo;) collects, uses, stores, and protects information obtained from riders (customers) and driver partners through the CityOneTaxi mobile applications, website, and related ride-hailing services.
           </Text>
         </View>
 
@@ -110,7 +110,7 @@ const PrivacyPolicyScreen = ({ navigation }) => {
         <View style={styles.sectionCard}>
           <Text style={styles.sectionHeading}>5. Account & Data Deletion (Google Play Compliant)</Text>
           <Text style={styles.bodyText}>
-            In compliance with Google Play User Data policies, CityDropTaxi provides all users with the absolute right to delete their account and associated data:
+            In compliance with Google Play User Data policies, CityOneTaxi provides all users with the absolute right to delete their account and associated data:
           </Text>
           <Text style={styles.bulletItem}>
             • <Text style={{ fontWeight: '700' }}>In-App Deletion:</Text> Go to Profile &rarr; Delete Account. After double confirmation, your personal identity, contact numbers, email, profile photos, and saved places are immediately removed or permanently anonymized.
@@ -139,8 +139,8 @@ const PrivacyPolicyScreen = ({ navigation }) => {
             If you have questions, feedback, or grievance requests concerning this Privacy Policy or your personal information, please contact us:
           </Text>
           <View style={styles.contactBox}>
-            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Company:</Text> CityDropTaxi Fleet Services</Text>
-            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Email:</Text> support@citydroptaxi.com</Text>
+            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Company:</Text> CityOneTaxi Fleet Services</Text>
+            <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Email:</Text> support@cityonetaxi.com</Text>
             <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Website:</Text> https://taxi-backend.toptechsoftwaresolutions.in</Text>
             <Text style={styles.contactItem}><Text style={{ fontWeight: '700' }}>Support Hotline:</Text> 24x7 In-App Help & SOS Desk</Text>
           </View>
@@ -154,7 +154,7 @@ const PrivacyPolicyScreen = ({ navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0F172A',
+    backgroundColor: COLORS.background,
   },
   header: {
     flexDirection: 'row',
@@ -163,40 +163,41 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.md,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.08)',
+    borderBottomColor: COLORS.gray200,
+    backgroundColor: COLORS.white,
   },
   backBtn: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: COLORS.gray100,
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
     fontSize: 17,
     fontWeight: '800',
-    color: COLORS.white,
+    color: COLORS.text,
   },
   scrollContent: {
     padding: SPACING.lg,
     paddingBottom: 40,
   },
   bannerCard: {
-    backgroundColor: '#1E293B',
+    backgroundColor: COLORS.white,
     borderRadius: RADIUS.xxl,
     padding: SPACING.xl,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: COLORS.gray200,
     marginBottom: SPACING.lg,
-    ...SHADOW.md,
+    ...SHADOW.sm,
   },
   iconCircle: {
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#EEF2FF',
+    backgroundColor: COLORS.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
@@ -204,20 +205,20 @@ const styles = StyleSheet.create({
   bannerTitle: {
     fontSize: 18,
     fontWeight: '900',
-    color: COLORS.white,
+    color: COLORS.text,
     textAlign: 'center',
     marginBottom: 8,
   },
   bannerSub: {
     fontSize: 13,
-    color: '#94A3B8',
+    color: COLORS.textSecondary,
     textAlign: 'center',
     lineHeight: 19,
   },
   badge: {
-    backgroundColor: 'rgba(79, 70, 229, 0.2)',
+    backgroundColor: COLORS.primaryLight,
     borderWidth: 1,
-    borderColor: '#6366F1',
+    borderColor: COLORS.primaryMid,
     borderRadius: 20,
     paddingHorizontal: 12,
     paddingVertical: 4,
@@ -226,7 +227,7 @@ const styles = StyleSheet.create({
   badgeText: {
     fontSize: 11,
     fontWeight: '800',
-    color: '#A5B4FC',
+    color: COLORS.primary,
   },
   sectionCard: {
     backgroundColor: COLORS.white,

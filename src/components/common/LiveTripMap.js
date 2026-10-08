@@ -8,7 +8,7 @@ import {
   Linking,
   Platform,
 } from 'react-native'
-import MapView, { Marker, Polyline } from 'react-native-maps'
+import UniversalRouteMap from './UniversalRouteMap'
 import { Ionicons } from '@expo/vector-icons'
 import { fetchRouteDirections, calculateBearing, calculateDistanceKm } from '../../services/directionService'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
@@ -165,114 +165,16 @@ const LiveTripMap = ({
 
   return (
     <View style={[styles.wrapper, { height }]}>
-      <MapView
+      <UniversalRouteMap
         ref={mapRef}
-        style={StyleSheet.absoluteFillObject}
+        pickupCoords={origin}
+        destCoords={destination}
+        driverLocation={driverLocation?.latitude ? { latitude: driverLocation.latitude, longitude: driverLocation.longitude, heading: carRotation } : null}
+        waypoints={normalizedWaypoints}
+        routeCoordinates={routeCoords}
         initialRegion={initialRegion}
-        onMapReady={() => setMapReady(true)}
-        showsUserLocation={false}
-        showsCompass={false}
-        showsMyLocationButton={false}
-        toolbarEnabled={false}
-      >
-        {/* Route Direction Polyline (Outer Glow + Inner Core) */}
-        {routeCoords.length > 1 && (
-          <>
-            <Polyline
-              coordinates={routeCoords}
-              strokeColor="rgba(79, 70, 229, 0.35)"
-              strokeWidth={8}
-            />
-            <Polyline
-              coordinates={routeCoords}
-              strokeColor="#4F46E5"
-              strokeWidth={4.5}
-            />
-          </>
-        )}
-
-        {/* 1. Driver Moving Car Marker */}
-        {driverLocation?.latitude && (
-          <Marker
-            coordinate={{
-              latitude: driverLocation.latitude,
-              longitude: driverLocation.longitude,
-            }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            flat
-            rotation={carRotation}
-            zIndex={20}
-          >
-            <View style={styles.carMarkerContainer}>
-              <View style={styles.carMarkerPulse} />
-              <View style={styles.carMarkerBadge}>
-                <Ionicons name="car-sport" size={18} color="#FFFFFF" />
-              </View>
-            </View>
-          </Marker>
-        )}
-
-        {/* 2. Customer Pickup Pin (Green) */}
-        {origin?.latitude && (
-          <Marker
-            coordinate={{
-              latitude: origin.latitude,
-              longitude: origin.longitude,
-            }}
-            anchor={{ x: 0.5, y: 1 }}
-            zIndex={15}
-          >
-            <View style={styles.pinWrapper}>
-              <View style={[styles.pinBubble, { backgroundColor: '#10B981' }]}>
-                <Text style={styles.pinText}>Pickup</Text>
-              </View>
-              <View style={[styles.pinDot, { borderColor: '#10B981' }]}>
-                <Ionicons name="location" size={24} color="#10B981" />
-              </View>
-            </View>
-          </Marker>
-        )}
-
-        {/* 3. Destination Dropoff Pin (Red) */}
-        {destination?.latitude && (
-          <Marker
-            coordinate={{
-              latitude: destination.latitude,
-              longitude: destination.longitude,
-            }}
-            anchor={{ x: 0.5, y: 1 }}
-            zIndex={15}
-          >
-            <View style={styles.pinWrapper}>
-              <View style={[styles.pinBubble, { backgroundColor: '#EF4444' }]}>
-                <Text style={styles.pinText}>Dropoff</Text>
-              </View>
-              <View style={[styles.pinDot, { borderColor: '#EF4444' }]}>
-                <Ionicons name="flag" size={20} color="#EF4444" />
-              </View>
-            </View>
-          </Marker>
-        )}
-
-        {/* 4. Intermediate Stops (If any) */}
-        {normalizedWaypoints.map((wp, idx) => (
-          <Marker
-            key={`stop-${idx}-${wp.latitude}-${wp.longitude}`}
-            coordinate={{ latitude: wp.latitude, longitude: wp.longitude }}
-            anchor={{ x: 0.5, y: 1 }}
-            zIndex={14}
-          >
-            <View style={styles.pinWrapper}>
-              <View style={[styles.pinBubble, { backgroundColor: '#D97706' }]}>
-                <Text style={styles.pinText}>Stop {wp.index}</Text>
-              </View>
-              <View style={[styles.pinDot, { borderColor: '#D97706', backgroundColor: '#FEF3C7' }]}>
-                <Ionicons name="location" size={22} color="#D97706" />
-              </View>
-            </View>
-          </Marker>
-        ))}
-      </MapView>
+        style={StyleSheet.absoluteFillObject}
+      />
 
       {/* Floating Top Banner: Live Direction & Distance HUD */}
       <View style={styles.topHudCard}>
@@ -307,7 +209,7 @@ const LiveTripMap = ({
           activeOpacity={0.85}
           title="Fit Route to View"
         >
-          <Ionicons name="scan-outline" size={18} color="#4F46E5" />
+          <Ionicons name="scan-outline" size={18} color="#D97706" />
           <Text style={styles.floatingActionText}>Recenter</Text>
         </TouchableOpacity>
 
@@ -329,7 +231,7 @@ const LiveTripMap = ({
       {/* Loading overlay indicator */}
       {loadingRoute && routeCoords.length === 0 && (
         <View style={styles.loadingRouteOverlay}>
-          <ActivityIndicator size="small" color="#4F46E5" />
+          <ActivityIndicator size="small" color="#D97706" />
           <Text style={styles.loadingRouteText}>Computing route direction...</Text>
         </View>
       )}
@@ -342,7 +244,7 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: RADIUS.xl,
     overflow: 'hidden',
-    backgroundColor: '#0F172A',
+    backgroundColor: '#F1F5F9',
     position: 'relative',
     borderWidth: 1,
     borderColor: '#E2E8F0',
@@ -359,13 +261,13 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(79, 70, 229, 0.25)',
+    backgroundColor: 'rgba(245, 158, 11, 0.25)',
   },
   carMarkerBadge: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#4F46E5',
+    backgroundColor: '#D97706',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
@@ -431,24 +333,24 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   hudEtaBadge: {
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FEF3C7',
     paddingHorizontal: 9,
     paddingVertical: 4,
     borderRadius: 8,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#C7D2FE',
+    borderColor: '#FDE68A',
   },
   hudEtaMins: {
     fontSize: 12,
     fontWeight: '900',
-    color: '#4F46E5',
+    color: '#B45309',
     lineHeight: 14,
   },
   hudDistKm: {
     fontSize: 9,
     fontWeight: '700',
-    color: '#6366F1',
+    color: '#D97706',
   },
   bottomControlsRow: {
     position: 'absolute',
@@ -473,8 +375,8 @@ const styles = StyleSheet.create({
     ...SHADOW.md,
   },
   navigateGpsBtn: {
-    backgroundColor: '#4F46E5',
-    borderColor: '#4338CA',
+    backgroundColor: '#0F172A',
+    borderColor: '#1E293B',
     flex: 1,
     justifyContent: 'center',
   },
@@ -500,7 +402,7 @@ const styles = StyleSheet.create({
   loadingRouteText: {
     fontSize: 10,
     fontWeight: '600',
-    color: '#4F46E5',
+    color: '#D97706',
   },
 })
 

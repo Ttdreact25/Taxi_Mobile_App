@@ -1,8 +1,8 @@
+import React, { useState } from 'react'
 import { NavigationContainer } from '@react-navigation/native'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { useAuth } from '../context/AuthContext'
-import { ActivityIndicator, View } from 'react-native'
-import { COLORS } from '../constants/theme'
+import SplashScreen from '../components/common/SplashScreen'
 
 // Auth Screens
 import LoginScreen         from '../screens/auth/LoginScreen'
@@ -23,13 +23,10 @@ const Stack = createNativeStackNavigator()
 
 const AppNavigator = () => {
   const { user, loading } = useAuth()
+  const [splashFinished, setSplashFinished] = useState(false)
 
-  if (loading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.background }}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-      </View>
-    )
+  if (loading || !splashFinished) {
+    return <SplashScreen onFinish={() => setSplashFinished(true)} />
   }
 
   return (

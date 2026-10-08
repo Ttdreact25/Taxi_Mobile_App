@@ -6,9 +6,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
-import { longTripAPI, uploadAPI } from '../../api/api'
+import { longTripAPI, uploadAPI, createUploadFormData } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
 import { COLORS } from '../../constants/theme'
+import { Skeleton, SkeletonCard } from '../../components/common/Skeleton'
 
 const IdentityVerificationScreen = ({ navigation }) => {
   const { user, refreshUser } = useAuth()
@@ -78,12 +79,14 @@ const IdentityVerificationScreen = ({ navigation }) => {
             allowsEditing: true,
             aspect: field === 'selfie' ? [1, 1] : [4, 3],
             quality: 0.6,
+            base64: true,
           })
         : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            mediaTypes: ['images'],
             allowsEditing: true,
             aspect: field === 'selfie' ? [1, 1] : [4, 3],
             quality: 0.6,
+            base64: true,
           })
 
       if (!result.canceled && result.assets[0]?.uri) {
@@ -103,16 +106,9 @@ const IdentityVerificationScreen = ({ navigation }) => {
       return uri
     }
     try {
-      const filename = uri.split('/').pop() || `${type}_${Date.now()}.jpg`
-      const match = /\.(\w+)$/.exec(filename)
-      const ext = match ? match[1].toLowerCase() : 'jpg'
-      const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
-
-      const formData = new FormData()
-      formData.append('file', {
-        uri: Platform.OS === 'android' ? uri : uri.replace('file://', ''),
-        name: filename,
-        type: mimeType,
+      const formData = createUploadFormData(uri, {
+        prefix: type,
+        type: type,
       })
 
       const res = await uploadAPI.upload(formData, type)
@@ -197,10 +193,19 @@ const IdentityVerificationScreen = ({ navigation }) => {
 
   if (loading) {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
-        <Text style={styles.loadingText}>Checking verification status...</Text>
-      </View>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+        <View style={styles.header}>
+          <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#F1F5F9' }} />
+          <Text style={styles.headerTitle}>Identity Verification</Text>
+          <View style={{ width: 36 }} />
+        </View>
+        <ScrollView contentContainerStyle={{ padding: 16 }}>
+          <Skeleton height={80} borderRadius={16} style={{ marginBottom: 16 }} />
+          <SkeletonCard lines={3} style={{ marginBottom: 16 }} />
+          <SkeletonCard lines={2} style={{ marginBottom: 16 }} />
+          <Skeleton height={140} borderRadius={12} style={{ marginBottom: 16 }} />
+        </ScrollView>
+      </SafeAreaView>
     )
   }
 
@@ -271,7 +276,7 @@ const IdentityVerificationScreen = ({ navigation }) => {
         {/* Requirements Banner */}
         <View style={styles.infoBanner}>
           <View style={styles.infoBannerIconWrap}>
-            <Ionicons name="shield-checkmark" size={22} color="#4F46E5" />
+            <Ionicons name="shield-checkmark" size={22} color="#D97706" />
           </View>
           <Text style={styles.infoBannerText}>
             Aadhaar KYC identity verification is required for 50/50 Shared Long Trips to ensure complete passenger safety and verified profiles.
@@ -511,7 +516,7 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 10,
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -589,11 +594,11 @@ const styles = StyleSheet.create({
   infoBanner: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    backgroundColor: '#EEF2FF',
+    backgroundColor: '#FFFBEB',
     padding: 14,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#C7D2FE',
+    borderColor: '#FDE68A',
     marginBottom: 16,
   },
   infoBannerIconWrap: {
@@ -602,7 +607,7 @@ const styles = StyleSheet.create({
   },
   infoBannerText: {
     fontSize: 12,
-    color: '#3730A3',
+    color: '#92400E',
     flex: 1,
     lineHeight: 18,
     fontWeight: '500',
@@ -669,8 +674,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   genderChipActive: {
-    borderColor: '#4F46E5',
-    backgroundColor: '#EEF2FF',
+    borderColor: '#F59E0B',
+    backgroundColor: '#FFFBEB',
   },
   genderChipText: {
     fontSize: 12,
@@ -678,7 +683,7 @@ const styles = StyleSheet.create({
     color: '#64748B',
   },
   genderChipTextActive: {
-    color: '#4F46E5',
+    color: '#B45309',
     fontWeight: '700',
   },
   docUploadCard: {
@@ -760,8 +765,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   cameraBtn: {
-    backgroundColor: '#EEF2FF',
-    borderColor: '#C7D2FE',
+    backgroundColor: '#FEF3C7',
+    borderColor: '#FDE68A',
   },
   uploadBtnText: {
     fontSize: 12,
@@ -772,7 +777,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#4F46E5',
+    backgroundColor: COLORS.primary,
     borderRadius: 12,
     paddingVertical: 14,
     marginTop: 14,
