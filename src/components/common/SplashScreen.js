@@ -9,7 +9,6 @@ import {
   Dimensions,
   StatusBar,
 } from 'react-native'
-import { Ionicons } from '@expo/vector-icons'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
 
@@ -137,7 +136,7 @@ export const SplashScreen = ({
 
           {/* Footer Sub-Note */}
           <View style={styles.footerNoteRow}>
-            <Ionicons name="shield-checkmark" size={13} color="#FBBF24" />
+            <Text style={{ color: '#FBBF24', fontSize: 13, fontWeight: '900' }}>✓</Text>
             <Text style={styles.footerNoteText}>
               Tamil Nadu's No. 1 Trusted Taxi Network
             </Text>
