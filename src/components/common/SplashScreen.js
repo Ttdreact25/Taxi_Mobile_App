@@ -30,13 +30,14 @@ export const SplashScreen = ({
       }
     }
 
-    const fallbackTimer = setTimeout(finishSafely, 2000)
+    const fallbackTimer = setTimeout(finishSafely, 2600)
 
     try {
+      // 1. Entrance animation (fade in + logo spring)
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
-          duration: 600,
+          duration: 700,
           useNativeDriver: true,
         }),
         Animated.spring(logoScale, {
@@ -47,14 +48,15 @@ export const SplashScreen = ({
         }),
         Animated.timing(taglineSlide, {
           toValue: 0,
-          duration: 700,
+          duration: 800,
           useNativeDriver: true,
         }),
       ]).start()
 
+      // 2. Progress bar animation
       Animated.timing(progressAnim, {
         toValue: 1,
-        duration: 1800,
+        duration: 2200,
         useNativeDriver: false,
       }).start(() => finishSafely())
     } catch {

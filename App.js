@@ -1,5 +1,5 @@
 import React, { Component } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider } from './src/context/AuthContext'
@@ -13,7 +13,7 @@ class GlobalErrorBoundary extends Component {
   }
 
   componentDidCatch(error, errorInfo) {
-    console.error('App Component Crash caught by ErrorBoundary:', error, errorInfo)
+    console.error('App Crash caught by ErrorBoundary:', error, errorInfo)
   }
 
   handleRestart = () => {
@@ -89,7 +89,6 @@ const errorStyles = StyleSheet.create({
   errorText: {
     color: '#F87171',
     fontSize: 12,
-    fontFamily: 'monospace',
   },
   btn: {
     backgroundColor: '#F59E0B',
@@ -116,3 +115,4 @@ export default function App() {
     </GlobalErrorBoundary>
   )
 }
+

@@ -34,27 +34,27 @@ const AppNavigator = () => {
       <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
         {!user ? (
           // Auth Flow
-          <Stack.Group>
+          <>
             <Stack.Screen name="Login"         component={LoginScreen} />
             <Stack.Screen name="Register"      component={RegisterScreen} />
             <Stack.Screen name="OTP"           component={OTPScreen} />
             <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
             <Stack.Screen name="Terms"         component={TermsScreen} />
-          </Stack.Group>
+          </>
         ) : user.role_slug === 'driver' ? (
           // Driver Flow
-          <Stack.Group>
+          <>
             <Stack.Screen name="DriverTabs"    component={DriverTabs} />
             <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
             <Stack.Screen name="Terms"         component={TermsScreen} />
-          </Stack.Group>
+          </>
         ) : (
           // Customer Flow
-          <Stack.Group>
+          <>
             <Stack.Screen name="CustomerTabs"  component={CustomerTabs} />
             <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
             <Stack.Screen name="Terms"         component={TermsScreen} />
-          </Stack.Group>
+          </>
         )}
       </Stack.Navigator>
     </NavigationContainer>
