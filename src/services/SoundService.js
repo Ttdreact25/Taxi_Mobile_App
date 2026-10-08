@@ -1,16 +1,6 @@
 import { Platform, Vibration, NativeModules } from 'react-native'
 
 let AudioModule = null
-try {
-  if (NativeModules && NativeModules.ExponentAV) {
-    const expoAv = require('expo-av')
-    if (expoAv && expoAv.Audio) {
-      AudioModule = expoAv.Audio
-    }
-  }
-} catch (e) {
-  AudioModule = null
-}
 
 let activeSoundObject = null
 

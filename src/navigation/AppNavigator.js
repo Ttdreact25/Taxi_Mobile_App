@@ -19,46 +19,61 @@ import DriverTabs          from './DriverTabs'
 import PrivacyPolicyScreen from '../screens/customer/PrivacyPolicyScreen'
 import TermsScreen         from '../screens/customer/TermsScreen'
 
+import { View, StyleSheet } from 'react-native'
+
 const Stack = createNativeStackNavigator()
 
 const AppNavigator = () => {
   const { user, loading } = useAuth()
   const [splashFinished, setSplashFinished] = useState(false)
 
-  if (loading || !splashFinished) {
-    return <SplashScreen onFinish={() => setSplashFinished(true)} />
-  }
+  const showSplash = loading || !splashFinished
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-        {!user ? (
-          // Auth Flow
-          <>
-            <Stack.Screen name="Login"         component={LoginScreen} />
-            <Stack.Screen name="Register"      component={RegisterScreen} />
-            <Stack.Screen name="OTP"           component={OTPScreen} />
-            <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
-            <Stack.Screen name="Terms"         component={TermsScreen} />
-          </>
-        ) : user.role_slug === 'driver' ? (
-          // Driver Flow
-          <>
-            <Stack.Screen name="DriverTabs"    component={DriverTabs} />
-            <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
-            <Stack.Screen name="Terms"         component={TermsScreen} />
-          </>
-        ) : (
-          // Customer Flow
-          <>
-            <Stack.Screen name="CustomerTabs"  component={CustomerTabs} />
-            <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
-            <Stack.Screen name="Terms"         component={TermsScreen} />
-          </>
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
+    <View style={styles.container}>
+      <NavigationContainer>
+        <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+          {!user ? (
+            // Auth Flow
+            <Stack.Group>
+              <Stack.Screen name="Login"         component={LoginScreen} />
+              <Stack.Screen name="Register"      component={RegisterScreen} />
+              <Stack.Screen name="OTP"           component={OTPScreen} />
+              <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
+              <Stack.Screen name="Terms"         component={TermsScreen} />
+            </Stack.Group>
+          ) : user.role_slug === 'driver' ? (
+            // Driver Flow
+            <Stack.Group>
+              <Stack.Screen name="DriverTabs"    component={DriverTabs} />
+              <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
+              <Stack.Screen name="Terms"         component={TermsScreen} />
+            </Stack.Group>
+          ) : (
+            // Customer Flow
+            <Stack.Group>
+              <Stack.Screen name="CustomerTabs"  component={CustomerTabs} />
+              <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} />
+              <Stack.Screen name="Terms"         component={TermsScreen} />
+            </Stack.Group>
+          )}
+        </Stack.Navigator>
+      </NavigationContainer>
+
+      {showSplash && (
+        <View style={StyleSheet.absoluteFillObject}>
+          <SplashScreen onFinish={() => setSplashFinished(true)} />
+        </View>
+      )}
+    </View>
   )
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#0F172A',
+  },
+})
 
 export default AppNavigator
