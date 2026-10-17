@@ -68,8 +68,13 @@ const CustomerWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate 
   const isFree = elapsedSec < freeWaitSec
 
   const formatMMSS = (sec) => {
-    const m = Math.floor(sec / 60)
+    if (!sec || sec < 0) return '00:00'
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
     const s = sec % 60
+    if (h > 0) {
+      return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+    }
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
   }
 
@@ -77,34 +82,36 @@ const CustomerWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate 
     const remainingSec = freeWaitSec - elapsedSec
     return (
       <View style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
         backgroundColor: '#F0FDF4',
-        borderRadius: 12,
-        padding: 10,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
         borderWidth: 1,
-        borderColor: '#BBF7D0',
-        marginBottom: 10,
+        borderColor: '#86EFAC',
+        marginBottom: 8,
       }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
-            <Ionicons name="hourglass-outline" size={16} color="#059669" />
-            <Text style={{ fontSize: 12, fontWeight: '800', color: '#065F46', marginLeft: 6 }}>
-              Free Waiting ({freeWaitingMins} mins limit)
-            </Text>
-          </View>
-          <View style={{
-            backgroundColor: '#059669',
-            paddingHorizontal: 8,
-            paddingVertical: 3,
-            borderRadius: 6,
-          }}>
-            <Text style={{ fontSize: 13, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.5 }}>
-              {formatMMSS(remainingSec)}
-            </Text>
-          </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+          <Ionicons name="time" size={15} color="#059669" style={{ marginRight: 6 }} />
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#065F46' }}>
+            Free Waiting
+          </Text>
+          <Text style={{ fontSize: 11, color: '#047857', marginLeft: 4, fontWeight: '500' }}>
+            ({freeWaitingMins}m free • ₹{waitingRate}/m)
+          </Text>
         </View>
-        <Text style={{ fontSize: 11, color: '#047857', marginTop: 4 }}>
-          ℹ️ Driver has arrived. Extra waiting beyond {freeWaitingMins} mins is charged at ₹{waitingRate}/min as per {categoryName} policy.
-        </Text>
+        <View style={{
+          backgroundColor: '#059669',
+          paddingHorizontal: 8,
+          paddingVertical: 3,
+          borderRadius: 6,
+        }}>
+          <Text style={{ fontSize: 13, fontWeight: '900', color: '#FFFFFF', fontVariant: ['tabular-nums'], letterSpacing: 0.5 }}>
+            {formatMMSS(remainingSec)}
+          </Text>
+        </View>
       </View>
     )
   }
@@ -115,18 +122,37 @@ const CustomerWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate 
 
   return (
     <View style={{
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
       backgroundColor: '#FEF2F2',
-      borderRadius: 12,
-      padding: 10,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
       borderWidth: 1,
-      borderColor: '#FECACA',
-      marginBottom: 10,
+      borderColor: '#FCA5A5',
+      marginBottom: 8,
     }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
-          <Ionicons name="alert-circle" size={16} color="#DC2626" />
-          <Text style={{ fontSize: 12, fontWeight: '800', color: '#991B1B', marginLeft: 6 }}>
-            Free Waiting Exceeded (+{extraMins} mins)
+      <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+        <Ionicons name="alert-circle" size={16} color="#DC2626" style={{ marginRight: 6 }} />
+        <Text style={{ fontSize: 13, fontWeight: '800', color: '#991B1B' }}>
+          Extra Waiting
+        </Text>
+        <Text style={{ fontSize: 12, color: '#B91C1C', marginLeft: 6, fontWeight: '700' }}>
+          +{extraMins} mins
+        </Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View style={{
+          backgroundColor: '#FEE2E2',
+          paddingHorizontal: 7,
+          paddingVertical: 3,
+          borderRadius: 6,
+          borderWidth: 0.5,
+          borderColor: '#FECACA',
+        }}>
+          <Text style={{ fontSize: 12, fontWeight: '800', color: '#991B1B', fontVariant: ['tabular-nums'] }}>
+            {formatMMSS(extraSec)}
           </Text>
         </View>
         <View style={{
@@ -140,9 +166,6 @@ const CustomerWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate 
           </Text>
         </View>
       </View>
-      <Text style={{ fontSize: 11, color: '#991B1B', marginTop: 4, fontWeight: '600' }}>
-        Extra waiting fee of ₹{waitingRate}/min (+₹{accruedCharge}) is being added to your trip invoice.
-      </Text>
     </View>
   )
 }

@@ -227,8 +227,13 @@ const DriverWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate = 
   const isFree = elapsedSec < freeWaitSec
 
   const formatMMSS = (sec) => {
-    const m = Math.floor(sec / 60)
+    if (!sec || sec < 0) return '00:00'
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
     const s = sec % 60
+    if (h > 0) {
+      return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+    }
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
   }
 
@@ -236,49 +241,36 @@ const DriverWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate = 
     const remainingSec = freeWaitSec - elapsedSec
     return (
       <View style={{
-        backgroundColor: '#ECFDF5',
-        borderRadius: 14,
-        padding: 12,
-        borderWidth: 1.5,
-        borderColor: '#6EE7B7',
-        marginBottom: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: '#F0FDF4',
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+        borderWidth: 1,
+        borderColor: '#86EFAC',
+        marginBottom: 8,
       }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
-            <View style={{
-              width: 32,
-              height: 32,
-              borderRadius: 16,
-              backgroundColor: '#D1FAE5',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: 8,
-            }}>
-              <Ionicons name="time" size={18} color="#059669" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 13, fontWeight: '800', color: '#065F46' }}>
-                FREE WAITING TIME
-              </Text>
-              <Text style={{ fontSize: 11, color: '#047857', marginTop: 1 }}>
-                {categoryName} • Free {freeWaitingMins} mins
-              </Text>
-            </View>
-          </View>
-          <View style={{
-            backgroundColor: '#059669',
-            paddingHorizontal: 10,
-            paddingVertical: 5,
-            borderRadius: 8,
-          }}>
-            <Text style={{ fontSize: 14, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.5 }}>
-              {formatMMSS(remainingSec)}
-            </Text>
-          </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+          <Ionicons name="time" size={15} color="#059669" style={{ marginRight: 6 }} />
+          <Text style={{ fontSize: 13, fontWeight: '700', color: '#065F46' }}>
+            Free Waiting
+          </Text>
+          <Text style={{ fontSize: 11, color: '#047857', marginLeft: 4, fontWeight: '500' }}>
+            ({freeWaitingMins}m free • ₹{waitingRate}/m)
+          </Text>
         </View>
-        <Text style={{ fontSize: 11, color: '#047857', marginTop: 6, fontStyle: 'italic' }}>
-          ℹ️ Extra waiting beyond {freeWaitingMins} mins will be charged at ₹{waitingRate}/min automatically.
-        </Text>
+        <View style={{
+          backgroundColor: '#059669',
+          paddingHorizontal: 8,
+          paddingVertical: 3,
+          borderRadius: 6,
+        }}>
+          <Text style={{ fontSize: 13, fontWeight: '900', color: '#FFFFFF', fontVariant: ['tabular-nums'], letterSpacing: 0.5 }}>
+            {formatMMSS(remainingSec)}
+          </Text>
+        </View>
       </View>
     )
   }
@@ -289,56 +281,49 @@ const DriverWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate = 
 
   return (
     <View style={{
-      backgroundColor: '#FEF3C7',
-      borderRadius: 14,
-      padding: 12,
-      borderWidth: 1.5,
-      borderColor: '#F59E0B',
-      marginBottom: 10,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: '#FFFBEB',
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+      borderWidth: 1,
+      borderColor: '#FCD34D',
+      marginBottom: 8,
     }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
-          <View style={{
-            width: 32,
-            height: 32,
-            borderRadius: 16,
-            backgroundColor: '#FDE68A',
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginRight: 8,
-          }}>
-            <Ionicons name="alert-circle" size={18} color="#D97706" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ fontSize: 13, fontWeight: '900', color: '#92400E' }}>
-              EXTRA WAITING ACCRUING
-            </Text>
-            <Text style={{ fontSize: 11, color: '#B45309', marginTop: 1 }}>
-              +{extraMins} mins over limit ({categoryName})
-            </Text>
-          </View>
-        </View>
-        <View style={{ alignItems: 'flex-end' }}>
-          <View style={{
-            backgroundColor: '#D97706',
-            paddingHorizontal: 10,
-            paddingVertical: 4,
-            borderRadius: 8,
-          }}>
-            <Text style={{ fontSize: 14, fontWeight: '900', color: '#FFFFFF' }}>
-              +₹{accruedCharge}
-            </Text>
-          </View>
-          <Text style={{ fontSize: 10, fontWeight: '700', color: '#B45309', marginTop: 2 }}>
-            Elapsed: {formatMMSS(extraSec)}
+      <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+        <Ionicons name="alert-circle" size={16} color="#D97706" style={{ marginRight: 6 }} />
+        <Text style={{ fontSize: 13, fontWeight: '800', color: '#92400E' }}>
+          Extra Waiting
+        </Text>
+        <Text style={{ fontSize: 12, color: '#B45309', marginLeft: 6, fontWeight: '700' }}>
+          +{extraMins} mins
+        </Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <View style={{
+          backgroundColor: '#FEF3C7',
+          paddingHorizontal: 7,
+          paddingVertical: 3,
+          borderRadius: 6,
+          borderWidth: 0.5,
+          borderColor: '#FDE68A',
+        }}>
+          <Text style={{ fontSize: 12, fontWeight: '800', color: '#92400E', fontVariant: ['tabular-nums'] }}>
+            {formatMMSS(extraSec)}
           </Text>
         </View>
-      </View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 }}>
-        <Ionicons name="receipt-outline" size={13} color="#92400E" />
-        <Text style={{ fontSize: 11, color: '#92400E', fontWeight: '600', flex: 1 }}>
-          ₹{accruedCharge} added to customer invoice & cash collection ({extraMins}m @ ₹{waitingRate}/min).
-        </Text>
+        <View style={{
+          backgroundColor: '#D97706',
+          paddingHorizontal: 8,
+          paddingVertical: 3,
+          borderRadius: 6,
+        }}>
+          <Text style={{ fontSize: 13, fontWeight: '900', color: '#FFFFFF' }}>
+            +₹{accruedCharge}
+          </Text>
+        </View>
       </View>
     </View>
   )
