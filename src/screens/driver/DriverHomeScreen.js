@@ -2316,6 +2316,15 @@ const DriverHomeScreen = ({ navigation }) => {
             activeRide.trip_sub_type === 'hourly' ||
             Number(activeRide.package_hours) > 0
           )
+          const isOutstationRide = Boolean(
+            Number(activeRide.is_long_trip) === 1 ||
+            Number(activeRide.is_outstation) === 1 ||
+            (activeRide.trip_type && activeRide.trip_type.toLowerCase().includes('outstation')) ||
+            (activeRide.booking_type && activeRide.booking_type.toLowerCase().includes('outstation')) ||
+            activeRide.trip_mode === 'outstation' ||
+            isRoundTrip ||
+            isShared
+          )
 
           // Multi-Passenger Boarding & Dropping Calculations for Shared Trips
           const boardedPassengers = manifest.filter(p => p.is_boarded || p.is_picked_up)
@@ -2931,12 +2940,14 @@ const DriverHomeScreen = ({ navigation }) => {
 
                     {['driver_arrived', 'driver_reached', 'pickup_reached', 'arrived'].includes(activeRide.status) && (
                       <View>
-                        <DriverWaitingTimerCard
-                          arrivedAt={activeRide.arrived_at}
-                          freeWaitingMins={activeRide.free_waiting_mins || 5}
-                          waitingRate={activeRide.waiting_charge_per_min || activeRide.waiting_charge || 2}
-                          categoryName={activeRide.vehicle_category_name || activeRide.vehicle_type_name || 'Taxi'}
-                        />
+                        {!isOutstationRide && (
+                          <DriverWaitingTimerCard
+                            arrivedAt={activeRide.arrived_at}
+                            freeWaitingMins={activeRide.free_waiting_mins || 5}
+                            waitingRate={activeRide.waiting_charge_per_min || activeRide.waiting_charge || 2}
+                            categoryName={activeRide.vehicle_category_name || activeRide.vehicle_type_name || 'Taxi'}
+                          />
+                        )}
 
                         <SwipeToActionButton
                           title="SWIPE TO ENTER START OTP"

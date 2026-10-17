@@ -922,12 +922,14 @@ export default function BookingTrackScreen({ route, navigation }) {
                 </View>
               </View>
 
-              <CustomerWaitingTimerCard
-                arrivedAt={booking?.arrived_at}
-                freeWaitingMins={booking?.free_waiting_mins || 5}
-                waitingRate={booking?.waiting_charge_per_min || 2}
-                categoryName={booking?.vehicle_type_name || vehicleName || 'Cab'}
-              />
+              {!isOutstationTrip && (
+                <CustomerWaitingTimerCard
+                  arrivedAt={booking?.arrived_at}
+                  freeWaitingMins={booking?.free_waiting_mins || 5}
+                  waitingRate={booking?.waiting_charge_per_min || 2}
+                  categoryName={booking?.vehicle_type_name || vehicleName || 'Cab'}
+                />
+              )}
             </>
           )}
 
