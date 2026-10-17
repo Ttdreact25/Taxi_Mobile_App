@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Share, Alert, Image, TextInput
+  ActivityIndicator, Share, Alert, Image, TextInput, Linking
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { longTripAPI, reviewsAPI, paymentAPI } from '../../api/api'
+import { longTripAPI, reviewsAPI, paymentAPI, getInvoiceUrl } from '../../api/api'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import { formatTime12Hr, formatDateDisplay } from '../../utils/formatters'
 
@@ -165,9 +165,26 @@ export default function TicketScreen({ route, navigation }) {
           <Ionicons name="arrow-back" size={22} color="#0F172A" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Boarding Pass</Text>
-        <TouchableOpacity onPress={handleShare} style={styles.shareBtn}>
-          <Ionicons name="share-social-outline" size={20} color={COLORS.primary} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity
+            onPress={async () => {
+              const targetId = ticket?.booking_id || ticket?.id || bookingId
+              if (!targetId) return
+              try {
+                const invoiceUrl = await getInvoiceUrl(targetId, true, ticket?.booking_ref || bookingRef)
+                Linking.openURL(invoiceUrl)
+              } catch {
+                Alert.alert('Error', 'Unable to open invoice.')
+              }
+            }}
+            style={styles.shareBtn}
+          >
+            <Ionicons name="receipt-outline" size={20} color={COLORS.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleShare} style={styles.shareBtn}>
+            <Ionicons name="share-social-outline" size={20} color={COLORS.primary} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 50 }}>
@@ -434,6 +451,36 @@ export default function TicketScreen({ route, navigation }) {
                       ₹{Math.round(Number(fare.cash_pending ?? (Number(fare.final_fare) - Number(fare.online_paid || 0))))}
                     </Text>
                   </View>
+
+                  {/* 🖨️ Download / Print Tax Invoice Action */}
+                  <TouchableOpacity
+                    style={{
+                      backgroundColor: '#0F172A',
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                      paddingVertical: 10,
+                      borderRadius: 10,
+                      marginTop: 12,
+                    }}
+                    onPress={async () => {
+                      const targetId = ticket?.booking_id || ticket?.id || bookingId
+                      if (!targetId) return
+                      try {
+                        const invoiceUrl = await getInvoiceUrl(targetId, true, ticket?.booking_ref || bookingRef)
+                        Linking.openURL(invoiceUrl)
+                      } catch {
+                        Alert.alert('Error', 'Unable to open invoice.')
+                      }
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="receipt-outline" size={16} color="#FFFFFF" />
+                    <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>
+                      Print / Download Official Tax Invoice (PDF)
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               )
             })()}

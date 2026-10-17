@@ -2434,8 +2434,16 @@ const DriverHomeScreen = ({ navigation }) => {
                 const dKm = activeRide.distance_km ? parseFloat(activeRide.distance_km).toFixed(2) : (activeRide.route_distance_km ? parseFloat(activeRide.route_distance_km).toFixed(2) : '—')
                 const pRate = activeRide.per_km_rate ? Math.round(activeRide.per_km_rate) : 21
                 const bataAmt = activeRide.driver_bata || 500
-                const fareVal = Math.round(activeRide.final_fare || activeRide.fare || activeRide.fare_estimate || activeRide.original_fare || 0)
-                const cFee = parseFloat(activeRide.commission_amount || (fareVal * 0.134) || 639).toFixed(2)
+                const rawFare = Number(activeRide.final_fare || activeRide.fare || activeRide.fare_estimate || activeRide.original_fare || activeRide.estimated_fare || activeRide.total_fare || 0)
+                const origKmNum = Number(activeRide.original_distance_km || activeRide.distance_km || activeRide.route_distance_km || 0)
+                const minFare = Number(activeRide.minimum_fare || activeRide.min_fare || 50)
+                const bFare = Number(activeRide.base_fare || 30)
+                const calcBaseFare = Math.max(minFare, Math.round(bFare + (origKmNum * pRate)))
+                const routeFare = rawFare > 0 ? rawFare : calcBaseFare
+                const waitCharge = Number(activeRide.waiting_charge || 0)
+                const tollCharge = Number(activeRide.toll_amount || activeRide.toll_fee || 0)
+                const fareVal = Math.round(routeFare + waitCharge + tollCharge)
+                const cFee = parseFloat(activeRide.commission_amount || (fareVal * 0.134) || 12).toFixed(2)
                 const vName = activeRide.vehicle_type_name || activeRide.vehicle_category_name || activeRide.vehicle_type || 'Cab'
                 const tStart = formatTripScheduleDate(activeRide.pickup_date || activeRide.scheduled_date || activeRide.created_at, activeRide.pickup_time || activeRide.scheduled_time)
                 const tEnd = activeRide.return_date ? formatTripScheduleDate(activeRide.return_date, activeRide.return_time) : 'Not Applicable'
@@ -4691,18 +4699,27 @@ const DriverHomeScreen = ({ navigation }) => {
                   extraMinFare = Math.round(extraMins * minRate)
                 }
 
-                // Robust Base Fare fallback checking final_fare, fare, original_fare, fare_estimate
-                const baseFare = Number(
+                // Robust Base Fare fallback checking final_fare, fare, original_fare, fare_estimate, estimated_fare
+                let rawBaseFare = Number(
                   activeRide?.base_package_fare ||
                   (isHourly
                     ? (pkgHours * Number(activeRide?.hourly_rate || 250))
-                    : (activeRide?.final_fare || activeRide?.fare || activeRide?.original_fare || activeRide?.fare_estimate || 0))
+                    : (activeRide?.final_fare || activeRide?.fare || activeRide?.original_fare || activeRide?.fare_estimate || activeRide?.estimated_fare || activeRide?.total_fare || 0))
                 )
+                if (rawBaseFare <= 0) {
+                  const minFare = Number(activeRide?.minimum_fare || activeRide?.min_fare || 50)
+                  const bFare = Number(activeRide?.base_fare || 30)
+                  rawBaseFare = Math.max(minFare, Math.round(bFare + (origKm * perKmRate)))
+                }
+                const baseFare = rawBaseFare
+
                 const tollCharge = parseFloat(enteredTollCharge) || 0
+                const waitCharge = Number(activeRide?.waiting_charge || 0)
+                const waitMins = Number(activeRide?.waiting_mins || 0)
                 const pickupCharge = (activeRide?.pickup_charge_accepted && activeRide?.pickup_charge) ? Number(activeRide.pickup_charge) : 0
                 const onlinePaid = Number(activeRide?.online_paid || 0)
                 const discount = Number(activeRide?.discount_amount || 0)
-                const totalFinal = Math.max(0, Math.round(baseFare + extraKmFare + extraMinFare + pickupCharge + tollCharge - discount))
+                const totalFinal = Math.max(0, Math.round(baseFare + extraKmFare + extraMinFare + waitCharge + pickupCharge + tollCharge - discount))
                 const cashToCollect = Math.max(0, Math.round(totalFinal - onlinePaid))
 
                 return (
@@ -4736,10 +4753,19 @@ const DriverHomeScreen = ({ navigation }) => {
                       </View>
                     )}
 
+                    {waitCharge > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#D97706', fontWeight: '600' }}>
+                          Waiting Charges ({waitMins} mins)
+                        </Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+ ₹{Math.round(waitCharge)}</Text>
+                      </View>
+                    )}
+
                     {tollCharge > 0 && (
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                         <Text style={{ fontSize: 12, color: '#2563EB', fontWeight: '600' }}>
-                          Toll / Highway Plaza Charges
+                          Toll / Parking Charges
                         </Text>
                         <Text style={{ fontSize: 12, fontWeight: '700', color: '#2563EB' }}>+ ₹{Math.round(tollCharge)}</Text>
                       </View>

@@ -30,7 +30,7 @@ const HomeStack = () => (
     <Stack.Screen name="Booking"              component={BookingScreen} />
     <Stack.Screen name="SavedPlaces"          component={SavedPlacesScreen} />
     <Stack.Screen name="LongTrip"             component={BookingScreen} initialParams={{ tripMode: 'outstation' }} />
-    <Stack.Screen name="SharedTrips"          component={BookingScreen} initialParams={{ tripMode: 'shared' }} />
+    <Stack.Screen name="SharedTrips"          component={SharedTripsScreen} />
     <Stack.Screen name="BookingTrack"         component={BookingTrackScreen} />
     <Stack.Screen name="Ticket"               component={TicketScreen} />
     <Stack.Screen name="IdentityVerification" component={IdentityVerificationScreen} />
@@ -48,7 +48,7 @@ const BookingStack = () => (
     <Stack.Screen name="BookingTrack"         component={BookingTrackScreen} />
     <Stack.Screen name="Ticket"               component={TicketScreen} />
     <Stack.Screen name="LongTrip"             component={BookingScreen} initialParams={{ tripMode: 'outstation' }} />
-    <Stack.Screen name="SharedTrips"          component={BookingScreen} initialParams={{ tripMode: 'shared' }} />
+    <Stack.Screen name="SharedTrips"          component={SharedTripsScreen} />
   </Stack.Navigator>
 )
 
@@ -58,7 +58,7 @@ const TripsStack = () => (
     <Stack.Screen name="Ticket"               component={TicketScreen} />
     <Stack.Screen name="BookingTrack"         component={BookingTrackScreen} />
     <Stack.Screen name="LongTrip"             component={BookingScreen} initialParams={{ tripMode: 'outstation' }} />
-    <Stack.Screen name="SharedTrips"          component={BookingScreen} initialParams={{ tripMode: 'shared' }} />
+    <Stack.Screen name="SharedTrips"          component={SharedTripsScreen} />
     <Stack.Screen name="IdentityVerification" component={IdentityVerificationScreen} />
   </Stack.Navigator>
 )

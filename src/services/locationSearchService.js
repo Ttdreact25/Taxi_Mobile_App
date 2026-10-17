@@ -9,25 +9,59 @@ import { bookingsAPI, bookingAPI } from '../api/api'
 // Major Tamil Nadu & South India Cities and Hubs for instant offline/zero-latency search
 // Major Tamil Nadu & South India Cities and Hubs for instant offline/zero-latency search
 export const TAMIL_NADU_HUBS = [
+  // Major Chennai Hubs & Localities
+  { name: 'Vadapalani Murugan Temple', address: 'Andavar Koil St, Vadapalani, Chennai, Tamil Nadu', lat: 13.0526, lng: 80.2120, tag: 'Temple / Spiritual 🛕' },
+  { name: 'Vadapalani Metro Station', address: 'Jawaharlal Nehru Rd, Vadapalani, Chennai, Tamil Nadu', lat: 13.0509, lng: 80.2120, tag: 'Metro Station 🚇' },
+  { name: 'Nexus Vijaya Mall (Forum Vadapalani)', address: 'Arcot Rd, Vadapalani, Chennai, Tamil Nadu', lat: 13.0502, lng: 80.2112, tag: 'Shopping Mall 🛍️' },
+  { name: 'SIMS Hospital Vadapalani', address: 'Jawaharlal Nehru Rd, Vadapalani, Chennai, Tamil Nadu', lat: 13.0532, lng: 80.2118, tag: 'Hospital 🏥' },
   { name: 'Chennai Central Railway Station (MAS)', address: 'Kannappar Thidal, Periyamet, Chennai, Tamil Nadu', lat: 13.0827, lng: 80.2707, tag: 'Railway Station 🚆' },
   { name: 'Chennai International Airport (MAA)', address: 'GST Road, Meenambakkam, Chennai, Tamil Nadu', lat: 12.9941, lng: 80.1709, tag: 'Airport ✈️' },
   { name: 'CMBT Bus Terminus Koyambedu', address: 'Jawaharlal Nehru Rd, Koyambedu, Chennai, Tamil Nadu', lat: 13.0692, lng: 80.2057, tag: 'Bus Stand 🚌' },
+  { name: 'Koyambedu Metro Station', address: 'Jawaharlal Nehru Rd, Koyambedu, Chennai, Tamil Nadu', lat: 13.0732, lng: 80.1945, tag: 'Metro Station 🚇' },
   { name: 'Kilambakkam Bus Terminus (KCBT)', address: 'GST Road, Kilambakkam, Vandalur, Chennai, Tamil Nadu', lat: 12.8682, lng: 80.0772, tag: 'Bus Stand 🚌' },
   { name: 'Tambaram Railway Station', address: 'GST Road, East Tambaram, Chennai, Tamil Nadu', lat: 12.9249, lng: 80.1197, tag: 'Railway Station 🚆' },
+  { name: 'Tambaram Sanatorium', address: 'GST Road, Tambaram Sanatorium, Chennai, Tamil Nadu', lat: 12.9372, lng: 80.1285, tag: 'Railway Station 🚆' },
   { name: 'Egmore Railway Station (MS)', address: 'Gandhi Irwin Rd, Egmore, Chennai, Tamil Nadu', lat: 13.0784, lng: 80.2612, tag: 'Railway Station 🚆' },
   { name: 'T. Nagar (Ranganathan Street)', address: 'T. Nagar, Chennai, Tamil Nadu', lat: 13.0418, lng: 80.2341, tag: 'Shopping / Commercial 🛍️' },
+  { name: 'Pondy Bazaar (T. Nagar)', address: 'Sir Thyagaraya Rd, T. Nagar, Chennai, Tamil Nadu', lat: 13.0408, lng: 80.2377, tag: 'Shopping / Commercial 🛍️' },
+  { name: 'Panagal Park T. Nagar', address: 'Prakasam Rd, T. Nagar, Chennai, Tamil Nadu', lat: 13.0435, lng: 80.2325, tag: 'Landmark 📍' },
   { name: 'Marina Beach', address: 'Kamarajar Salai, Triplicane, Chennai, Tamil Nadu', lat: 13.0500, lng: 80.2824, tag: 'Landmark 📍' },
+  { name: 'Besant Nagar (Edward Elliot Beach)', address: 'Besant Nagar, Chennai, Tamil Nadu', lat: 12.9997, lng: 80.2682, tag: 'Landmark 📍' },
   { name: 'Phoenix Marketcity Mall Velachery', address: 'Velachery Rd, Indira Gandhi Nagar, Velachery, Chennai, Tamil Nadu', lat: 12.9918, lng: 80.2170, tag: 'Shopping Mall 🛍️' },
+  { name: 'Velachery MRTS Railway Station', address: 'Velachery MRTS, Chennai, Tamil Nadu', lat: 12.9676, lng: 80.2195, tag: 'Railway Station 🚆' },
   { name: 'Express Avenue Mall Royapettah', address: 'Club House Rd, Royapettah, Chennai, Tamil Nadu', lat: 13.0587, lng: 80.2642, tag: 'Shopping Mall 🛍️' },
   { name: 'VR Chennai Mall Anna Nagar', address: 'Jawaharlal Nehru Rd, Anna Nagar West, Chennai, Tamil Nadu', lat: 13.0850, lng: 80.1982, tag: 'Shopping Mall 🛍️' },
+  { name: 'Anna Nagar Tower Park', address: 'Anna Nagar, Chennai, Tamil Nadu', lat: 13.0865, lng: 80.2142, tag: 'Landmark 📍' },
+  { name: 'Anna Nagar Roundtana', address: '2nd Avenue, Anna Nagar, Chennai, Tamil Nadu', lat: 13.0848, lng: 80.2185, tag: 'Landmark 📍' },
+  { name: 'Guindy Railway Station & Metro', address: 'GST Road, Guindy, Chennai, Tamil Nadu', lat: 13.0084, lng: 80.2128, tag: 'Metro Station 🚇' },
+  { name: 'Kathipara Junction (Alandur)', address: 'GST Rd / Inner Ring Rd, Guindy, Chennai, Tamil Nadu', lat: 13.0072, lng: 80.2036, tag: 'Landmark 📍' },
+  { name: 'Olympia Tech Park Guindy', address: 'SIDCO Industrial Estate, Guindy, Chennai, Tamil Nadu', lat: 13.0118, lng: 80.2052, tag: 'IT Park / Tech Hub 🏢' },
   { name: 'TIDEL Park (OMR)', address: 'Rajiv Gandhi Salai, Taramani, Chennai, Tamil Nadu', lat: 12.9892, lng: 80.2489, tag: 'IT Park / Tech Hub 🏢' },
+  { name: 'Sholinganallur Junction (OMR)', address: 'OMR - Medavakkam Link Rd, Sholinganallur, Chennai, Tamil Nadu', lat: 12.9010, lng: 80.2279, tag: 'IT Park / Tech Hub 🏢' },
   { name: 'SIPCOT IT Park Siruseri', address: 'OMR, Siruseri, Chennai, Tamil Nadu', lat: 12.8258, lng: 80.2185, tag: 'IT Park / Tech Hub 🏢' },
   { name: 'DLF Cybercity Porur', address: 'Mount Poonamallee Rd, Manapakkam, Porur, Chennai, Tamil Nadu', lat: 13.0232, lng: 80.1654, tag: 'IT Park / Tech Hub 🏢' },
-  { name: 'Olympia Tech Park Guindy', address: 'SIDCO Industrial Estate, Guindy, Chennai, Tamil Nadu', lat: 13.0118, lng: 80.2052, tag: 'IT Park / Tech Hub 🏢' },
+  { name: 'Porur Junction (Mount Poonamallee Rd)', address: 'Porur, Chennai, Tamil Nadu', lat: 13.0382, lng: 80.1565, tag: 'Landmark 📍' },
+  { name: 'Sri Ramachandra Hospital Porur', address: 'Mount Poonamallee Rd, Porur, Chennai, Tamil Nadu', lat: 13.0360, lng: 80.1448, tag: 'Hospital 🏥' },
   { name: 'IIT Madras Adyar', address: 'Sardar Patel Rd, Guindy, Chennai, Tamil Nadu', lat: 12.9915, lng: 80.2337, tag: 'College / University 🎓' },
+  { name: 'Adyar Signal (L.B. Road)', address: 'Lattice Bridge Rd, Adyar, Chennai, Tamil Nadu', lat: 13.0064, lng: 80.2575, tag: 'Landmark 📍' },
   { name: 'Apollo Main Hospital Greams Road', address: 'Greams Lane, Thousand Lights, Chennai, Tamil Nadu', lat: 13.0583, lng: 80.2505, tag: 'Hospital 🏥' },
   { name: 'MIOT International Hospital', address: 'Mount Poonamallee Rd, Manapakkam, Chennai, Tamil Nadu', lat: 13.0194, lng: 80.1772, tag: 'Hospital 🏥' },
   { name: 'Kapaleeshwarar Temple Mylapore', address: 'Vadakku Mada Veedi, Mylapore, Chennai, Tamil Nadu', lat: 13.0335, lng: 80.2694, tag: 'Temple / Spiritual 🛕' },
+  { name: 'Mylapore Luz Corner', address: 'Royapettah High Rd, Mylapore, Chennai, Tamil Nadu', lat: 13.0375, lng: 80.2635, tag: 'Landmark 📍' },
+  { name: 'Ashok Pillar (Ashok Nagar)', address: '1st Ave, Ashok Nagar, Chennai, Tamil Nadu', lat: 13.0354, lng: 80.2115, tag: 'Landmark 📍' },
+  { name: 'K.K. Nagar Bus Terminus', address: 'Munusamy Salai, K.K. Nagar, Chennai, Tamil Nadu', lat: 13.0368, lng: 80.1985, tag: 'Bus Stand 🚌' },
+  { name: 'Saidapet Metro & Court', address: 'Anna Salai, Saidapet, Chennai, Tamil Nadu', lat: 13.0235, lng: 80.2225, tag: 'Metro Station 🚇' },
+  { name: 'Chromepet Railway Station & MIT', address: 'GST Road, Chromepet, Chennai, Tamil Nadu', lat: 12.9517, lng: 80.1412, tag: 'Railway Station 🚆' },
+  { name: 'Pallavaram Railway Station', address: 'GST Road, Pallavaram, Chennai, Tamil Nadu', lat: 12.9678, lng: 80.1492, tag: 'Railway Station 🚆' },
+  { name: 'Medavakkam Koot Road', address: 'Velachery Main Rd, Medavakkam, Chennai, Tamil Nadu', lat: 12.9185, lng: 80.1925, tag: 'Landmark 📍' },
+  { name: 'Perambur Railway Station', address: 'Perambur High Rd, Chennai, Tamil Nadu', lat: 13.1090, lng: 80.2435, tag: 'Railway Station 🚆' },
+  { name: 'Ambattur Industrial Estate (OT)', address: 'MTH Road, Ambattur, Chennai, Tamil Nadu', lat: 13.1143, lng: 80.1548, tag: 'Company / Office 🏢' },
+  { name: 'Avadi Bus Terminus & Station', address: 'Avadi, Chennai, Tamil Nadu', lat: 13.1185, lng: 80.1015, tag: 'Bus Stand 🚌' },
+  { name: 'Poonamallee Bus Terminus', address: 'Trunk Rd, Poonamallee, Chennai, Tamil Nadu', lat: 13.0485, lng: 80.0925, tag: 'Bus Stand 🚌' },
+  { name: 'Thiruvanmiyur RTO & Beach', address: 'East Coast Rd, Thiruvanmiyur, Chennai, Tamil Nadu', lat: 12.9830, lng: 80.2595, tag: 'Landmark 📍' },
+  { name: 'Mahabalipuram (Shore Temple)', address: 'Mahabalipuram, Chengalpattu, Tamil Nadu', lat: 12.6169, lng: 80.1994, tag: 'Landmark 📍' },
+
+  // Major Tamil Nadu Cities & Districts
   { name: 'Madurai City', address: 'Madurai, Tamil Nadu, India', lat: 9.9252, lng: 78.1198, tag: 'City 🏙️' },
   { name: 'Madurai Meenakshi Amman Temple', address: 'Madurai Main, Madurai, Tamil Nadu', lat: 9.9195, lng: 78.1193, tag: 'Temple / Spiritual 🛕' },
   { name: 'Madurai Junction Railway Station', address: 'Railway Colony, Madurai, Tamil Nadu', lat: 9.9168, lng: 78.1118, tag: 'Railway Station 🚆' },
@@ -43,17 +77,46 @@ export const TAMIL_NADU_HUBS = [
   { name: 'Tiruchirappalli (Trichy) City', address: 'Tiruchirappalli, Tamil Nadu, India', lat: 10.7905, lng: 78.7047, tag: 'City 🏙️' },
   { name: 'Trichy Central Bus Stand', address: 'Cantonment, Tiruchirappalli, Tamil Nadu', lat: 10.8038, lng: 78.6874, tag: 'Bus Stand 🚌' },
   { name: 'Trichy International Airport (TRZ)', address: 'Old Terminal Building, Tiruchirappalli, Tamil Nadu', lat: 10.7654, lng: 78.7126, tag: 'Airport ✈️' },
+  { name: 'Srirangam Ranganathaswamy Temple', address: 'Srirangam, Tiruchirappalli, Tamil Nadu', lat: 10.8623, lng: 78.6903, tag: 'Temple / Spiritual 🛕' },
   { name: 'Tirunelveli City', address: 'Tirunelveli, Tamil Nadu, India', lat: 8.7139, lng: 77.7567, tag: 'City 🏙️' },
   { name: 'Tirunelveli Junction', address: 'Tirunelveli, Tamil Nadu', lat: 8.7297, lng: 77.7128, tag: 'Railway Station 🚆' },
   { name: 'Erode City', address: 'Erode, Tamil Nadu, India', lat: 11.3410, lng: 77.7172, tag: 'City 🏙️' },
   { name: 'Tiruppur City', address: 'Tiruppur, Tamil Nadu, India', lat: 11.1085, lng: 77.3411, tag: 'City 🏙️' },
   { name: 'Vellore City', address: 'Vellore, Tamil Nadu, India', lat: 12.9165, lng: 79.1325, tag: 'City 🏙️' },
-  { name: 'Thanjavur City', address: 'Thanjavur, Tamil Nadu, India', lat: 10.7870, lng: 79.1378, tag: 'City 🏙️' },
+  { name: 'Katpadi Junction Railway Station', address: 'Katpadi, Vellore, Tamil Nadu', lat: 12.9698, lng: 79.1390, tag: 'Railway Station 🚆' },
+  { name: 'CMC Hospital Vellore', address: 'Ida Scudder Rd, Vellore, Tamil Nadu', lat: 12.9248, lng: 79.1352, tag: 'Hospital 🏥' },
+  { name: 'Thanjavur (Brihadisvara Temple)', address: 'Thanjavur, Tamil Nadu, India', lat: 10.7870, lng: 79.1378, tag: 'Temple / Spiritual 🛕' },
   { name: 'Dindigul City', address: 'Dindigul, Tamil Nadu, India', lat: 10.3673, lng: 77.9803, tag: 'City 🏙️' },
-  { name: 'Kanyakumari', address: 'Kanyakumari, Tamil Nadu, India', lat: 8.0883, lng: 77.5385, tag: 'Landmark 📍' },
+  { name: 'Kanyakumari (Cape Comorin)', address: 'Kanyakumari, Tamil Nadu, India', lat: 8.0883, lng: 77.5385, tag: 'Landmark 📍' },
+  { name: 'Nagercoil City', address: 'Nagercoil, Kanyakumari, Tamil Nadu, India', lat: 8.1833, lng: 77.4119, tag: 'City 🏙️' },
+  { name: 'Hosur City', address: 'Hosur, Krishnagiri, Tamil Nadu, India', lat: 12.7409, lng: 77.8253, tag: 'City 🏙️' },
+  { name: 'Kanchipuram Temple City', address: 'Kanchipuram, Tamil Nadu, India', lat: 12.8342, lng: 79.7036, tag: 'City 🏙️' },
+  { name: 'Tiruvannamalai (Arunachaleswarar Temple)', address: 'Tiruvannamalai, Tamil Nadu, India', lat: 12.2253, lng: 79.0747, tag: 'Temple / Spiritual 🛕' },
+  { name: 'Kumbakonam City', address: 'Kumbakonam, Thanjavur, Tamil Nadu, India', lat: 10.9602, lng: 79.3845, tag: 'City 🏙️' },
+  { name: 'Cuddalore City', address: 'Cuddalore, Tamil Nadu, India', lat: 11.7480, lng: 79.7714, tag: 'City 🏙️' },
+  { name: 'Chidambaram Natarajar Temple', address: 'Chidambaram, Cuddalore, Tamil Nadu, India', lat: 11.3992, lng: 79.6936, tag: 'Temple / Spiritual 🛕' },
+  { name: 'Karur City', address: 'Karur, Tamil Nadu, India', lat: 10.9601, lng: 78.0766, tag: 'City 🏙️' },
+  { name: 'Theni City', address: 'Theni, Tamil Nadu, India', lat: 10.0104, lng: 77.4768, tag: 'City 🏙️' },
+  { name: 'Ooty (Udhagamandalam Hill Station)', address: 'Nilgiris, Tamil Nadu, India', lat: 11.4102, lng: 76.6950, tag: 'Hill Station 🌲' },
+  { name: 'Kodaikanal Hill Station', address: 'Dindigul, Tamil Nadu, India', lat: 10.2381, lng: 77.4892, tag: 'Hill Station 🌲' },
+  { name: 'Yercaud Hill Station', address: 'Shevaroys, Salem, Tamil Nadu, India', lat: 11.7753, lng: 78.2093, tag: 'Hill Station 🌲' },
+  { name: 'Rameswaram (Ramanathaswamy Temple)', address: 'Ramanathapuram, Tamil Nadu, India', lat: 9.2876, lng: 79.3129, tag: 'Temple / Spiritual 🛕' },
+  { name: 'Karaikudi (Chettinad)', address: 'Sivaganga, Tamil Nadu, India', lat: 10.0735, lng: 78.7732, tag: 'City 🏙️' },
+  { name: 'Pollachi Town', address: 'Coimbatore, Tamil Nadu, India', lat: 10.6609, lng: 77.0048, tag: 'City 🏙️' },
+  { name: 'Rajapalayam', address: 'Virudhunagar, Tamil Nadu, India', lat: 9.4533, lng: 77.5552, tag: 'City 🏙️' },
+  { name: 'Sivakasi Town', address: 'Virudhunagar, Tamil Nadu, India', lat: 9.4532, lng: 77.7946, tag: 'City 🏙️' },
+  { name: 'Namakkal City', address: 'Namakkal, Tamil Nadu, India', lat: 11.2189, lng: 78.1674, tag: 'City 🏙️' },
+  { name: 'Dharmapuri Town', address: 'Dharmapuri, Tamil Nadu, India', lat: 12.1211, lng: 78.1582, tag: 'City 🏙️' },
+  { name: 'Krishnagiri Town', address: 'Krishnagiri, Tamil Nadu, India', lat: 12.5266, lng: 78.2146, tag: 'City 🏙️' },
+  { name: 'Villupuram Junction', address: 'Villupuram, Tamil Nadu, India', lat: 11.9401, lng: 79.4861, tag: 'City 🏙️' },
+  { name: 'Chengalpattu Junction', address: 'Chengalpattu, Tamil Nadu, India', lat: 12.6841, lng: 79.9836, tag: 'City 🏙️' },
   { name: 'Pondicherry (Puducherry)', address: 'Puducherry, India', lat: 11.9416, lng: 79.8083, tag: 'City 🏙️' },
   { name: 'Bengaluru (Bangalore)', address: 'Bengaluru, Karnataka, India', lat: 12.9716, lng: 77.5946, tag: 'City 🏙️' },
+  { name: 'Tirupati (Sri Venkateswara Swamy Temple)', address: 'Tirupati, Andhra Pradesh, India', lat: 13.6288, lng: 79.4192, tag: 'Temple / Spiritual 🛕' },
 ]
+
+// In-Memory Search Query Cache for Instant Zero-Latency Typing
+const _searchMemoryCache = new Map()
 
 /**
  * Get popular destinations sorted by distance from current location
@@ -116,11 +179,7 @@ const detectCategoryTag = (name = '', address = '', types = []) => {
 
 /**
  * Universal Multi-Engine Search Places Autocomplete
- * @param {string} query - Location text query
- * @param {number|null} userLat - User current latitude for distance & bias
- * @param {number|null} userLng - User current longitude for distance & bias
- * @param {string|null} sessionToken - Optional session token for billing/proxy
- * @returns {Promise<Array>} Array of unified prediction objects
+ * Runs Photon Komoot and Backend in parallel for instant (<200ms) smooth response
  */
 export const searchPlacesService = async (query, userLat = null, userLng = null, sessionToken = null) => {
   const cleanQ = (query || '').trim()
@@ -128,6 +187,12 @@ export const searchPlacesService = async (query, userLat = null, userLng = null,
 
   const uLat = userLat || 13.0382
   const uLng = userLng || 80.2315
+  const cacheKey = `${cleanQ.toLowerCase()}_${uLat.toFixed(2)}_${uLng.toFixed(2)}`
+
+  if (_searchMemoryCache.has(cacheKey)) {
+    return _searchMemoryCache.get(cacheKey)
+  }
+
   const results = []
   const seenKeys = new Set()
 
@@ -140,7 +205,7 @@ export const searchPlacesService = async (query, userLat = null, userLng = null,
     results.push(item)
   }
 
-  // 1. First Tier: Local Hubs & Offline Cities instant match
+  // 1. First Tier: Local Hubs & Offline Cities instant match (0ms latency)
   const qLower = cleanQ.toLowerCase()
   for (const hub of TAMIL_NADU_HUBS) {
     if (
@@ -165,95 +230,100 @@ export const searchPlacesService = async (query, userLat = null, userLng = null,
     }
   }
 
-  // 2. Second Tier: Backend Proxy Autocomplete
-  try {
-    const backendRes = await bookingsAPI.placesAutocomplete(cleanQ, uLat, uLng, sessionToken)
-    const backendPredictions = backendRes.data?.predictions || []
-    if (Array.isArray(backendPredictions) && backendPredictions.length > 0) {
-      for (const p of backendPredictions) {
-        const pLat = parseFloat(p.latitude || p.geometry?.location?.lat || 0)
-        const pLng = parseFloat(p.longitude || p.geometry?.location?.lng || 0)
-        const dist = p.distance_km ?? (pLat && pLng ? calculateDistanceKm(uLat, uLng, pLat, pLng) : 3.5)
-        addPrediction({
-          place_id: p.place_id || `b_${Math.random()}`,
-          description: p.description,
-          structured_formatting: {
-            main_text: p.structured_formatting?.main_text || p.description,
-            secondary_text: p.structured_formatting?.secondary_text || '',
-          },
-          geometry: p.geometry || (pLat && pLng ? { location: { lat: pLat, lng: pLng } } : null),
-          latitude: pLat || null,
-          longitude: pLng || null,
-          distance_km: dist,
-          category_tag: p.category_tag || detectCategoryTag(p.description),
-        })
+  // 2. Parallel Engines: Photon Komoot API (<150ms) + Backend Proxy in Parallel
+  const photonPromise = (async () => {
+    try {
+      const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(cleanQ)}&lat=${uLat}&lon=${uLng}&limit=12`
+      const pController = new AbortController()
+      const pTimeout = setTimeout(() => pController.abort(), 2000)
+      const pRes = await fetch(photonUrl, { signal: pController.signal })
+      clearTimeout(pTimeout)
+      if (pRes.ok) {
+        const pData = await pRes.json()
+        return pData.features || []
       }
+    } catch {}
+    return []
+  })()
+
+  const backendPromise = (async () => {
+    try {
+      const backendRes = await Promise.race([
+        bookingsAPI.placesAutocomplete(cleanQ, uLat, uLng, sessionToken),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000))
+      ])
+      return backendRes.data?.predictions || []
+    } catch {}
+    return []
+  })()
+
+  const [photonOutcome, backendOutcome] = await Promise.allSettled([photonPromise, backendPromise])
+
+  // Process Photon predictions
+  if (photonOutcome.status === 'fulfilled' && Array.isArray(photonOutcome.value)) {
+    for (const f of photonOutcome.value) {
+      const props = f.properties || {}
+      const coords = f.geometry?.coordinates || []
+      const lon = parseFloat(coords[0])
+      const lat = parseFloat(coords[1])
+      if (!lat || !lon) continue
+
+      const name = props.name || props.street || cleanQ
+      const parts = [
+        props.street,
+        props.district || props.suburb || props.locality,
+        props.city,
+        props.state,
+      ].filter(Boolean)
+      const secondary = parts.filter(p => p !== name).join(', ')
+      const fullDesc = secondary ? `${name}, ${secondary}` : name
+      const dist = calculateDistanceKm(uLat, uLng, lat, lon)
+      const tag = detectCategoryTag(name, fullDesc, [props.osm_value || props.type || ''])
+
+      addPrediction({
+        place_id: `photon_${lat}_${lon}_${encodeURIComponent(name)}`,
+        description: fullDesc,
+        structured_formatting: {
+          main_text: name,
+          secondary_text: secondary || 'Tamil Nadu, India',
+        },
+        geometry: { location: { lat, lng: lon } },
+        latitude: lat,
+        longitude: lon,
+        distance_km: dist,
+        category_tag: tag,
+      })
     }
-  } catch (err) {
-    // Backend proxy failed or offline, fall through to direct engines
   }
 
-  // If already found sufficient results, return early
-  if (results.length >= 6) {
-    return results.sort((a, b) => (a.distance_km || 999) - (b.distance_km || 999))
-  }
-
-  // 3. Third Tier: Komoot Photon API (Free, high-speed, comprehensive Indian coverage)
-  try {
-    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(cleanQ)}&lat=${uLat}&lon=${uLng}&limit=8`
-    const pController = new AbortController()
-    const pTimeout = setTimeout(() => pController.abort(), 3500)
-    const pRes = await fetch(photonUrl, { signal: pController.signal })
-    clearTimeout(pTimeout)
-
-    if (pRes.ok) {
-      const pData = await pRes.json()
-      const features = pData.features || []
-      for (const f of features) {
-        const props = f.properties || {}
-        const coords = f.geometry?.coordinates || []
-        const lon = parseFloat(coords[0])
-        const lat = parseFloat(coords[1])
-        if (!lat || !lon) continue
-
-        const name = props.name || props.street || cleanQ
-        const parts = [
-          props.street,
-          props.district || props.suburb,
-          props.city,
-          props.state,
-          props.country,
-        ].filter(Boolean)
-        const secondary = parts.filter(p => p !== name).join(', ')
-        const fullDesc = secondary ? `${name}, ${secondary}` : name
-        const dist = calculateDistanceKm(uLat, uLng, lat, lon)
-        const tag = detectCategoryTag(name, fullDesc, [props.osm_value || props.type || ''])
-
-        addPrediction({
-          place_id: `photon_${lat}_${lon}_${encodeURIComponent(name)}`,
-          description: fullDesc,
-          structured_formatting: {
-            main_text: name,
-            secondary_text: secondary || 'Tamil Nadu, India',
-          },
-          geometry: { location: { lat, lng: lon } },
-          latitude: lat,
-          longitude: lon,
-          distance_km: dist,
-          category_tag: tag,
-        })
-      }
+  // Process Backend predictions
+  if (backendOutcome.status === 'fulfilled' && Array.isArray(backendOutcome.value)) {
+    for (const p of backendOutcome.value) {
+      const pLat = parseFloat(p.latitude || p.geometry?.location?.lat || 0)
+      const pLng = parseFloat(p.longitude || p.geometry?.location?.lng || 0)
+      const dist = p.distance_km ?? (pLat && pLng ? calculateDistanceKm(uLat, uLng, pLat, pLng) : 3.5)
+      addPrediction({
+        place_id: p.place_id || `b_${Math.random()}`,
+        description: p.description,
+        structured_formatting: {
+          main_text: p.structured_formatting?.main_text || p.description,
+          secondary_text: p.structured_formatting?.secondary_text || '',
+        },
+        geometry: p.geometry || (pLat && pLng ? { location: { lat: pLat, lng: pLng } } : null),
+        latitude: pLat || null,
+        longitude: pLng || null,
+        distance_km: dist,
+        category_tag: p.category_tag || detectCategoryTag(p.description),
+      })
     }
-  } catch (err) {
-    // Photon engine timeout or offline
   }
 
-  // 4. Fourth Tier: OpenStreetMap Nominatim API (with country filter)
-  if (results.length < 4) {
+  // 3. Fallback: OpenStreetMap Nominatim if results are still sparse
+  if (results.length < 3) {
     try {
       const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cleanQ)}&countrycodes=in&limit=6`
       const nController = new AbortController()
-      const nTimeout = setTimeout(() => nController.abort(), 3500)
+      const nTimeout = setTimeout(() => nController.abort(), 2000)
       const nRes = await fetch(nomUrl, {
         signal: nController.signal,
         headers: { 'User-Agent': 'CityOneTaxiApp/1.0 (contact@toptechsoftwaresolutions.in)' }
@@ -291,9 +361,7 @@ export const searchPlacesService = async (query, userLat = null, userLng = null,
           }
         }
       }
-    } catch (err) {
-      // Nominatim failed
-    }
+    } catch {}
   }
 
   // 5. Fifth Tier: Device Native Geocoding
@@ -321,8 +389,41 @@ export const searchPlacesService = async (query, userLat = null, userLng = null,
     } catch (err) {}
   }
 
-  // Sort: Places closer to the user appear first!
-  return results.sort((a, b) => (a.distance_km || 999) - (b.distance_km || 999))
+  // Sort: Relevance to typed query FIRST (accurate results at top), then distance as tie-breaker!
+  const qL = cleanQ.toLowerCase()
+  const sorted = results.sort((a, b) => {
+    const aMain = (a.structured_formatting?.main_text || a.description || '').toLowerCase()
+    const bMain = (b.structured_formatting?.main_text || b.description || '').toLowerCase()
+    const aDesc = (a.description || '').toLowerCase()
+    const bDesc = (b.description || '').toLowerCase()
+
+    // 1. Exact match
+    const aExact = (aMain === qL) ? 100 : 0
+    const bExact = (bMain === qL) ? 100 : 0
+    if (aExact !== bExact) return bExact - aExact
+
+    // 2. Starts with query (prefix match)
+    const aStarts = aMain.startsWith(qL) ? 50 : (aDesc.startsWith(qL) ? 40 : 0)
+    const bStarts = bMain.startsWith(qL) ? 50 : (bDesc.startsWith(qL) ? 40 : 0)
+    if (aStarts !== bStarts) return bStarts - aStarts
+
+    // 3. Word boundary match
+    const aWord = (aMain.includes(` ${qL}`) || aDesc.includes(` ${qL}`)) ? 30 : 0
+    const bWord = (bMain.includes(` ${qL}`) || bDesc.includes(` ${qL}`)) ? 30 : 0
+    if (aWord !== bWord) return bWord - aWord
+
+    // 4. Substring match
+    const aInc = aMain.includes(qL) ? 20 : (aDesc.includes(qL) ? 10 : 0)
+    const bInc = bMain.includes(qL) ? 20 : (bDesc.includes(qL) ? 10 : 0)
+    if (aInc !== bInc) return bInc - aInc
+
+    // 5. Tie breaker: Distance to user
+    return (a.distance_km || 999) - (b.distance_km || 999)
+  })
+
+  const finalResults = sorted.slice(0, 15)
+  _searchMemoryCache.set(cacheKey, finalResults)
+  return finalResults
 }
 
 const _reverseCache = new Map()

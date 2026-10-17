@@ -41,21 +41,33 @@ const LiveTripMap = ({
   })).filter(wp => !isNaN(wp.latitude) && !isNaN(wp.longitude) && (wp.latitude !== 0 || wp.longitude !== 0))
 
   // Determine active route endpoints based on trip phase
-  // Phase 1 (Pickup Phase): Driver -> Customer Pickup
-  // Phase 2 (Drop Phase / in_progress): Driver -> Customer Destination (via intermediate stops)
   const isDropPhase = ['trip_started', 'in_progress', 'TRIP_STARTED'].includes(status)
 
-  const effectiveStart = driverLocation?.latitude && driverLocation?.longitude
-    ? { latitude: driverLocation.latitude, longitude: driverLocation.longitude }
-    : origin
+  const hasDriverCoord = !!(driverLocation?.latitude && driverLocation?.longitude)
+  const distDriverToPickup = (hasDriverCoord && origin?.latitude)
+    ? calculateDistanceKm(driverLocation.latitude, driverLocation.longitude, origin.latitude, origin.longitude)
+    : 0
 
-  const effectiveEnd = isDropPhase ? destination : (origin || destination)
+  // Intelligent Route Endpoints:
+  // If driver is away from pickup (> 0.5km) in pickup phase, start at driver and route to destination through pickup.
+  // Otherwise, route from origin directly to destination so the full trip path is always drawn!
+  const effectiveStart = isDropPhase
+    ? (hasDriverCoord ? driverLocation : origin)
+    : ((hasDriverCoord && distDriverToPickup > 0.5) ? driverLocation : origin)
+
+  const effectiveEnd = destination || origin
+
+  const effectiveWaypoints = isDropPhase
+    ? normalizedWaypoints
+    : ((hasDriverCoord && distDriverToPickup > 0.5 && origin?.latitude)
+        ? [{ latitude: origin.latitude, longitude: origin.longitude, address: origin.address || 'Pickup' }, ...normalizedWaypoints]
+        : normalizedWaypoints)
 
   // Fetch / update live road directions
   const updateRoute = useCallback(async () => {
     if (!effectiveStart?.latitude || !effectiveEnd?.latitude) return
 
-    const targetKey = `${effectiveStart.latitude.toFixed(4)},${effectiveStart.longitude.toFixed(4)}->${effectiveEnd.latitude.toFixed(4)},${effectiveEnd.longitude.toFixed(4)}-wp${normalizedWaypoints.length}`
+    const targetKey = `${effectiveStart.latitude.toFixed(4)},${effectiveStart.longitude.toFixed(4)}->${effectiveEnd.latitude.toFixed(4)},${effectiveEnd.longitude.toFixed(4)}-wp${effectiveWaypoints.length}`
     
     // Avoid redundant calls if coordinates haven't meaningfully moved (>30m)
     if (lastFetchedTargetRef.current === targetKey && routeCoords.length > 0) return
@@ -63,7 +75,7 @@ const LiveTripMap = ({
 
     setLoadingRoute(true)
     try {
-      const res = await fetchRouteDirections(effectiveStart, effectiveEnd, isDropPhase ? normalizedWaypoints : [])
+      const res = await fetchRouteDirections(effectiveStart, effectiveEnd, effectiveWaypoints)
       if (res.coordinates?.length > 0) {
         setRouteCoords(res.coordinates)
         setRouteInfo({
@@ -77,37 +89,36 @@ const LiveTripMap = ({
     } finally {
       setLoadingRoute(false)
     }
-  }, [effectiveStart?.latitude, effectiveStart?.longitude, effectiveEnd?.latitude, effectiveEnd?.longitude, isDropPhase, normalizedWaypoints])
+  }, [effectiveStart?.latitude, effectiveStart?.longitude, effectiveEnd?.latitude, effectiveEnd?.longitude, effectiveWaypoints])
 
   useEffect(() => {
     updateRoute()
   }, [updateRoute])
 
-  // Fit map viewport to encompass both driver and destination
+  // Fit map viewport to encompass driver, pickup, and destination
   const fitMapBounds = useCallback(() => {
-    if (!mapRef.current || !mapReady) return
+    if (!mapRef.current) return
 
     const pointsToFit = []
-    if (effectiveStart?.latitude) pointsToFit.push(effectiveStart)
-    if (effectiveEnd?.latitude) pointsToFit.push(effectiveEnd)
-    if (origin?.latitude) pointsToFit.push(origin)
-    if (destination?.latitude) pointsToFit.push(destination)
+    if (origin?.latitude && origin?.longitude) pointsToFit.push(origin)
+    if (destination?.latitude && destination?.longitude) pointsToFit.push(destination)
+    if (driverLocation?.latitude && driverLocation?.longitude) pointsToFit.push(driverLocation)
     if (normalizedWaypoints?.length > 0) pointsToFit.push(...normalizedWaypoints)
 
     if (pointsToFit.length >= 2) {
       mapRef.current.fitToCoordinates(pointsToFit, {
-        edgePadding: { top: 70, right: 50, bottom: 80, left: 50 },
+        edgePadding: { top: 60, right: 40, bottom: 60, left: 40 },
         animated: true,
       })
     } else if (pointsToFit.length === 1) {
       mapRef.current.animateToRegion({
         latitude: pointsToFit[0].latitude,
         longitude: pointsToFit[0].longitude,
-        latitudeDelta: 0.015,
-        longitudeDelta: 0.015,
+        latitudeDelta: 0.02,
+        longitudeDelta: 0.02,
       }, 500)
     }
-  }, [mapReady, effectiveStart, effectiveEnd, origin, destination, normalizedWaypoints])
+  }, [origin, destination, driverLocation, normalizedWaypoints])
 
   useEffect(() => {
     if (mapReady) {
@@ -126,10 +137,13 @@ const LiveTripMap = ({
 
   // Open Turn-by-Turn GPS Navigation in Google Maps app
   const openTurnByTurnNavigation = () => {
-    if (!effectiveEnd?.latitude || !effectiveEnd?.longitude) return
-    const lat = effectiveEnd.latitude
-    const lng = effectiveEnd.longitude
-    const label = encodeURIComponent(isDropPhase ? 'Customer Dropoff' : 'Customer Pickup')
+    const navTarget = (!isDropPhase && distDriverToPickup > 0.2)
+      ? origin
+      : (normalizedWaypoints.length > 0 ? normalizedWaypoints[0] : effectiveEnd)
+
+    if (!navTarget?.latitude || !navTarget?.longitude) return
+    const lat = navTarget.latitude
+    const lng = navTarget.longitude
 
     const url = Platform.select({
       ios: `maps://app?daddr=${lat},${lng}&dirflg=d`,
@@ -149,16 +163,34 @@ const LiveTripMap = ({
       })
   }
 
-  // Live ETA calculation fallback
-  const liveDist = routeInfo.distanceKm || (effectiveStart && effectiveEnd ? calculateDistanceKm(effectiveStart.latitude, effectiveStart.longitude, effectiveEnd.latitude, effectiveEnd.longitude).toFixed(1) : 0)
-  const liveEta = routeInfo.durationMins || Math.ceil(liveDist * 2.5) || 3
+  // Live HUD calculations
+  let displayTitle = ''
+  let displaySubtitle = ''
+  let displayDist = 0
+  let displayEta = 0
+  const targetColor = isDropPhase ? '#EF4444' : (distDriverToPickup <= 0.4 ? '#3B82F6' : '#10B981')
 
-  const targetTitle = isDropPhase ? 'Dropoff Destination' : 'Customer Pickup'
-  const targetColor = isDropPhase ? '#EF4444' : '#10B981'
+  if (isDropPhase) {
+    displayTitle = role === 'driver' ? 'Navigating to: Dropoff Destination' : 'Trip in Progress • Heading to Drop'
+    displaySubtitle = destination?.address || 'Destination'
+    displayDist = routeInfo.distanceKm || (origin && destination ? calculateDistanceKm(origin.latitude, origin.longitude, destination.latitude, destination.longitude).toFixed(1) : 0)
+    displayEta = routeInfo.durationMins || Math.ceil(displayDist * 2.5) || 10
+  } else if (hasDriverCoord && distDriverToPickup > 0.4) {
+    displayTitle = role === 'driver' ? 'Navigating to: Customer Pickup' : 'Driver is on the way to Pickup'
+    displaySubtitle = origin?.address || 'Pickup Point'
+    displayDist = distDriverToPickup.toFixed(1)
+    displayEta = Math.ceil(distDriverToPickup * 2.5) || 2
+  } else {
+    // Driver is at or near pickup point
+    displayTitle = role === 'driver' ? 'At Customer Pickup • Heading to Drop' : 'Driver Arrived at Pickup Point'
+    displaySubtitle = destination?.address || origin?.address || 'Destination'
+    displayDist = routeInfo.distanceKm || (origin && destination ? calculateDistanceKm(origin.latitude, origin.longitude, destination.latitude, destination.longitude).toFixed(1) : 0)
+    displayEta = routeInfo.durationMins || Math.ceil(displayDist * 2.5) || 15
+  }
 
   const initialRegion = {
-    latitude: effectiveStart?.latitude || 12.9716,
-    longitude: effectiveStart?.longitude || 77.5946,
+    latitude: effectiveStart?.latitude || origin?.latitude || 13.0827,
+    longitude: effectiveStart?.longitude || origin?.longitude || 80.2707,
     latitudeDelta: 0.035,
     longitudeDelta: 0.035,
   }
@@ -173,7 +205,11 @@ const LiveTripMap = ({
         waypoints={normalizedWaypoints}
         routeCoordinates={routeCoords}
         initialRegion={initialRegion}
-        style={StyleSheet.absoluteFillObject}
+        style={{ width: '100%', height: '100%' }}
+        onMapReady={() => {
+          setMapReady(true)
+          fitMapBounds()
+        }}
       />
 
       {/* Floating Top Banner: Live Direction & Distance HUD */}
@@ -182,21 +218,17 @@ const LiveTripMap = ({
           <View style={[styles.targetIndicatorDot, { backgroundColor: targetColor }]} />
           <View style={{ flex: 1 }}>
             <Text style={styles.targetLabelText} numberOfLines={1}>
-              {role === 'driver'
-                ? `Navigating to: ${targetTitle}`
-                : isDropPhase
-                  ? 'Trip in Progress • Heading to Drop'
-                  : 'Driver is on the way to Pickup'}
+              {displayTitle}
             </Text>
             <Text style={styles.targetSubText} numberOfLines={1}>
-              {isDropPhase ? (destination?.address || 'Destination') : (origin?.address || 'Pickup Point')}
+              {displaySubtitle}
             </Text>
           </View>
         </View>
 
         <View style={styles.hudEtaBadge}>
-          <Text style={styles.hudEtaMins}>{liveEta} min</Text>
-          <Text style={styles.hudDistKm}>{liveDist} km</Text>
+          <Text style={styles.hudEtaMins}>{displayEta} min</Text>
+          <Text style={styles.hudDistKm}>{displayDist} km</Text>
         </View>
       </View>
 

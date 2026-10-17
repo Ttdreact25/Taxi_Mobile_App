@@ -165,10 +165,23 @@ const DriverPaymentScreen = ({ navigation, route }) => {
   const isPaid = (booking.payment_status === 'paid' && booking.collection_status === 'collected') || confirmed
   const method = booking.payment_method || 'cash'
   
-  const totalFare = Math.round(Number(booking.final_fare || booking.fare_estimate || fare?.total || 0))
+  let computedFare = Math.round(Number(booking.final_fare || booking.fare_estimate || fare?.total || booking.fare || booking.original_fare || 0))
+  if (computedFare <= 0) {
+    const origKm = Number(booking.original_distance_km || booking.distance_km || 0)
+    const perKmRate = Number(booking.per_km_rate || 15)
+    const baseRate = Number(booking.base_fare || 30)
+    const minFare = Number(booking.minimum_fare || 50)
+    const routeFare = Math.max(minFare, Math.round(baseRate + (origKm * perKmRate)))
+    const extraKmFare = Math.round(Number(booking.extra_km_fare || 0))
+    const waitCharge = Math.round(Number(booking.waiting_charge || 0))
+    const tollAmt = Math.round(Number(booking.toll_amount || 0))
+    const disc = Math.round(Number(booking.discount_amount || 0))
+    computedFare = Math.max(minFare, routeFare + extraKmFare + waitCharge + tollAmt - disc)
+  }
+  const totalFare = computedFare
   const discountAmount = Math.round(Number(booking.discount_amount || 0))
   const onlinePaid = Math.round(Number(booking.online_paid || booking.commission_amount || 0))
-  const remainingCash = Math.max(0, Math.round(Number(booking.cash_pending ?? (totalFare - onlinePaid))))
+  const remainingCash = Math.max(0, Math.round(Number((booking.cash_pending !== null && Number(booking.cash_pending) > 0) ? booking.cash_pending : (totalFare - onlinePaid))))
   const driverNetEarnings = remainingCash
 
   return (
@@ -307,6 +320,14 @@ const DriverPaymentScreen = ({ navigation, route }) => {
               </Text>
               <Text style={[styles.detailValue, { color: '#D97706', fontWeight: '700' }]}>
                 + ₹{Math.round(Number(booking.waiting_charge))}
+              </Text>
+            </View>
+          )}
+          {Number(booking.toll_amount) > 0 && (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>Toll / Parking Charges</Text>
+              <Text style={[styles.detailValue, { color: '#2563EB', fontWeight: '700' }]}>
+                + ₹{Math.round(Number(booking.toll_amount))}
               </Text>
             </View>
           )}

@@ -73,7 +73,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#000000"
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "extra": {
       "apiBaseUrl": "https://taxi-backend.toptechsoftwaresolutions.in/api",

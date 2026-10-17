@@ -28,20 +28,16 @@ export const DEV_BACKEND_URL = devHostIp
   : PROD_BACKEND_URL
 export const DEV_API_URL     = `${DEV_BACKEND_URL}/api`
 
-// Determine runtime build mode
-const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : false
+// By default, connect to live Hostinger production backend so all bookings, users, and drivers save to the live database
+export const FORCE_PROD = true
 
-export const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || (
-  process.env.EXPO_PUBLIC_USE_LOCAL
-    ? (devHostIp ? DEV_BACKEND_URL : 'http://localhost/cab&taxi_Management_System/backend')
-    : (isDev && devHostIp && !process.env.EXPO_PUBLIC_USE_PROD ? DEV_BACKEND_URL : (Constants.expoConfig?.extra?.backendUrl || PROD_BACKEND_URL))
-)
+export const BACKEND_URL = (process.env.EXPO_PUBLIC_USE_LOCAL === 'true' && !FORCE_PROD)
+  ? (devHostIp ? DEV_BACKEND_URL : 'http://localhost/cab&taxi_Management_System/backend')
+  : (process.env.EXPO_PUBLIC_BACKEND_URL || Constants.expoConfig?.extra?.backendUrl || PROD_BACKEND_URL)
 
-export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || (
-  process.env.EXPO_PUBLIC_USE_LOCAL
-    ? `${BACKEND_URL}/api`
-    : (isDev && devHostIp && !process.env.EXPO_PUBLIC_USE_PROD ? DEV_API_URL : (Constants.expoConfig?.extra?.apiBaseUrl || PROD_API_URL))
-)
+export const API_BASE_URL = (process.env.EXPO_PUBLIC_USE_LOCAL === 'true' && !FORCE_PROD)
+  ? `${BACKEND_URL}/api`
+  : (process.env.EXPO_PUBLIC_API_URL || Constants.expoConfig?.extra?.apiBaseUrl || PROD_API_URL)
 
 export const resolveAssetUrl = (path) => {
   if (!path) return null

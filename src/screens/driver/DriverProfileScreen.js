@@ -11,11 +11,13 @@ import {
   TextInput,
   ActivityIndicator,
   Platform,
+  Switch,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
+import * as SecureStore from 'expo-secure-store'
 import { driverAPI, authAPI, uploadAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
@@ -50,6 +52,12 @@ const DriverProfileScreen = ({ navigation }) => {
       const res = await driverAPI.profile()
       if (res.data?.driver || res.data) {
         const d = res.data.driver || res.data
+        try {
+          const cachedCaps = await SecureStore.getItemAsync('@driver_accepted_capacities')
+          if (cachedCaps && !d.accepted_capacities) {
+            d.accepted_capacities = cachedCaps
+          }
+        } catch {}
         setDriver(d)
         setName(d.name || user?.name || '')
         setEmail(d.email || user?.email || '')
@@ -64,32 +72,196 @@ const DriverProfileScreen = ({ navigation }) => {
     }
   }, [user])
 
+  // Additional Vehicle Categories (4+1 can enable 3+1; 6+1 can enable 4+1, 3+1; 7+1 can enable 6+1, 4+1, 3+1)
+  const [updatingCapacities, setUpdatingCapacities] = useState(false)
+
+  const getDriverBaseCapacity = (d) => {
+    const vType = String(d?.vehicle_type || d?.vehicle_type_name || d?.model || d?.vehicle_model || '').toLowerCase()
+    const cap = Number(d?.capacity || 0)
+
+    // Priority 1: Check explicit category strings in vehicle type or model
+    if (vType.includes('3+1') || vType.includes('3 seater') || vType.includes('mini') || vType.includes('hatchback')) {
+      return '3+1'
+    }
+    if (vType.includes('7+1') || vType.includes('7 seater') || vType.includes('8 seater') || vType.includes('suv xl') || vType.includes('suv_xl') || vType.includes('crysta')) {
+      return '7+1'
+    }
+    if (vType.includes('6+1') || vType.includes('6 seater') || vType.includes('suv') || vType.includes('ertiga')) {
+      return '6+1'
+    }
+    if (vType.includes('4+1') || vType.includes('4 seater') || vType.includes('sedan') || vType.includes('dzire') || vType.includes('etios')) {
+      return '4+1'
+    }
+
+    // Priority 2: Seating capacity fallback (4 is 3+1 Mini, 5 is 4+1 Sedan, 7 is 6+1 SUV, 8+ is 7+1 SUV XL)
+    if (cap >= 8) return '7+1'
+    if (cap >= 6) return '6+1'
+    if (cap === 5) return '4+1'
+    if (cap > 0 && cap <= 4) return '3+1'
+    return '4+1'
+  }
+
+  const parseAcceptedCapacities = (rawCaps, rawServices) => {
+    const set = new Set()
+    if (rawCaps) {
+      const parts = String(rawCaps).split(',').map(s => s.trim()).filter(Boolean)
+      parts.forEach(p => set.add(p))
+    }
+    if (rawServices) {
+      const sParts = String(rawServices).split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+      if (sParts.includes('cap_3_1') || sParts.includes('3+1')) set.add('3+1')
+      if (sParts.includes('cap_4_1') || sParts.includes('4+1')) set.add('4+1')
+      if (sParts.includes('cap_6_1') || sParts.includes('6+1')) set.add('6+1')
+      if (sParts.includes('cap_7_1') || sParts.includes('7+1')) set.add('7+1')
+    }
+    return Array.from(set)
+  }
+
+  const handleToggleCapacity = async (capKey) => {
+    const currentActive = parseAcceptedCapacities(driver?.accepted_capacities, driver?.service_types)
+    let nextList
+    if (currentActive.includes(capKey)) {
+      nextList = currentActive.filter(c => c !== capKey)
+    } else {
+      nextList = [...currentActive, capKey]
+    }
+
+    const nextCapStr = nextList.join(',')
+    const currentServices = parseActiveServices(driver?.service_types)
+    const capTags = nextList.map(c => `cap_${c.replace('+', '_')}`)
+    const pureServices = currentServices.filter(s => !s.startsWith('cap_') && s !== '3+1' && s !== '4+1' && s !== '6+1' && s !== '7+1')
+    const combinedServices = Array.from(new Set([...pureServices, ...capTags])).join(',')
+
+    setDriver(prev => ({
+      ...prev,
+      accepted_capacities: nextCapStr,
+      service_types: combinedServices
+    }))
+
+    if (updateUser) {
+      updateUser(prev => ({
+        ...prev,
+        accepted_capacities: nextCapStr,
+        service_types: combinedServices
+      }))
+    }
+
+    try {
+      await SecureStore.setItemAsync('@driver_accepted_capacities', nextCapStr)
+    } catch {}
+
+    setUpdatingCapacities(true)
+    try {
+      const res = await driverAPI.updateProfile({
+        accepted_capacities: nextCapStr,
+        service_types: combinedServices
+      })
+      if (res.data?.status === 'success' || res.data?.status === true) {
+        // Saved successfully
+      }
+    } catch (err) {
+      console.log('Update capacities error:', err)
+      Alert.alert('Update Failed', 'Could not update vehicle category preferences.')
+      loadProfile()
+    } finally {
+      setUpdatingCapacities(false)
+    }
+  }
+
   const [updatingServices, setUpdatingServices] = useState(false)
 
-  const handleToggleService = async (serviceKey) => {
-    const curRaw = driver?.service_types || 'local,outstation,hourly'
-    const curList = curRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
-    let nextList
-    if (curList.includes(serviceKey)) {
-      if (curList.length === 1) {
-        Alert.alert('Selection Required', 'You must keep at least one active operating service category.')
-        return
+  const parseActiveServices = (raw) => {
+    const str = raw || 'local_drop,hourly_package,outstation_oneway,outstation_round'
+    const parts = str.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    const set = new Set()
+    parts.forEach(p => {
+      if (p === 'local') {
+        set.add('local_drop')
+      } else if (p === 'hourly' || p === 'rental') {
+        set.add('hourly_package')
+      } else if (p === 'outstation') {
+        set.add('outstation_oneway')
+        set.add('outstation_round')
+      } else {
+        set.add(p)
       }
-      nextList = curList.filter(s => s !== serviceKey)
-    } else {
-      nextList = [...curList, serviceKey]
-    }
-    const newTypesStr = nextList.join(',')
+    })
+    return Array.from(set)
+  }
+
+  const saveServices = async (list) => {
+    const newTypesStr = list.join(',')
     setDriver(prev => ({ ...prev, service_types: newTypesStr }))
+    if (updateUser) {
+      updateUser(prev => ({ ...prev, service_types: newTypesStr }))
+    }
     setUpdatingServices(true)
     try {
-      await driverAPI.updateProfile({ service_types: newTypesStr })
-    } catch {
-      Alert.alert('Update Failed', 'Could not update service preferences.')
+      const res = await driverAPI.updateProfile({ service_types: newTypesStr })
+      if (res.data?.status === 'success' || res.data?.status === true) {
+        // Saved successfully
+      } else {
+        throw new Error(res.data?.message || 'Could not update service preferences.')
+      }
+    } catch (err) {
+      console.log('Update service preferences error:', err)
+      Alert.alert('Update Failed', err?.response?.data?.message || err?.message || 'Could not update service preferences.')
       loadProfile()
     } finally {
       setUpdatingServices(false)
     }
+  }
+
+  const handleToggleParentGroup = async (groupKey) => {
+    const currentActive = parseActiveServices(driver?.service_types)
+    let nextActive = [...currentActive]
+
+    if (groupKey === 'local') {
+      const isLocalActive = nextActive.includes('local_drop') || nextActive.includes('hourly_package')
+      if (isLocalActive) {
+        const remaining = nextActive.filter(s => s !== 'local_drop' && s !== 'hourly_package')
+        if (remaining.length === 0) {
+          Alert.alert('Required Service', 'You must keep at least one operating trip category active.')
+          return
+        }
+        nextActive = remaining
+      } else {
+        if (!nextActive.includes('local_drop')) nextActive.push('local_drop')
+        if (!nextActive.includes('hourly_package')) nextActive.push('hourly_package')
+      }
+    } else if (groupKey === 'outstation') {
+      const isOutstationActive = nextActive.includes('outstation_oneway') || nextActive.includes('outstation_round')
+      if (isOutstationActive) {
+        const remaining = nextActive.filter(s => s !== 'outstation_oneway' && s !== 'outstation_round')
+        if (remaining.length === 0) {
+          Alert.alert('Required Service', 'You must keep at least one operating trip category active.')
+          return
+        }
+        nextActive = remaining
+      } else {
+        if (!nextActive.includes('outstation_oneway')) nextActive.push('outstation_oneway')
+        if (!nextActive.includes('outstation_round')) nextActive.push('outstation_round')
+      }
+    }
+
+    await saveServices(nextActive)
+  }
+
+  const handleToggleSubService = async (serviceKey) => {
+    const currentActive = parseActiveServices(driver?.service_types)
+    let nextActive
+
+    if (currentActive.includes(serviceKey)) {
+      if (currentActive.length <= 1) {
+        Alert.alert('Selection Required', 'You must keep at least one active operating service.')
+        return
+      }
+      nextActive = currentActive.filter(s => s !== serviceKey)
+    } else {
+      nextActive = [...currentActive, serviceKey]
+    }
+
+    await saveServices(nextActive)
   }
 
   useEffect(() => {
@@ -463,81 +635,399 @@ const DriverProfileScreen = ({ navigation }) => {
           ))}
         </View>
 
-        {/* Operating Service Categories */}
+        {/* Additional Vehicle Category Assignments (4+1 -> 3+1; 6+1 -> 4+1, 3+1; 7+1 -> 6+1, 4+1, 3+1) */}
+        {(() => {
+          const baseCap = getDriverBaseCapacity(driver)
+          const activeCaps = parseAcceptedCapacities(driver?.accepted_capacities, driver?.service_types)
+
+          let lowerCapOptions = []
+          if (baseCap === '7+1') {
+            lowerCapOptions = [
+              { key: '6+1', label: 'SUV (6+1)', desc: 'Accept 6+1 SUV trips with your 7+1 vehicle', icon: 'car-sport', badge: '6+1 SEATER', color: '#D97706', bg: '#FFFBEB' },
+              { key: '4+1', label: 'Sedan (4+1)', desc: 'Accept 4+1 Sedan trips with your 7+1 vehicle', icon: 'car-sport', badge: '4+1 SEATER', color: '#059669', bg: '#ECFDF5' },
+              { key: '3+1', label: 'Mini (3+1)', desc: 'Accept 3+1 Mini trips with your 7+1 vehicle', icon: 'car', badge: '3+1 SEATER', color: '#2563EB', bg: '#EFF6FF' },
+            ]
+          } else if (baseCap === '6+1') {
+            lowerCapOptions = [
+              { key: '4+1', label: 'Sedan (4+1)', desc: 'Accept 4+1 Sedan trips with your 6+1 vehicle', icon: 'car-sport', badge: '4+1 SEATER', color: '#059669', bg: '#ECFDF5' },
+              { key: '3+1', label: 'Mini (3+1)', desc: 'Accept 3+1 Mini trips with your 6+1 vehicle', icon: 'car', badge: '3+1 SEATER', color: '#2563EB', bg: '#EFF6FF' },
+            ]
+          } else if (baseCap === '4+1') {
+            lowerCapOptions = [
+              { key: '3+1', label: 'Mini (3+1)', desc: 'Accept 3+1 Mini trips with your 4+1 vehicle', icon: 'car', badge: '3+1 SEATER', color: '#2563EB', bg: '#EFF6FF' },
+            ]
+          }
+
+          // If driver's vehicle has no lower seating categories (e.g. 3+1 Mini is already the lowest), hide this section completely
+          if (lowerCapOptions.length === 0) {
+            return null
+          }
+
+          return (
+            <View style={{ marginTop: 18 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.sectionTitle, { marginTop: 0, marginBottom: 2 }]}>Additional Vehicle Categories</Text>
+                  <Text style={{ fontSize: 11, color: '#64748B' }}>
+                    Enable smaller categories to receive more trips & maximize earnings
+                  </Text>
+                </View>
+                {updatingCapacities && <ActivityIndicator size="small" color={COLORS.primary} />}
+              </View>
+
+              <View style={[styles.card, { padding: 14 }]}>
+                {/* Registered Base Vehicle Info Header */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                    <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' }}>
+                      <Ionicons name="car-sport" size={22} color={COLORS.primary} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '800', color: '#0F172A' }} numberOfLines={1}>
+                        Registered: {driver?.vehicle_type || `${baseCap} Cab`}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: '#64748B', marginTop: 1 }}>
+                        Base Capacity: {baseCap} · {driver?.plate_no || 'Cab Assigned'}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={{ backgroundColor: '#EEF2FF', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: '#C7D2FE' }}>
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: COLORS.primary }}>
+                      BASE {baseCap}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Lower Category Toggles */}
+                {lowerCapOptions.length > 0 ? (
+                  <View style={{ marginTop: 12, gap: 10 }}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#475569', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      Enable Lower Seating Bookings:
+                    </Text>
+                    {lowerCapOptions.map(opt => {
+                      const isOptActive = activeCaps.includes(opt.key)
+                      return (
+                        <TouchableOpacity
+                          key={opt.key}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: isOptActive ? opt.bg : '#F8FAFC',
+                            borderWidth: 1.5,
+                            borderColor: isOptActive ? opt.color : '#E2E8F0',
+                            borderRadius: 12,
+                            padding: 12,
+                          }}
+                          onPress={() => handleToggleCapacity(opt.key)}
+                          activeOpacity={0.8}
+                        >
+                          {/* Car Icon with Category Color */}
+                          <View style={{
+                            width: 42,
+                            height: 42,
+                            borderRadius: 10,
+                            backgroundColor: isOptActive ? opt.color : '#E2E8F0',
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}>
+                            <Ionicons name={opt.icon} size={22} color={isOptActive ? '#FFFFFF' : '#64748B'} />
+                          </View>
+
+                          <View style={{ flex: 1, marginHorizontal: 10 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              <Text style={{ fontSize: 14, fontWeight: '800', color: isOptActive ? '#0F172A' : '#475569' }}>
+                                {opt.label}
+                              </Text>
+                              <View style={{
+                                backgroundColor: isOptActive ? '#FFFFFF' : '#E2E8F0',
+                                paddingHorizontal: 6,
+                                paddingVertical: 1.5,
+                                borderRadius: 4
+                              }}>
+                                <Text style={{ fontSize: 9.5, fontWeight: '800', color: isOptActive ? opt.color : '#64748B' }}>
+                                  {opt.badge}
+                                </Text>
+                              </View>
+                            </View>
+                            <Text style={{ fontSize: 11, color: isOptActive ? '#475569' : '#94A3B8', marginTop: 2 }}>
+                              {opt.desc}
+                            </Text>
+                            <Text style={{ fontSize: 10.5, fontWeight: '700', color: isOptActive ? '#10B981' : '#94A3B8', marginTop: 2 }}>
+                              {isOptActive ? '✓ Assigned & Receiving Trips' : 'Disabled · Tap to enable'}
+                            </Text>
+                          </View>
+
+                          <Switch
+                            value={isOptActive}
+                            onValueChange={() => handleToggleCapacity(opt.key)}
+                            trackColor={{ false: '#CBD5E1', true: opt.color }}
+                            thumbColor="#FFFFFF"
+                          />
+                        </TouchableOpacity>
+                      )
+                    })}
+
+                    <View style={{ marginTop: 4, padding: 8, backgroundColor: '#F8FAFC', borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Ionicons name="information-circle-outline" size={16} color="#64748B" />
+                      <Text style={{ fontSize: 10.5, color: '#64748B', flex: 1 }}>
+                        Enabled categories allow the system & admin to assign smaller vehicle trips to you whenever available.
+                      </Text>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={{ marginTop: 10, padding: 10, backgroundColor: '#F8FAFC', borderRadius: 8 }}>
+                    <Text style={{ fontSize: 11.5, color: '#64748B', textAlign: 'center', lineHeight: 16 }}>
+                      Your vehicle is registered as {baseCap}. You receive all {baseCap} trip requests automatically.
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          )
+        })()}
+
+        {/* Operating Trip Services (Local & Outstation Hierarchy) */}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, marginBottom: 8 }}>
-          <Text style={[styles.sectionTitle, { marginTop: 0, marginBottom: 0 }]}>Operating Services</Text>
+          <View>
+            <Text style={[styles.sectionTitle, { marginTop: 0, marginBottom: 2 }]}>Operating Services</Text>
+            <Text style={{ fontSize: 11, color: '#64748B' }}>Choose trip categories you accept</Text>
+          </View>
           {updatingServices && <ActivityIndicator size="small" color={COLORS.primary} />}
         </View>
-        <View style={styles.card}>
-          <Text style={{ fontSize: 12, color: '#64748B', marginBottom: 12, lineHeight: 16 }}>
-            Tap to toggle the ride categories you accept. Dispatches & auto-assignments are routed only to eligible categories.
-          </Text>
-          <View style={{ gap: 10 }}>
-            {[
-              {
-                key: 'local',
-                title: 'Local Drop',
-                subtitle: 'One-way point-to-point city rides',
-                icon: 'car',
-                badge: 'City Taxi',
-                color: '#4F46E5',
-                bgLight: '#EEF2FF',
-              },
-              {
-                key: 'outstation',
-                title: 'Out Station',
-                subtitle: 'Inter-city one-way drops & round trips',
-                icon: 'navigate',
-                badge: 'Long Trip',
-                color: '#059669',
-                bgLight: '#ECFDF5',
-              },
-              {
-                key: 'hourly',
-                title: 'Hourly Package',
-                subtitle: 'Multi-hour city rentals (1h, 2h, 4h, etc.)',
-                icon: 'time',
-                badge: 'Rental',
-                color: '#D97706',
-                bgLight: '#FFFBEB',
-              },
-            ].map(svc => {
-              const activeList = (driver?.service_types || 'local,outstation,hourly').split(',').map(s => s.trim().toLowerCase())
-              const isActive = activeList.includes(svc.key)
-              return (
-                <TouchableOpacity
-                  key={svc.key}
-                  style={[
-                    styles.profileSvcRow,
-                    isActive && { borderColor: svc.color, backgroundColor: svc.bgLight }
-                  ]}
-                  onPress={() => handleToggleService(svc.key)}
-                  activeOpacity={0.8}
-                >
-                  <View style={[styles.profileSvcIcon, { backgroundColor: isActive ? svc.color : '#F1F5F9' }]}>
-                    <Ionicons name={svc.icon} size={18} color={isActive ? '#FFFFFF' : '#64748B'} />
-                  </View>
-                  <View style={{ flex: 1, marginHorizontal: 10 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Text style={[styles.profileSvcTitle, isActive && { color: '#0F172A', fontWeight: '800' }]}>
-                        {svc.title}
-                      </Text>
-                      <View style={[styles.profileSvcBadge, { backgroundColor: isActive ? '#FFFFFF' : '#E2E8F0' }]}>
-                        <Text style={[styles.profileSvcBadgeText, { color: isActive ? svc.color : '#64748B' }]}>
-                          {svc.badge}
-                        </Text>
-                      </View>
+
+        {(() => {
+          const activeList = parseActiveServices(driver?.service_types)
+          const isLocalActive = activeList.includes('local_drop') || activeList.includes('hourly_package')
+          const isOutstationActive = activeList.includes('outstation_oneway') || activeList.includes('outstation_round')
+
+          return (
+            <View style={{ gap: 12 }}>
+              {/* 1. Local Trip Master Card */}
+              <View style={[styles.card, { padding: 14, borderWidth: 1.5, borderColor: isLocalActive ? '#818CF8' : '#E2E8F0', backgroundColor: isLocalActive ? '#F8FAFC' : '#FFFFFF' }]}>
+                {/* Master Header */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                    <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: isLocalActive ? '#EEF2FF' : '#F1F5F9', alignItems: 'center', justifyContent: 'center' }}>
+                      <Ionicons name="car" size={22} color={isLocalActive ? '#4F46E5' : '#64748B'} />
                     </View>
-                    <Text style={styles.profileSvcSub}>{svc.subtitle}</Text>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: isLocalActive ? '#1E1B4B' : '#64748B' }}>
+                          Local Trip
+                        </Text>
+                        <View style={{ backgroundColor: isLocalActive ? '#4F46E5' : '#E2E8F0', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: isLocalActive ? '#FFFFFF' : '#64748B' }}>
+                            CITY
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                        City point-to-point rides & hourly rentals
+                      </Text>
+                    </View>
                   </View>
-                  <View style={[styles.profileSvcToggle, isActive && { backgroundColor: svc.color, borderColor: svc.color }]}>
-                    <Ionicons name={isActive ? "checkmark" : "close"} size={14} color={isActive ? "#FFFFFF" : "#94A3B8"} />
+                  <Switch
+                    value={isLocalActive}
+                    onValueChange={() => handleToggleParentGroup('local')}
+                    trackColor={{ false: '#CBD5E1', true: '#4F46E5' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+
+                {/* Sub Options (Local Drop & Hourly Package) */}
+                {isLocalActive && (
+                  <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E2E8F0', gap: 8 }}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#475569', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>
+                      Select Local Options (Choose either or both):
+                    </Text>
+
+                    {/* Local Drop Option */}
+                    {(() => {
+                      const isDropActive = activeList.includes('local_drop')
+                      return (
+                        <TouchableOpacity
+                          style={[
+                            styles.profileSvcRow,
+                            isDropActive && { borderColor: '#4F46E5', backgroundColor: '#EEF2FF' }
+                          ]}
+                          onPress={() => handleToggleSubService('local_drop')}
+                          activeOpacity={0.8}
+                        >
+                          <View style={[styles.profileSvcIcon, { backgroundColor: isDropActive ? '#4F46E5' : '#F1F5F9' }]}>
+                            <Ionicons name="location" size={17} color={isDropActive ? '#FFFFFF' : '#64748B'} />
+                          </View>
+                          <View style={{ flex: 1, marginHorizontal: 10 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={[styles.profileSvcTitle, isDropActive && { color: '#0F172A', fontWeight: '800' }]}>
+                                Local Drop
+                              </Text>
+                              <View style={[styles.profileSvcBadge, { backgroundColor: isDropActive ? '#FFFFFF' : '#E2E8F0' }]}>
+                                <Text style={[styles.profileSvcBadgeText, { color: isDropActive ? '#4F46E5' : '#64748B' }]}>
+                                  Point to Point
+                                </Text>
+                              </View>
+                            </View>
+                            <Text style={styles.profileSvcSub}>One-way direct city drop</Text>
+                          </View>
+                          <View style={[styles.profileSvcToggle, isDropActive && { backgroundColor: '#4F46E5', borderColor: '#4F46E5' }]}>
+                            <Ionicons name={isDropActive ? "checkmark" : "close"} size={14} color={isDropActive ? "#FFFFFF" : "#94A3B8"} />
+                          </View>
+                        </TouchableOpacity>
+                      )
+                    })()}
+
+                    {/* Hourly Package Option */}
+                    {(() => {
+                      const isHourlyActive = activeList.includes('hourly_package')
+                      return (
+                        <TouchableOpacity
+                          style={[
+                            styles.profileSvcRow,
+                            isHourlyActive && { borderColor: '#D97706', backgroundColor: '#FFFBEB' }
+                          ]}
+                          onPress={() => handleToggleSubService('hourly_package')}
+                          activeOpacity={0.8}
+                        >
+                          <View style={[styles.profileSvcIcon, { backgroundColor: isHourlyActive ? '#D97706' : '#F1F5F9' }]}>
+                            <Ionicons name="time" size={17} color={isHourlyActive ? '#FFFFFF' : '#64748B'} />
+                          </View>
+                          <View style={{ flex: 1, marginHorizontal: 10 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={[styles.profileSvcTitle, isHourlyActive && { color: '#0F172A', fontWeight: '800' }]}>
+                                Hourly Package
+                              </Text>
+                              <View style={[styles.profileSvcBadge, { backgroundColor: isHourlyActive ? '#FFFFFF' : '#E2E8F0' }]}>
+                                <Text style={[styles.profileSvcBadgeText, { color: isHourlyActive ? '#D97706' : '#64748B' }]}>
+                                  Rental
+                                </Text>
+                              </View>
+                            </View>
+                            <Text style={styles.profileSvcSub}>Multi-hour city rentals (1h, 2h, 4h, etc.)</Text>
+                          </View>
+                          <View style={[styles.profileSvcToggle, isHourlyActive && { backgroundColor: '#D97706', borderColor: '#D97706' }]}>
+                            <Ionicons name={isHourlyActive ? "checkmark" : "close"} size={14} color={isHourlyActive ? "#FFFFFF" : "#94A3B8"} />
+                          </View>
+                        </TouchableOpacity>
+                      )
+                    })()}
                   </View>
-                </TouchableOpacity>
-              )
-            })}
-          </View>
-        </View>
+                )}
+              </View>
+
+              {/* 2. Outstation Trip Master Card */}
+              <View style={[styles.card, { padding: 14, borderWidth: 1.5, borderColor: isOutstationActive ? '#34D399' : '#E2E8F0', backgroundColor: isOutstationActive ? '#F8FAFC' : '#FFFFFF' }]}>
+                {/* Master Header */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                    <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: isOutstationActive ? '#ECFDF5' : '#F1F5F9', alignItems: 'center', justifyContent: 'center' }}>
+                      <Ionicons name="navigate" size={22} color={isOutstationActive ? '#059669' : '#64748B'} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: isOutstationActive ? '#064E3B' : '#64748B' }}>
+                          Outstation Trip
+                        </Text>
+                        <View style={{ backgroundColor: isOutstationActive ? '#059669' : '#E2E8F0', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: isOutstationActive ? '#FFFFFF' : '#64748B' }}>
+                            LONG TRIP
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
+                        Inter-city one-way drops & return trips
+                      </Text>
+                    </View>
+                  </View>
+                  <Switch
+                    value={isOutstationActive}
+                    onValueChange={() => handleToggleParentGroup('outstation')}
+                    trackColor={{ false: '#CBD5E1', true: '#059669' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+
+                {/* Sub Options (One Way Trip & Round Trip) */}
+                {isOutstationActive && (
+                  <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E2E8F0', gap: 8 }}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#475569', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>
+                      Select Outstation Options (Choose either or both):
+                    </Text>
+
+                    {/* One Way Trip Option */}
+                    {(() => {
+                      const isOneWayActive = activeList.includes('outstation_oneway')
+                      return (
+                        <TouchableOpacity
+                          style={[
+                            styles.profileSvcRow,
+                            isOneWayActive && { borderColor: '#059669', backgroundColor: '#ECFDF5' }
+                          ]}
+                          onPress={() => handleToggleSubService('outstation_oneway')}
+                          activeOpacity={0.8}
+                        >
+                          <View style={[styles.profileSvcIcon, { backgroundColor: isOneWayActive ? '#059669' : '#F1F5F9' }]}>
+                            <Ionicons name="arrow-forward" size={17} color={isOneWayActive ? '#FFFFFF' : '#64748B'} />
+                          </View>
+                          <View style={{ flex: 1, marginHorizontal: 10 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={[styles.profileSvcTitle, isOneWayActive && { color: '#0F172A', fontWeight: '800' }]}>
+                                One Way Trip
+                              </Text>
+                              <View style={[styles.profileSvcBadge, { backgroundColor: isOneWayActive ? '#FFFFFF' : '#E2E8F0' }]}>
+                                <Text style={[styles.profileSvcBadgeText, { color: isOneWayActive ? '#059669' : '#64748B' }]}>
+                                  Drop Only
+                                </Text>
+                              </View>
+                            </View>
+                            <Text style={styles.profileSvcSub}>Single destination outstation drop</Text>
+                          </View>
+                          <View style={[styles.profileSvcToggle, isOneWayActive && { backgroundColor: '#059669', borderColor: '#059669' }]}>
+                            <Ionicons name={isOneWayActive ? "checkmark" : "close"} size={14} color={isOneWayActive ? "#FFFFFF" : "#94A3B8"} />
+                          </View>
+                        </TouchableOpacity>
+                      )
+                    })()}
+
+                    {/* Round Trip Option */}
+                    {(() => {
+                      const isRoundActive = activeList.includes('outstation_round')
+                      return (
+                        <TouchableOpacity
+                          style={[
+                            styles.profileSvcRow,
+                            isRoundActive && { borderColor: '#0284C7', backgroundColor: '#F0F9FF' }
+                          ]}
+                          onPress={() => handleToggleSubService('outstation_round')}
+                          activeOpacity={0.8}
+                        >
+                          <View style={[styles.profileSvcIcon, { backgroundColor: isRoundActive ? '#0284C7' : '#F1F5F9' }]}>
+                            <Ionicons name="repeat" size={17} color={isRoundActive ? '#FFFFFF' : '#64748B'} />
+                          </View>
+                          <View style={{ flex: 1, marginHorizontal: 10 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={[styles.profileSvcTitle, isRoundActive && { color: '#0F172A', fontWeight: '800' }]}>
+                                Round Trip
+                              </Text>
+                              <View style={[styles.profileSvcBadge, { backgroundColor: isRoundActive ? '#FFFFFF' : '#E2E8F0' }]}>
+                                <Text style={[styles.profileSvcBadgeText, { color: isRoundActive ? '#0284C7' : '#64748B' }]}>
+                                  Two Way / Return
+                                </Text>
+                              </View>
+                            </View>
+                            <Text style={styles.profileSvcSub}>Outstation return & multi-day journeys</Text>
+                          </View>
+                          <View style={[styles.profileSvcToggle, isRoundActive && { backgroundColor: '#0284C7', borderColor: '#0284C7' }]}>
+                            <Ionicons name={isRoundActive ? "checkmark" : "close"} size={14} color={isRoundActive ? "#FFFFFF" : "#94A3B8"} />
+                          </View>
+                        </TouchableOpacity>
+                      )
+                    })()}
+                  </View>
+                )}
+              </View>
+            </View>
+          )
+        })()}
 
         {/* Partner Management Navigation */}
         <Text style={styles.sectionTitle}>Partner Management</Text>

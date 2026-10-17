@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
-import { longTripAPI, uploadAPI, createUploadFormData } from '../../api/api'
+import { longTripAPI, uploadAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
 import { COLORS } from '../../constants/theme'
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton'
@@ -16,13 +16,17 @@ const IdentityVerificationScreen = ({ navigation }) => {
   const [verification, setVerification] = useState(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [uploadingField, setUploadingField] = useState(null)
 
   // Customer KYC Form State
   const [fullName, setFullName] = useState(user?.name || '')
   const [aadhaarNumber, setAadhaarNumber] = useState('')
   const [aadhaarFront, setAadhaarFront] = useState(null)
+  const [aadhaarFrontPath, setAadhaarFrontPath] = useState(null)
   const [aadhaarBack, setAadhaarBack] = useState(null)
+  const [aadhaarBackPath, setAadhaarBackPath] = useState(null)
   const [selfie, setSelfie] = useState(null)
+  const [selfiePath, setSelfiePath] = useState(null)
   const [emergencyContact, setEmergencyContact] = useState('')
   const [gender, setGender] = useState('Not Specified')
   const [age, setAge] = useState('')
@@ -44,13 +48,19 @@ const IdentityVerificationScreen = ({ navigation }) => {
         if (v.gender) setGender(v.gender)
         if (v.age) setAge(String(v.age))
         if (v.aadhaar_front_image_url || v.aadhaar_front_image || v.govt_id_doc) {
-          setAadhaarFront(v.aadhaar_front_image_url || v.aadhaar_front_image || v.govt_id_doc)
+          const front = v.aadhaar_front_image_url || v.aadhaar_front_image || v.govt_id_doc
+          setAadhaarFront(front)
+          setAadhaarFrontPath(v.aadhaar_front_image || v.govt_id_doc || front)
         }
         if (v.aadhaar_back_image_url || v.aadhaar_back_image) {
-          setAadhaarBack(v.aadhaar_back_image_url || v.aadhaar_back_image)
+          const back = v.aadhaar_back_image_url || v.aadhaar_back_image
+          setAadhaarBack(back)
+          setAadhaarBackPath(v.aadhaar_back_image || back)
         }
         if (v.selfie_image_url || v.selfie_image || v.profile_photo) {
-          setSelfie(v.selfie_image_url || v.selfie_image || v.profile_photo)
+          const s = v.selfie_image_url || v.selfie_image || v.profile_photo
+          setSelfie(s)
+          setSelfiePath(v.selfie_image || v.profile_photo || s)
         }
       }
     } catch (e) {
@@ -78,36 +88,81 @@ const IdentityVerificationScreen = ({ navigation }) => {
         ? await ImagePicker.launchCameraAsync({
             allowsEditing: true,
             aspect: field === 'selfie' ? [1, 1] : [4, 3],
-            quality: 0.6,
+            quality: 0.7,
             base64: true,
           })
         : await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
             allowsEditing: true,
             aspect: field === 'selfie' ? [1, 1] : [4, 3],
-            quality: 0.6,
+            quality: 0.7,
             base64: true,
           })
 
-      if (!result.canceled && result.assets[0]?.uri) {
-        const uri = result.assets[0].uri
-        if (field === 'front') setAadhaarFront(uri)
-        if (field === 'back') setAadhaarBack(uri)
-        if (field === 'selfie') setSelfie(uri)
+      if (!result.canceled && result.assets && result.assets[0]?.uri) {
+        const asset = result.assets[0]
+        const localUri = asset.uri
+
+        // Immediate preview so the user sees the photo right away
+        if (field === 'front') setAadhaarFront(localUri)
+        if (field === 'back') setAadhaarBack(localUri)
+        if (field === 'selfie') setSelfie(localUri)
+
+        // Upload immediately to server with visual loader
+        setUploadingField(field)
+        try {
+          const formData = createUploadFormData(localUri, {
+            prefix: field === 'selfie' ? 'kyc_selfie' : `kyc_${field}`,
+            type: 'kyc',
+            asset: asset,
+          })
+
+          const res = await uploadAPI.upload(formData, 'kyc')
+          const data = res.data || {}
+
+          if (data.status === 'success' || data.url || data.path) {
+            const serverPath = data.path || data.relative_path || data.filename || data.file_name || data.url
+            const serverUrl = data.url || localUri
+
+            if (field === 'front') {
+              setAadhaarFrontPath(serverPath)
+              setAadhaarFront(serverUrl)
+            }
+            if (field === 'back') {
+              setAadhaarBackPath(serverPath)
+              setAadhaarBack(serverUrl)
+            }
+            if (field === 'selfie') {
+              setSelfiePath(serverPath)
+              setSelfie(serverUrl)
+            }
+          } else {
+            Alert.alert('Upload Error', data.message || 'Failed to upload photo to server. Please try again.')
+          }
+        } catch (uploadErr) {
+          console.log('Direct upload error:', uploadErr)
+          Alert.alert(
+            'Upload Error',
+            (uploadErr.message || 'Failed to upload document photo to server.') + '\nPlease try picking or capturing again.'
+          )
+        } finally {
+          setUploadingField(null)
+        }
       }
     } catch (e) {
       Alert.alert('Error', 'Failed to pick image: ' + e.message)
+      setUploadingField(null)
     }
   }
 
-  const uploadImageIfLocal = async (uri, type = 'kyc') => {
+  const uploadImageIfLocal = async (uri, type = 'kyc', prefix = 'kyc') => {
     if (!uri || typeof uri !== 'string') return ''
-    if (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('uploads/')) {
+    if (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('uploads/') || uri.startsWith('kyc/')) {
       return uri
     }
     try {
       const formData = createUploadFormData(uri, {
-        prefix: type,
+        prefix: prefix,
         type: type,
       })
 
@@ -115,13 +170,22 @@ const IdentityVerificationScreen = ({ navigation }) => {
       if (res.data?.status === 'success' || res.data?.url || res.data?.path) {
         return res.data.path || res.data.relative_path || res.data.filename || res.data.url
       }
+      if (res.data?.message) {
+        throw new Error(res.data.message)
+      }
     } catch (err) {
-      console.log('Upload error, sending uri as fallback:', err)
+      console.log('Upload error in uploadImageIfLocal:', err)
+      throw err
     }
-    return uri
+    throw new Error('Upload failed without server response')
   }
 
   const handleSubmit = async () => {
+    if (uploadingField) {
+      Alert.alert('Uploading in Progress', 'Please wait until the photo finishes uploading before submitting.')
+      return
+    }
+
     const cleanName = fullName.trim()
     const cleanAadhaar = aadhaarNumber.replace(/\s+/g, '')
 
@@ -135,21 +199,51 @@ const IdentityVerificationScreen = ({ navigation }) => {
       return
     }
 
-    if (!aadhaarFront) {
+    const frontDoc = aadhaarFrontPath || aadhaarFront
+    if (!frontDoc) {
       Alert.alert('Aadhaar Front Required', 'Please upload or capture the Front photo of your Aadhaar card.')
       return
     }
 
-    if (!selfie) {
+    const selfieDoc = selfiePath || selfie
+    if (!selfieDoc) {
       Alert.alert('Live Selfie Required', 'Please capture a clear live selfie photo for facial verification.')
       return
     }
 
     setSubmitting(true)
     try {
-      const uploadedFront  = await uploadImageIfLocal(aadhaarFront, 'kyc')
-      const uploadedBack   = await uploadImageIfLocal(aadhaarBack, 'kyc')
-      const uploadedSelfie = await uploadImageIfLocal(selfie, 'kyc')
+      let uploadedFront = frontDoc
+      if (typeof uploadedFront === 'string' && (uploadedFront.startsWith('file://') || uploadedFront.startsWith('content://'))) {
+        try {
+          uploadedFront = await uploadImageIfLocal(uploadedFront, 'kyc', 'kyc_front')
+        } catch (uErr) {
+          setSubmitting(false)
+          Alert.alert('Upload Error', 'Could not upload Aadhaar front photo: ' + (uErr.message || 'Network error') + '. Please re-select the photo.')
+          return
+        }
+      }
+
+      let uploadedBack = aadhaarBackPath || aadhaarBack || ''
+      if (typeof uploadedBack === 'string' && (uploadedBack.startsWith('file://') || uploadedBack.startsWith('content://'))) {
+        try {
+          uploadedBack = await uploadImageIfLocal(uploadedBack, 'kyc', 'kyc_back')
+        } catch (uErr) {
+          console.log('Optional back image upload skipped:', uErr)
+          uploadedBack = ''
+        }
+      }
+
+      let uploadedSelfie = selfieDoc
+      if (typeof uploadedSelfie === 'string' && (uploadedSelfie.startsWith('file://') || uploadedSelfie.startsWith('content://'))) {
+        try {
+          uploadedSelfie = await uploadImageIfLocal(uploadedSelfie, 'kyc', 'kyc_selfie')
+        } catch (uErr) {
+          setSubmitting(false)
+          Alert.alert('Upload Error', 'Could not upload Selfie photo: ' + (uErr.message || 'Network error') + '. Please re-take the selfie.')
+          return
+        }
+      }
 
       const payload = {
         full_name: cleanName,
@@ -185,7 +279,7 @@ const IdentityVerificationScreen = ({ navigation }) => {
         Alert.alert('Submission Error', res.data?.message || 'Failed to submit verification.')
       }
     } catch (e) {
-      Alert.alert('Error', e.response?.data?.message || 'Network error while submitting KYC.')
+      Alert.alert('Error', e.response?.data?.message || e.message || 'Network error while submitting KYC.')
     } finally {
       setSubmitting(false)
     }
@@ -359,16 +453,28 @@ const IdentityVerificationScreen = ({ navigation }) => {
             {/* 1. Live Selfie / Facial Photo */}
             <View style={styles.docUploadCard}>
               <View style={styles.docHeader}>
-                <View>
+                <View style={{ flex: 1, marginRight: 8 }}>
                   <Text style={styles.docTitle}>1. Live Selfie Photo</Text>
                   <Text style={styles.docSubtitle}>Clear facial photo for passenger profile verification</Text>
                 </View>
-                {selfie && <Text style={styles.attachedBadge}>Attached ✓</Text>}
+                {uploadingField === 'selfie' ? (
+                  <View style={styles.uploadingBadge}>
+                    <ActivityIndicator size="small" color="#D97706" style={{ marginRight: 4 }} />
+                    <Text style={styles.uploadingBadgeText}>Uploading...</Text>
+                  </View>
+                ) : (
+                  (selfie || selfiePath) && <Text style={styles.attachedBadge}>Attached ✓</Text>
+                )}
               </View>
-              {selfie ? (
+              {uploadingField === 'selfie' ? (
+                <View style={styles.uploadingBox}>
+                  <ActivityIndicator size="large" color={COLORS.primary} />
+                  <Text style={styles.uploadingBoxText}>Uploading selfie to server...</Text>
+                </View>
+              ) : selfie ? (
                 <View style={styles.previewWrap}>
-                  <Image source={{ uri: selfie }} style={styles.docPreview} />
-                  <TouchableOpacity style={styles.removeBtn} onPress={() => setSelfie(null)}>
+                  <Image source={{ uri: resolveAssetUrl(selfie) }} style={styles.docPreview} />
+                  <TouchableOpacity style={styles.removeBtn} onPress={() => { setSelfie(null); setSelfiePath(null) }}>
                     <Ionicons name="trash-outline" size={16} color="#EF4444" />
                   </TouchableOpacity>
                 </View>
@@ -389,16 +495,28 @@ const IdentityVerificationScreen = ({ navigation }) => {
             {/* 2. Aadhaar Front */}
             <View style={styles.docUploadCard}>
               <View style={styles.docHeader}>
-                <View>
+                <View style={{ flex: 1, marginRight: 8 }}>
                   <Text style={styles.docTitle}>2. Aadhaar Card (Front Side)</Text>
                   <Text style={styles.docSubtitle}>Showing your photo, name and Aadhaar number</Text>
                 </View>
-                {aadhaarFront && <Text style={styles.attachedBadge}>Attached ✓</Text>}
+                {uploadingField === 'front' ? (
+                  <View style={styles.uploadingBadge}>
+                    <ActivityIndicator size="small" color="#D97706" style={{ marginRight: 4 }} />
+                    <Text style={styles.uploadingBadgeText}>Uploading...</Text>
+                  </View>
+                ) : (
+                  (aadhaarFront || aadhaarFrontPath) && <Text style={styles.attachedBadge}>Attached ✓</Text>
+                )}
               </View>
-              {aadhaarFront ? (
+              {uploadingField === 'front' ? (
+                <View style={styles.uploadingBox}>
+                  <ActivityIndicator size="large" color={COLORS.primary} />
+                  <Text style={styles.uploadingBoxText}>Uploading front image to server...</Text>
+                </View>
+              ) : aadhaarFront ? (
                 <View style={styles.previewWrap}>
-                  <Image source={{ uri: aadhaarFront }} style={styles.docPreview} />
-                  <TouchableOpacity style={styles.removeBtn} onPress={() => setAadhaarFront(null)}>
+                  <Image source={{ uri: resolveAssetUrl(aadhaarFront) }} style={styles.docPreview} />
+                  <TouchableOpacity style={styles.removeBtn} onPress={() => { setAadhaarFront(null); setAadhaarFrontPath(null) }}>
                     <Ionicons name="trash-outline" size={16} color="#EF4444" />
                   </TouchableOpacity>
                 </View>
@@ -419,16 +537,28 @@ const IdentityVerificationScreen = ({ navigation }) => {
             {/* 3. Aadhaar Back */}
             <View style={styles.docUploadCard}>
               <View style={styles.docHeader}>
-                <View>
+                <View style={{ flex: 1, marginRight: 8 }}>
                   <Text style={styles.docTitle}>3. Aadhaar Card (Back Side)</Text>
                   <Text style={styles.docSubtitle}>Showing address & barcode</Text>
                 </View>
-                {aadhaarBack && <Text style={styles.attachedBadge}>Attached ✓</Text>}
+                {uploadingField === 'back' ? (
+                  <View style={styles.uploadingBadge}>
+                    <ActivityIndicator size="small" color="#D97706" style={{ marginRight: 4 }} />
+                    <Text style={styles.uploadingBadgeText}>Uploading...</Text>
+                  </View>
+                ) : (
+                  (aadhaarBack || aadhaarBackPath) && <Text style={styles.attachedBadge}>Attached ✓</Text>
+                )}
               </View>
-              {aadhaarBack ? (
+              {uploadingField === 'back' ? (
+                <View style={styles.uploadingBox}>
+                  <ActivityIndicator size="large" color={COLORS.primary} />
+                  <Text style={styles.uploadingBoxText}>Uploading back image to server...</Text>
+                </View>
+              ) : aadhaarBack ? (
                 <View style={styles.previewWrap}>
-                  <Image source={{ uri: aadhaarBack }} style={styles.docPreview} />
-                  <TouchableOpacity style={styles.removeBtn} onPress={() => setAadhaarBack(null)}>
+                  <Image source={{ uri: resolveAssetUrl(aadhaarBack) }} style={styles.docPreview} />
+                  <TouchableOpacity style={styles.removeBtn} onPress={() => { setAadhaarBack(null); setAadhaarBackPath(null) }}>
                     <Ionicons name="trash-outline" size={16} color="#EF4444" />
                   </TouchableOpacity>
                 </View>
@@ -448,9 +578,9 @@ const IdentityVerificationScreen = ({ navigation }) => {
 
             {/* Submit Button */}
             <TouchableOpacity
-              style={[styles.submitBtn, submitting && styles.submitBtnDisabled]}
+              style={[styles.submitBtn, (submitting || !!uploadingField) && styles.submitBtnDisabled]}
               onPress={handleSubmit}
-              disabled={submitting}
+              disabled={submitting || !!uploadingField}
               activeOpacity={0.8}
             >
               {submitting ? (
@@ -789,6 +919,35 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '800',
+  },
+  uploadingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  uploadingBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#B45309',
+  },
+  uploadingBox: {
+    height: 120,
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#CBD5E1',
+  },
+  uploadingBoxText: {
+    marginTop: 8,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
   },
 })
 

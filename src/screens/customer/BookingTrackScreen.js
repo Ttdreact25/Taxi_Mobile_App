@@ -530,7 +530,19 @@ export default function BookingTrackScreen({ route, navigation }) {
   const vehicleColor = driver?.vehicle_color || booking?.vehicle_color || ''
   const plateNo = driver?.plate_no || booking?.plate_no || ''
   const otpCode = booking?.driver_otp || booking?.otp || ''
-  const fareAmount = Math.round(parseFloat(booking?.final_fare || booking?.fare || booking?.fare_estimate || booking?.original_fare || 0))
+  let calculatedFare = Math.round(parseFloat(booking?.final_fare || booking?.fare || booking?.fare_estimate || booking?.original_fare || booking?.estimated_fare || 0))
+  if (calculatedFare <= 0) {
+    const dKm = parseFloat(booking?.distance_km || booking?.original_distance_km || trackingData?.booking?.distance_km || 0)
+    const pKm = parseFloat(booking?.per_km_rate || 15)
+    const bFare = parseFloat(booking?.base_fare || 30)
+    const mFare = parseFloat(booking?.minimum_fare || 50)
+    const routeFare = Math.max(mFare, Math.round(bFare + (dKm * pKm)))
+    const waitCharge = Math.round(parseFloat(booking?.waiting_charge || 0))
+    const tollAmt = Math.round(parseFloat(booking?.toll_amount || 0))
+    const disc = Math.round(parseFloat(booking?.discount_amount || 0))
+    calculatedFare = Math.max(mFare, routeFare + waitCharge + tollAmt - disc)
+  }
+  const fareAmount = calculatedFare
   const tripDistanceKm = parseFloat(booking?.distance_km || trackingData?.booking?.distance_km || 0)
   const tripDurationMins = parseInt(booking?.duration_min || booking?.duration_minutes || trackingData?.booking?.duration_min || Math.round(tripDistanceKm * 2.4) || 0)
 

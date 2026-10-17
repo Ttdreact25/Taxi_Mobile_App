@@ -14,6 +14,7 @@ import DriverDocumentsScreen from '../screens/driver/DriverDocumentsScreen'
 import DriverSupportScreen   from '../screens/driver/DriverSupportScreen'
 import DriverNotifScreen     from '../screens/driver/DriverNotifScreen'
 import DriverPaymentScreen   from '../screens/driver/DriverPaymentScreen'
+import DriverReviewsScreen   from '../screens/driver/DriverReviewsScreen'
 import PrivacyPolicyScreen  from '../screens/customer/PrivacyPolicyScreen'
 import TermsScreen          from '../screens/customer/TermsScreen'
 
@@ -28,6 +29,7 @@ const DashboardStack = () => (
     <Stack.Screen name="DriverSupport"       component={DriverSupportScreen} />
     <Stack.Screen name="DriverDocuments"     component={DriverDocumentsScreen} />
     <Stack.Screen name="DriverTrips"         component={DriverTripsScreen} />
+    <Stack.Screen name="DriverReviews"       component={DriverReviewsScreen} />
     <Stack.Screen name="PrivacyPolicy"       component={PrivacyPolicyScreen} />
     <Stack.Screen name="Terms"               component={TermsScreen} />
   </Stack.Navigator>
@@ -61,6 +63,7 @@ const ProfileStack = () => (
     <Stack.Screen name="DriverDocuments"     component={DriverDocumentsScreen} />
     <Stack.Screen name="DriverNotifications" component={DriverNotifScreen} />
     <Stack.Screen name="DriverSupport"       component={DriverSupportScreen} />
+    <Stack.Screen name="DriverReviews"       component={DriverReviewsScreen} />
     <Stack.Screen name="Earnings"            component={EarningsScreen} />
     <Stack.Screen name="PrivacyPolicy"       component={PrivacyPolicyScreen} />
     <Stack.Screen name="Terms"               component={TermsScreen} />

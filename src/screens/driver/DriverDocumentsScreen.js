@@ -725,9 +725,17 @@ const DriverDocumentsScreen = ({ navigation }) => {
     profile?.profile_selfie || profile?.profile_selfie_url
   )
 
+  const isExplicitlyApproved = Boolean(
+    (profile?.approval_status || '').toLowerCase() === 'approved' ||
+    (profile?.approval_status || '').toLowerCase() === 'verified' ||
+    (profile?.verification_status || '').toLowerCase() === 'approved' ||
+    (profile?.verification_status || '').toLowerCase() === 'verified' ||
+    (profile?.kyc_status || '').toLowerCase() === 'approved' ||
+    (profile?.kyc_status || '').toLowerCase() === 'verified'
+  )
+
   const isApproved = Boolean(
-    (profile?.verification_status === 'approved' || profile?.verification_status === 'verified') &&
-    hasUploadedDocs &&
+    isExplicitlyApproved &&
     !isReuploading
   )
 

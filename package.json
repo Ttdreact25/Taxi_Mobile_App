@@ -20,6 +20,8 @@
     "@react-navigation/native-stack": "^6.9.26",
     "axios": "^1.6.7",
     "expo": "~57.0.27",
+    "expo-asset": "~57.0.20",
+    "expo-audio": "~57.0.5",
     "expo-constants": "~57.0.21",
     "expo-font": "~57.0.4",
     "expo-image-picker": "~57.0.20",

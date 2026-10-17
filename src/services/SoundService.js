@@ -1,29 +1,78 @@
-import { Platform, Vibration, NativeModules } from 'react-native'
+import { Platform, Vibration } from 'react-native'
+import PushNotificationService from './PushNotificationService'
 
-let AudioModule = null
+let ExpoAudio = null
+try {
+  ExpoAudio = require('expo-audio')
+} catch (e1) {
+  try {
+    ExpoAudio = require('expo-av')
+  } catch (e2) {}
+}
 
-let activeSoundObject = null
+let ExpoSpeech = null
+try {
+  ExpoSpeech = require('expo-speech')
+} catch (e3) {}
+
+let activePlayer = null
+let isAudioConfigured = false
 
 /**
- * Configure audio mode for Expo / React Native
+ * Configure system audio mode so alert sounds play at maximum volume even if phone is on silent
  */
 const initAudioMode = async () => {
-  if (AudioModule && Platform.OS !== 'web') {
+  if (isAudioConfigured) return
+  if (Platform.OS === 'web') return
+
+  if (ExpoAudio?.setAudioModeAsync) {
     try {
-      await AudioModule.setAudioModeAsync({
+      await ExpoAudio.setAudioModeAsync({
+        playsInSilentMode: true,
+        shouldPlayInBackground: true,
+        interruptionMode: 'duckOthers',
+      })
+      isAudioConfigured = true
+      return
+    } catch (e) {}
+  }
+
+  if (ExpoAudio?.Audio?.setAudioModeAsync) {
+    try {
+      await ExpoAudio.Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
-        staysActiveInBackground: false,
+        staysActiveInBackground: true,
       })
-    } catch (e) {
-      // Ignore mode config errors
-    }
+      isAudioConfigured = true
+    } catch (e) {}
   }
 }
 
 initAudioMode().catch(() => {})
+
+/**
+ * High-Volume Voice Speech Alert
+ */
+export const speakVoiceAlert = (text, options = {}) => {
+  if (!text) return
+  try {
+    if (ExpoSpeech?.speak) {
+      ExpoSpeech.stop?.()
+      ExpoSpeech.speak(text, {
+        language: options.language || 'en-IN',
+        pitch: options.pitch || 1.05,
+        rate: options.rate || 0.95,
+        volume: 1.0,
+        ...options,
+      })
+    }
+  } catch (e) {
+    console.warn('[SoundService] Speech error:', e?.message)
+  }
+}
 
 /**
  * Fallback Web Audio API synthesizer for web or simulator
@@ -40,20 +89,20 @@ const playWebAudioTone = (pattern = 'driver') => {
     const now = ctx.currentTime
 
     if (pattern === 'driver') {
-      // 3 urgent alert beeps (880Hz, 1175Hz, 1320Hz)
+      // 5 urgent loud alert beeps
       const tones = [
-        { f: 880, start: 0.0, dur: 0.18 },
-        { f: 1175, start: 0.22, dur: 0.18 },
-        { f: 1320, start: 0.44, dur: 0.25 },
-        { f: 1175, start: 0.72, dur: 0.18 },
-        { f: 1320, start: 0.94, dur: 0.30 },
+        { f: 880, start: 0.0, dur: 0.20 },
+        { f: 1175, start: 0.22, dur: 0.20 },
+        { f: 1320, start: 0.44, dur: 0.28 },
+        { f: 1175, start: 0.74, dur: 0.20 },
+        { f: 1320, start: 0.96, dur: 0.35 },
       ]
       tones.forEach(t => {
         const osc = ctx.createOscillator()
         const gain = ctx.createGain()
         osc.type = 'triangle'
         osc.frequency.setValueAtTime(t.f, now + t.start)
-        gain.gain.setValueAtTime(0.4, now + t.start)
+        gain.gain.setValueAtTime(1.0, now + t.start)
         gain.gain.exponentialRampToValueAtTime(0.001, now + t.start + t.dur)
         osc.connect(gain)
         gain.connect(ctx.destination)
@@ -61,18 +110,17 @@ const playWebAudioTone = (pattern = 'driver') => {
         osc.stop(now + t.start + t.dur)
       })
     } else {
-      // Pleasant chime (523Hz -> 659Hz -> 784Hz)
       const tones = [
-        { f: 523.25, start: 0.0, dur: 0.3 },
-        { f: 659.25, start: 0.15, dur: 0.35 },
-        { f: 783.99, start: 0.35, dur: 0.5 },
+        { f: 523.25, start: 0.0, dur: 0.35 },
+        { f: 659.25, start: 0.18, dur: 0.38 },
+        { f: 783.99, start: 0.38, dur: 0.60 },
       ]
       tones.forEach(t => {
         const osc = ctx.createOscillator()
         const gain = ctx.createGain()
         osc.type = 'sine'
         osc.frequency.setValueAtTime(t.f, now + t.start)
-        gain.gain.setValueAtTime(0.35, now + t.start)
+        gain.gain.setValueAtTime(0.9, now + t.start)
         gain.gain.exponentialRampToValueAtTime(0.001, now + t.start + t.dur)
         osc.connect(gain)
         gain.connect(ctx.destination)
@@ -81,7 +129,7 @@ const playWebAudioTone = (pattern = 'driver') => {
       })
     }
   } catch (e) {
-    console.warn('Web Audio fallback error:', e)
+    console.warn('Web Audio error:', e)
   }
 }
 
@@ -89,46 +137,101 @@ const playWebAudioTone = (pattern = 'driver') => {
  * Play urgent Driver Ride Alert Sound (Assign & Dispatch Alert)
  */
 export const playDriverAlertSound = async () => {
-  // Always trigger haptic vibration
+  // Always trigger strong haptic vibration pattern
   try {
-    Vibration.vibrate([0, 600, 200, 600, 200, 600])
+    Vibration.vibrate([0, 800, 200, 800, 200, 800, 200, 800])
   } catch (e) {}
 
-  // If in web browser, use Web Audio API directly
-  if (Platform.OS === 'web') {
-    playWebAudioTone('driver')
-    return
-  }
+  await initAudioMode()
 
-  // Native iOS / Android via expo-av
-  if (AudioModule) {
+  // 1. Modern expo-audio (SDK 52+)
+  if (ExpoAudio?.createAudioPlayer) {
     try {
-      if (activeSoundObject) {
+      if (activePlayer) {
         try {
-          await activeSoundObject.stopAsync()
-          await activeSoundObject.unloadAsync()
-        } catch (e) {}
-        activeSoundObject = null
+          activePlayer.pause?.()
+          activePlayer.remove?.()
+        } catch {}
+        activePlayer = null
       }
 
-      const { sound } = await AudioModule.Sound.createAsync(
-        require('../../assets/sounds/driver_alert.wav'),
-        { shouldPlay: true, volume: 1.0, isLooping: false }
-      )
-      activeSoundObject = sound
+      const player = ExpoAudio.createAudioPlayer(require('../../assets/sounds/driver_alert.wav'))
+      activePlayer = player
+      player.volume = 1.0
+      player.play()
 
+      try {
+        player.addListener?.('playbackStatusUpdate', (status) => {
+          if (status?.didJustFinish) {
+            try { player.remove?.() } catch {}
+            if (activePlayer === player) activePlayer = null
+          }
+        })
+      } catch {}
+      return
+    } catch (e) {
+      console.warn('[SoundService] expo-audio failed, falling back:', e?.message)
+    }
+  }
+
+  // 2. Legacy expo-av fallback
+  if (ExpoAudio?.Audio?.Sound?.createAsync) {
+    try {
+      if (activePlayer) {
+        try {
+          await activePlayer.stopAsync?.()
+          await activePlayer.unloadAsync?.()
+        } catch {}
+        activePlayer = null
+      }
+
+      const { sound } = await ExpoAudio.Audio.Sound.createAsync(
+        require('../../assets/sounds/driver_alert.wav'),
+        { shouldPlay: true, volume: 1.0 }
+      )
+      activePlayer = sound
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status.didJustFinish) {
           sound.unloadAsync().catch(() => {})
-          if (activeSoundObject === sound) activeSoundObject = null
+          if (activePlayer === sound) activePlayer = null
         }
       })
+      return
     } catch (e) {
-      console.warn('Could not play native sound via expo-av, fallback to vibration:', e?.message)
-      playWebAudioTone('driver')
+      console.warn('[SoundService] expo-av failed:', e?.message)
     }
-  } else {
+  }
+
+  // 3. Web Audio fallback
+  if (Platform.OS === 'web') {
     playWebAudioTone('driver')
+  }
+}
+
+/**
+ * High-Volume Driver Alert for New Bookings: Urgent Alarm + Loud Voice Announcement
+ * Says: "Booking Received! New ride assigned."
+ */
+export const playDriverBookingReceived = async (bookingRef = '') => {
+  try {
+    // 1. Multi-burst vibration
+    Vibration.vibrate([0, 800, 250, 800, 250, 800, 250, 800])
+
+    // 2. Play maximum volume alarm sound
+    await playDriverAlertSound()
+
+    // 3. Loud Voice Announcement: "Booking received! New ride assigned."
+    setTimeout(() => {
+      speakVoiceAlert('Booking received! Booking received! New ride assigned.')
+    }, 450)
+
+    // 4. Also trigger immediate local notification banner
+    PushNotificationService.showLocalBookingAlertNotification(
+      '🚗 New Booking Received!',
+      `Booking received ${bookingRef ? '#' + bookingRef : ''}. Tap to view and accept.`
+    )
+  } catch (e) {
+    console.warn('[SoundService] playDriverBookingReceived error:', e)
   }
 }
 
@@ -137,30 +240,67 @@ export const playDriverAlertSound = async () => {
  */
 export const playBookingNotificationSound = async () => {
   try {
-    Vibration.vibrate([0, 300, 150, 300])
+    Vibration.vibrate([0, 500, 200, 500])
   } catch (e) {}
 
-  if (Platform.OS === 'web') {
-    playWebAudioTone('booking')
-    return
+  await initAudioMode()
+
+  if (ExpoAudio?.createAudioPlayer) {
+    try {
+      const player = ExpoAudio.createAudioPlayer(require('../../assets/sounds/admin_booking.wav'))
+      player.volume = 1.0
+      player.play()
+      return
+    } catch (e) {}
   }
 
-  if (AudioModule) {
+  if (ExpoAudio?.Audio?.Sound?.createAsync) {
     try {
-      const { sound } = await AudioModule.Sound.createAsync(
+      const { sound } = await ExpoAudio.Audio.Sound.createAsync(
         require('../../assets/sounds/admin_booking.wav'),
-        { shouldPlay: true, volume: 0.9, isLooping: false }
+        { shouldPlay: true, volume: 1.0, isLooping: false }
       )
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status.didJustFinish) {
           sound.unloadAsync().catch(() => {})
         }
       })
-    } catch (e) {
-      playWebAudioTone('booking')
-    }
-  } else {
+      return
+    } catch (e) {}
+  }
+
+  if (Platform.OS === 'web') {
     playWebAudioTone('booking')
+  }
+}
+
+/**
+ * Customer Alert: Plays loud arrival chime + Loud Voice Announcement: "Taxi reached!"
+ * Also triggers OS-level heads-up notification
+ */
+export const playCustomerTaxiReachedAlert = async (driverName = '', vehicleDesc = '') => {
+  try {
+    // 1. Double vibration burst
+    Vibration.vibrate([0, 600, 200, 600, 200, 600])
+
+    // 2. Play arrival chime
+    await playBookingNotificationSound()
+
+    // 3. Loud Voice Announcement: "Taxi reached! Your driver has arrived at the pickup location."
+    setTimeout(() => {
+      const announcement = driverName
+        ? `Taxi reached! Driver ${driverName} has arrived at your pickup location.`
+        : 'Taxi reached! Your driver has arrived at the pickup location.'
+      speakVoiceAlert(announcement)
+    }, 400)
+
+    // 4. Trigger OS-level notification
+    PushNotificationService.showLocalArrivalNotification(
+      '🚖 Taxi Reached! Your Driver Has Arrived',
+      driverName ? `Driver ${driverName} ${vehicleDesc ? `(${vehicleDesc})` : ''} has reached your pickup point.` : 'Your taxi has reached your pickup location. Please board the cab.'
+    )
+  } catch (e) {
+    console.warn('[SoundService] playCustomerTaxiReachedAlert error:', e)
   }
 }
 
@@ -168,17 +308,25 @@ export const playBookingNotificationSound = async () => {
  * Stop any active playing sound
  */
 export const stopActiveSound = async () => {
-  if (activeSoundObject) {
+  if (activePlayer) {
     try {
-      await activeSoundObject.stopAsync()
-      await activeSoundObject.unloadAsync()
+      activePlayer.pause?.()
+      activePlayer.remove?.()
+      activePlayer.stopAsync?.()
+      activePlayer.unloadAsync?.()
     } catch (e) {}
-    activeSoundObject = null
+    activePlayer = null
   }
+  try {
+    ExpoSpeech?.stop?.()
+  } catch {}
 }
 
 export default {
   playDriverAlertSound,
+  playDriverBookingReceived,
   playBookingNotificationSound,
+  playCustomerTaxiReachedAlert,
+  speakVoiceAlert,
   stopActiveSound,
 }

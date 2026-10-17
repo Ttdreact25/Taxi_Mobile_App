@@ -25,7 +25,7 @@ const RegisterScreen = ({ navigation }) => {
   const [focusedField, setFocusedField] = useState(null)
   const [cities, setCities] = useState([])
   const [selectedCity, setSelectedCity] = useState(null)
-  const [selectedServices, setSelectedServices] = useState(['local', 'outstation', 'hourly'])
+  const [selectedServices, setSelectedServices] = useState(['local_drop', 'hourly_package', 'outstation_oneway', 'outstation_round'])
 
   const toggleService = (key) => {
     setSelectedServices(prev => {
@@ -397,7 +397,7 @@ const RegisterScreen = ({ navigation }) => {
                   <View style={styles.serviceListWrapper}>
                     {[
                       {
-                        key: 'local',
+                        key: 'local_drop',
                         title: 'Local Drop',
                         subtitle: 'Point-to-point one-way city rides',
                         icon: 'car-outline',
@@ -406,22 +406,31 @@ const RegisterScreen = ({ navigation }) => {
                         bgLight: '#EEF2FF',
                       },
                       {
-                        key: 'outstation',
-                        title: 'Out Station',
-                        subtitle: 'Inter-city round trips & one-way drops',
-                        icon: 'navigate-outline',
-                        badge: 'Long Trip',
-                        color: '#059669',
-                        bgLight: '#ECFDF5',
-                      },
-                      {
-                        key: 'hourly',
+                        key: 'hourly_package',
                         title: 'Hourly Package',
-                        subtitle: 'Rentals by the hour (1h, 2h, 4h, 8h...)',
+                        subtitle: 'Multi-hour city rentals (1h, 2h, 4h, 8h...)',
                         icon: 'time-outline',
                         badge: 'Rental',
                         color: '#D97706',
                         bgLight: '#FFFBEB',
+                      },
+                      {
+                        key: 'outstation_oneway',
+                        title: 'One Way Trip',
+                        subtitle: 'Single destination inter-city drop',
+                        icon: 'arrow-forward-outline',
+                        badge: 'Outstation Drop',
+                        color: '#059669',
+                        bgLight: '#ECFDF5',
+                      },
+                      {
+                        key: 'outstation_round',
+                        title: 'Round Trip',
+                        subtitle: 'Inter-city round trips & return journeys',
+                        icon: 'repeat-outline',
+                        badge: 'Round Trip',
+                        color: '#0284C7',
+                        bgLight: '#F0F9FF',
                       },
                     ].map(svc => {
                       const isSelected = selectedServices.includes(svc.key)

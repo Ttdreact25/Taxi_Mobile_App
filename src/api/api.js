@@ -213,7 +213,24 @@ export const driverAPI = {
   pendingRides:   () => api.get('/?endpoint=driver&action=pending_rides'),
   dismissCancelledTrip: (tripId) => api.post('/?endpoint=driver&action=dismiss_cancellation', { trip_id: tripId }),
   respondLongTrip:(id, action, reason) => api.post('/?endpoint=long_trips&action=respond_long_trip', { id, action, reason }),
-  updateProfile:  (data) => api.post('/?endpoint=driver&action=update_profile', data),
+  updateProfile: async (data) => {
+    // 1. Primary: PUT /?endpoint=driver&action=update (standard Hostinger driver update route)
+    try {
+      const res = await api.put('/?endpoint=driver&action=update', data)
+      if (res.data?.status === 'success' || res.data?.status === true) return res
+    } catch (err) {
+      // If 400 or 404, fallback to alternative routes
+      if (err.response?.status === 400 || err.response?.status === 404) {
+        try {
+          return await api.post('/?endpoint=driver&action=update_profile', data)
+        } catch {
+          return await api.post('/?endpoint=auth&action=update_profile', data)
+        }
+      }
+      throw err
+    }
+    return api.put('/?endpoint=driver&action=update', data)
+  },
   getDocuments: async () => {
     try {
       const res = await api.get('/?endpoint=driver&action=get_documents')
@@ -593,6 +610,19 @@ export const uploadAPI = {
     }
   },
   removeAvatar: () => api.post('/?endpoint=upload&action=remove_avatar'),
+}
+
+export const getInvoiceUrl = async (bookingId, autoPrint = true, bookingRef = null) => {
+  try {
+    const token = await SecureStore.getItemAsync(TOKEN_KEY)
+    const base = API_BASE_URL.replace(/\/+$/, '')
+    const refParam = bookingRef ? `&ref=${encodeURIComponent(bookingRef)}` : ''
+    return `${base}/?endpoint=payments&action=download_invoice&id=${bookingId || 0}${refParam}&token=${encodeURIComponent(token || '')}${autoPrint ? '&print=1' : ''}`
+  } catch {
+    const base = API_BASE_URL.replace(/\/+$/, '')
+    const refParam = bookingRef ? `&ref=${encodeURIComponent(bookingRef)}` : ''
+    return `${base}/?endpoint=payments&action=download_invoice&id=${bookingId || 0}${refParam}${autoPrint ? '&print=1' : ''}`
+  }
 }
 
 export default api
