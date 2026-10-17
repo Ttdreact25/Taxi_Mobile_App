@@ -19,11 +19,12 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import MapView, { Marker, Polyline, Circle, PROVIDER_GOOGLE, UrlTile } from 'react-native-maps'
-import { bookingsAPI, reviewsAPI, resolveAssetUrl } from '../../api/api'
+import { bookingsAPI, reviewsAPI, resolveAssetUrl, getInvoiceUrl } from '../../api/api'
 import { fetchRouteDirections, calculateDistanceKm, calculateBearing } from '../../services/directionService'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import ModernBottomSheet from '../../components/common/ModernBottomSheet'
 import UniversalRouteMap from '../../components/common/UniversalRouteMap'
+import { playCustomerTaxiReachedAlert } from '../../services/SoundService'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
 
@@ -45,6 +46,107 @@ const formatDurationHours = (mins) => {
   return `${m} mins`
 }
 
+const CustomerWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate = 2, categoryName = 'Cab' }) => {
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const parseMs = (dt) => {
+    if (!dt) return Date.now()
+    if (typeof dt === 'number') return dt
+    const s = String(dt).trim().replace(' ', 'T')
+    const t = new Date(s).getTime()
+    return isNaN(t) ? Date.now() : t
+  }
+
+  const arrivedMs = parseMs(arrivedAt)
+  const elapsedSec = Math.max(0, Math.floor((now - arrivedMs) / 1000))
+  const freeWaitSec = (Number(freeWaitingMins) || 5) * 60
+  const isFree = elapsedSec < freeWaitSec
+
+  const formatMMSS = (sec) => {
+    const m = Math.floor(sec / 60)
+    const s = sec % 60
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  }
+
+  if (isFree) {
+    const remainingSec = freeWaitSec - elapsedSec
+    return (
+      <View style={{
+        backgroundColor: '#F0FDF4',
+        borderRadius: 12,
+        padding: 10,
+        borderWidth: 1,
+        borderColor: '#BBF7D0',
+        marginBottom: 10,
+      }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+            <Ionicons name="hourglass-outline" size={16} color="#059669" />
+            <Text style={{ fontSize: 12, fontWeight: '800', color: '#065F46', marginLeft: 6 }}>
+              Free Waiting ({freeWaitingMins} mins limit)
+            </Text>
+          </View>
+          <View style={{
+            backgroundColor: '#059669',
+            paddingHorizontal: 8,
+            paddingVertical: 3,
+            borderRadius: 6,
+          }}>
+            <Text style={{ fontSize: 13, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.5 }}>
+              {formatMMSS(remainingSec)}
+            </Text>
+          </View>
+        </View>
+        <Text style={{ fontSize: 11, color: '#047857', marginTop: 4 }}>
+          ℹ️ Driver has arrived. Extra waiting beyond {freeWaitingMins} mins is charged at ₹{waitingRate}/min as per {categoryName} policy.
+        </Text>
+      </View>
+    )
+  }
+
+  const extraSec = elapsedSec - freeWaitSec
+  const extraMins = Math.max(1, Math.ceil(extraSec / 60))
+  const accruedCharge = Math.round(extraMins * (Number(waitingRate) || 2))
+
+  return (
+    <View style={{
+      backgroundColor: '#FEF2F2',
+      borderRadius: 12,
+      padding: 10,
+      borderWidth: 1,
+      borderColor: '#FECACA',
+      marginBottom: 10,
+    }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+          <Ionicons name="alert-circle" size={16} color="#DC2626" />
+          <Text style={{ fontSize: 12, fontWeight: '800', color: '#991B1B', marginLeft: 6 }}>
+            Free Waiting Exceeded (+{extraMins} mins)
+          </Text>
+        </View>
+        <View style={{
+          backgroundColor: '#DC2626',
+          paddingHorizontal: 8,
+          paddingVertical: 3,
+          borderRadius: 6,
+        }}>
+          <Text style={{ fontSize: 13, fontWeight: '900', color: '#FFFFFF' }}>
+            +₹{accruedCharge}
+          </Text>
+        </View>
+      </View>
+      <Text style={{ fontSize: 11, color: '#991B1B', marginTop: 4, fontWeight: '600' }}>
+        Extra waiting fee of ₹{waitingRate}/min (+₹{accruedCharge}) is being added to your trip invoice.
+      </Text>
+    </View>
+  )
+}
+
 export default function BookingTrackScreen({ route, navigation }) {
   const insets = useSafeAreaInsets()
   const { bookingId } = route.params || {}
@@ -62,6 +164,7 @@ export default function BookingTrackScreen({ route, navigation }) {
   const [routeDurationMins, setRouteDurationMins] = useState(0)
   const [driverSpeed, setDriverSpeed] = useState(42) // km/h live or simulated speed
   const [nextTurnInstruction, setNextTurnInstruction] = useState('Continue straight onto main road')
+  const [bookingWaypoints, setBookingWaypoints] = useState([])
 
   // UI Modals
   const [showRatingModal, setShowRatingModal] = useState(false)
@@ -73,8 +176,10 @@ export default function BookingTrackScreen({ route, navigation }) {
   const [customCancelText, setCustomCancelText] = useState('')
   const [cancelling, setCancelling] = useState(false)
   const isCancelledAlertShownRef = useRef(false)
+  const hasAlertedArrivalRef = useRef(false)
   const [acceptingPickup, setAcceptingPickup] = useState(false)
   const [pickupChargeDismissed, setPickupChargeDismissed] = useState(false)
+  const [showDriverProfileModal, setShowDriverProfileModal] = useState(false)
 
   // Safe navigation back to Customer Home screen
   const returnToCustomerHome = useCallback(() => {
@@ -170,27 +275,39 @@ export default function BookingTrackScreen({ route, navigation }) {
   const driver = trackingData?.driver || null
   const assignedDriverId = booking?.driver_id || driver?.id || trackingData?.booking?.driver_id || null
 
-  const isAssignedStatus = [
-    'driver_assigned', 'driver_accepted', 'accepted', 'driver_arrived',
-    'driver_reached', 'pickup_reached', 'trip_started', 'in_progress', 'trip_in_progress',
-    'return_pickup', 'return_started', 'return_in_progress'
+  // STRICT REQUIREMENT: Driver details/profile are ONLY revealed to customer once driver actually ACCEPTS!
+  const isDriverAccepted = [
+    'driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way',
+    'driver_arrived', 'driver_reached', 'pickup_reached', 'otp_verified',
+    'trip_started', 'in_progress', 'trip_in_progress',
+    'return_pickup', 'return_started', 'return_in_progress', 'completed'
   ].includes(status)
 
   const hasAssignedDriver = Boolean(
-    (assignedDriverId && Number(assignedDriverId) > 0) ||
+    ((assignedDriverId && Number(assignedDriverId) > 0) ||
     Boolean(driver?.name) ||
-    Boolean(booking?.driver_name) ||
-    isAssignedStatus
+    Boolean(booking?.driver_name)) &&
+    isDriverAccepted
   )
 
   const isDriverAssigned = Boolean(
     hasAssignedDriver &&
+    isDriverAccepted &&
     status !== 'searching' &&
     status !== 'pending' &&
     status !== 'pending_driver_assignment' &&
+    status !== 'driver_assigned' &&
     status !== 'cancelled'
   )
   const isDriverArrived = ['driver_arrived', 'driver_reached', 'pickup_reached'].includes(status)
+
+  // Taxi Arrival Voice & Sound Alert
+  useEffect(() => {
+    if (isDriverArrived && !hasAlertedArrivalRef.current) {
+      hasAlertedArrivalRef.current = true
+      playCustomerTaxiReachedAlert(driverName, plateNo || vehicleModel).catch(() => {})
+    }
+  }, [isDriverArrived, driverName, plateNo, vehicleModel])
 
   const isRoundTrip = Boolean(
     Number(booking?.is_round_trip) === 1 ||
@@ -216,6 +333,11 @@ export default function BookingTrackScreen({ route, navigation }) {
   const isOnwardTripStarted = ['trip_started', 'in_progress', 'trip_in_progress'].includes(status)
   const isInTripNavigation = isOnwardTripStarted || isReturnStarted
   const isCompleted = ['completed', 'trip_completed'].includes(status)
+  const isDriverStartedHeading = Boolean(
+    ['on_the_way', 'waiting_pickup', 'driver_arrived', 'arrived', 'driver_reached', 'pickup_reached', 'trip_started', 'in_progress', 'trip_in_progress'].includes(status) ||
+    Boolean(booking?.heading_started)
+  )
+  const canCustomerCancel = !isDriverStartedHeading && !isInTripNavigation && !isCompleted
 
   // Driver Coordinates
   const hasRealDriverCoord = Boolean(
@@ -244,7 +366,7 @@ export default function BookingTrackScreen({ route, navigation }) {
   // Step Tracker configuration
   const stepItems = !isDriverAssigned
     ? [
-        { id: 1, label: 'Searching' },
+        { id: 1, label: status === 'driver_assigned' ? 'Connecting' : 'Searching' },
         { id: 2, label: 'Assigned' },
         { id: 3, label: 'Arriving' },
         { id: 4, label: 'Trip Started' },
@@ -265,14 +387,14 @@ export default function BookingTrackScreen({ route, navigation }) {
 
   let stepIndex = 1
   if (!isDriverAssigned) {
-    stepIndex = 1 // Step 1 Searching is active
+    stepIndex = 1 // Step 1 Searching/Connecting is active
   } else if (isRoundTrip && (isReturnPickup || isReturnStarted)) {
     if (isReturnPickup) stepIndex = 2
     if (isReturnStarted) stepIndex = 3
     if (isCompleted) stepIndex = 4
   } else {
     stepIndex = 1
-    if (['driver_assigned', 'driver_accepted', 'accepted'].includes(status)) stepIndex = 1
+    if (['driver_accepted', 'accepted'].includes(status)) stepIndex = 1
     if (status === 'on_the_way' || (isDriverAssigned && !isDriverArrived && !isInTripNavigation)) stepIndex = 2
     if (isDriverArrived) stepIndex = 3
     if (isInTripNavigation) stepIndex = 4
@@ -287,6 +409,17 @@ export default function BookingTrackScreen({ route, navigation }) {
     (async () => {
       let start = originCoord
       let end = destCoord
+      let waypoints = []
+
+      // Extract uncompleted waypoints from booking.stops
+      let rawStops = []
+      try {
+        rawStops = booking?.stops ? (typeof booking.stops === 'string' ? JSON.parse(booking.stops) : booking.stops) : []
+        if (!Array.isArray(rawStops)) rawStops = []
+      } catch {
+        rawStops = []
+      }
+      const uncompletedStops = rawStops.filter(s => !s.completed)
 
       if (isDriverAssigned) {
         if (isRoundTrip && isReturnStarted) {
@@ -298,16 +431,21 @@ export default function BookingTrackScreen({ route, navigation }) {
         } else if (isInTripNavigation) {
           start = hasRealDriverCoord ? driverCoord : originCoord
           end = destCoord
+          waypoints = uncompletedStops
         } else {
           // Driver approaching customer pickup
           start = hasRealDriverCoord ? driverCoord : originCoord
           end = originCoord
         }
+      } else {
+        // Preview before driver assignment
+        waypoints = uncompletedStops
       }
+      setBookingWaypoints(waypoints)
 
       if (start?.latitude && end?.latitude) {
         try {
-          const res = await fetchRouteDirections(start, end)
+          const res = await fetchRouteDirections(start, end, waypoints)
           if (res.coordinates?.length > 0) {
             setRouteCoordinates(res.coordinates)
             const dist = res.distanceKm || calculateDistanceKm(start.latitude, start.longitude, end.latitude, end.longitude)
@@ -320,6 +458,8 @@ export default function BookingTrackScreen({ route, navigation }) {
               setNextTurnInstruction(`Returning to starting point: ${originCoord.address?.split(',')?.[0] || 'Original location'}`)
             } else if (isRoundTrip && isReturnPickup) {
               setNextTurnInstruction(`Driver picking up for return at: ${destCoord.address?.split(',')?.[0] || 'Drop location'}`)
+            } else if (isInTripNavigation && uncompletedStops.length > 0) {
+              setNextTurnInstruction(`Heading to Via Stop: ${uncompletedStops[0].address?.split(',')?.[0] || 'Intermediate location'}`)
             } else if (isInTripNavigation) {
               setNextTurnInstruction(`Turn right onto ${destCoord.address?.split(',')?.[0] || 'destination road'}`)
             } else if (isDriverAssigned) {
@@ -331,7 +471,7 @@ export default function BookingTrackScreen({ route, navigation }) {
         } catch {}
       }
     })()
-  }, [driverCoord.latitude, driverCoord.longitude, status, isDriverAssigned, hasRealDriverCoord, isInTripNavigation, isReturnPickup, isReturnStarted, isRoundTrip])
+  }, [driverCoord.latitude, driverCoord.longitude, status, isDriverAssigned, hasRealDriverCoord, isInTripNavigation, isReturnPickup, isReturnStarted, isRoundTrip, booking?.stops])
 
   // Recenter Map Viewport
   const handleRecenter = () => {
@@ -364,6 +504,7 @@ export default function BookingTrackScreen({ route, navigation }) {
   const driverAvatar = resolveAssetUrl(driver?.avatar_url || driver?.avatar || booking?.driver_avatar || '')
   const vehicleName = booking?.vehicle_type_name || driver?.vehicle_type || 'Cab'
   const vehicleModel = driver?.vehicle_model || booking?.model || ''
+  const vehicleColor = driver?.vehicle_color || booking?.vehicle_color || ''
   const plateNo = driver?.plate_no || booking?.plate_no || ''
   const otpCode = booking?.driver_otp || booking?.otp || ''
   const fareAmount = Math.round(parseFloat(booking?.final_fare || booking?.fare || booking?.fare_estimate || booking?.original_fare || 0))
@@ -380,9 +521,15 @@ export default function BookingTrackScreen({ route, navigation }) {
     } catch {}
   }
 
-  // Cancel Ride
-  // Cancel Ride - Opens Professional Cancellation Sheet
+  // Cancel Ride - Opens Professional Cancellation Sheet (Only allowed before driver starts heading)
   const handleCancelRide = () => {
+    if (isDriverStartedHeading) {
+      Alert.alert(
+        'Cannot Cancel Ride',
+        'Your driver has already started heading to your pickup location. Please contact your driver directly.'
+      )
+      return
+    }
     setShowCancelModal(true)
   }
 
@@ -489,6 +636,7 @@ export default function BookingTrackScreen({ route, navigation }) {
         destCoords={destCoord}
         routeCoordinates={routeCoordinates}
         driverLocation={isDriverAssigned && hasRealDriverCoord ? { latitude: driverCoord.latitude, longitude: driverCoord.longitude, heading: driverCoord.heading } : null}
+        waypoints={bookingWaypoints}
         initialRegion={{
           latitude: originCoord.latitude,
           longitude: originCoord.longitude,
@@ -585,7 +733,11 @@ export default function BookingTrackScreen({ route, navigation }) {
 
           {/* Driver Card (when assigned) OR Searching for Driver Card (when unassigned) */}
           {isDriverAssigned ? (
-            <View style={styles.driverInfoCard}>
+            <TouchableOpacity
+              style={styles.driverInfoCard}
+              onPress={() => setShowDriverProfileModal(true)}
+              activeOpacity={0.9}
+            >
               <View style={styles.driverAvatarWrap}>
                 {driverAvatar ? (
                   <Image source={{ uri: driverAvatar }} style={styles.driverAvatarImg} resizeMode="cover" />
@@ -605,7 +757,7 @@ export default function BookingTrackScreen({ route, navigation }) {
                   <Ionicons name="star" size={12} color="#F59E0B" />
                   <Text style={styles.ratingValText}>{driverRating}</Text>
                   {Number(driverRatingCount) > 0 && (
-                    <Text style={styles.ratingCountText}>({driverRatingCount})</Text>
+                    <Text style={styles.ratingCountText}>({driverRatingCount} rides)</Text>
                   )}
                 </View>
                 {(plateNo || vehicleModel) ? (
@@ -613,6 +765,24 @@ export default function BookingTrackScreen({ route, navigation }) {
                     {[plateNo, vehicleModel].filter(Boolean).join(' · ')}
                   </Text>
                 ) : null}
+
+                {/* Tap to view full profile badge */}
+                <View style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 4,
+                  marginTop: 4,
+                  alignSelf: 'flex-start',
+                  backgroundColor: '#EFF6FF',
+                  paddingHorizontal: 8,
+                  paddingVertical: 2.5,
+                  borderRadius: 6,
+                }}>
+                  <Ionicons name="shield-checkmark" size={12} color="#2563EB" />
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#2563EB' }}>
+                    View Driver & Vehicle Profile ›
+                  </Text>
+                </View>
 
                 {/* Driver Live Proximity / Arrival ETA */}
                 {!isDriverArrived && !isInTripNavigation && routeDistanceKm > 0 ? (
@@ -645,14 +815,20 @@ export default function BookingTrackScreen({ route, navigation }) {
                   <>
                     <TouchableOpacity
                       style={styles.actionRoundBtn}
-                      onPress={() => Linking.openURL(`tel:${driverPhone}`)}
+                      onPress={(e) => {
+                        e.stopPropagation?.()
+                        Linking.openURL(`tel:${driverPhone}`)
+                      }}
                       activeOpacity={0.8}
                     >
                       <Ionicons name="call" size={18} color="#D97706" />
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.actionRoundBtn}
-                      onPress={() => Linking.openURL(`sms:${driverPhone}`)}
+                      onPress={(e) => {
+                        e.stopPropagation?.()
+                        Linking.openURL(`sms:${driverPhone}`)
+                      }}
                       activeOpacity={0.8}
                     >
                       <Ionicons name="chatbubble-ellipses" size={18} color="#D97706" />
@@ -660,7 +836,7 @@ export default function BookingTrackScreen({ route, navigation }) {
                   </>
                 ) : null}
               </View>
-            </View>
+            </TouchableOpacity>
           ) : (
             <View style={styles.searchingDriverCard}>
               <View style={styles.searchingRadarWrap}>
@@ -670,27 +846,31 @@ export default function BookingTrackScreen({ route, navigation }) {
               <View style={{ flex: 1, marginLeft: 12 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <Text style={styles.searchingTitle}>
-                    {status === 'pending_driver_assignment'
-                      ? 'Driver Assignment in Progress'
-                      : (isOutstationTrip ? 'Driver Assignment Pending' : 'Searching for Driver...')}
+                    {status === 'driver_assigned'
+                      ? 'Connecting with Driver...'
+                      : (status === 'pending_driver_assignment'
+                          ? 'Driver Assignment in Progress'
+                          : (isOutstationTrip ? 'Driver Assignment Pending' : 'Searching for Driver...'))}
                   </Text>
                   <View style={styles.searchingPulseDot} />
                 </View>
                 <Text style={styles.searchingSub}>
-                  {status === 'pending_driver_assignment'
-                    ? (isOutstationTrip
-                        ? 'Admin is assigning the best category driver for your outstation trip.'
-                        : 'Admin is reviewing and assigning a driver. Auto-assign will trigger if unassigned.')
-                    : (isOutstationTrip
-                        ? 'Admin is assigning the best category driver for your outstation trip.'
-                        : 'Looking for nearby drivers. Please hold on...')}
+                  {status === 'driver_assigned'
+                    ? 'Driver assigned by Admin. Waiting for driver confirmation...'
+                    : (status === 'pending_driver_assignment'
+                        ? (isOutstationTrip
+                            ? 'Admin is assigning the best category driver for your outstation trip.'
+                            : 'Admin is reviewing and assigning a driver. Auto-assign will trigger if unassigned.')
+                        : (isOutstationTrip
+                            ? 'Admin is assigning the best category driver for your outstation trip.'
+                            : 'Looking for nearby drivers. Please hold on...'))}
                 </Text>
               </View>
 
               <View style={styles.searchingBadge}>
                 <Ionicons name="radio-outline" size={14} color="#D97706" />
                 <Text style={styles.searchingBadgeText}>
-                  {status === 'pending_driver_assignment' ? 'Assigning' : 'Searching'}
+                  {status === 'driver_assigned' ? 'Connecting' : (status === 'pending_driver_assignment' ? 'Assigning' : 'Searching')}
                 </Text>
               </View>
             </View>
@@ -731,15 +911,24 @@ export default function BookingTrackScreen({ route, navigation }) {
 
           {/* Stage 4: Driver has arrived green alert banner + Start Ride PIN (Stage 4 & 6 in Reference Image) */}
           {isDriverArrived && (
-            <View style={styles.arrivedBannerWrap}>
-              <View style={styles.greenCheckBadge}>
-                <Ionicons name="checkmark-circle" size={20} color="#10B981" />
+            <>
+              <View style={styles.arrivedBannerWrap}>
+                <View style={styles.greenCheckBadge}>
+                  <Ionicons name="checkmark-circle" size={20} color="#10B981" />
+                </View>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={styles.arrivedBannerTitle}>Driver has arrived</Text>
+                  <Text style={styles.arrivedBannerSub}>Please board the vehicle</Text>
+                </View>
               </View>
-              <View style={{ flex: 1, marginLeft: 10 }}>
-                <Text style={styles.arrivedBannerTitle}>Driver has arrived</Text>
-                <Text style={styles.arrivedBannerSub}>Please board the vehicle</Text>
-              </View>
-            </View>
+
+              <CustomerWaitingTimerCard
+                arrivedAt={booking?.arrived_at}
+                freeWaitingMins={booking?.free_waiting_mins || 5}
+                waitingRate={booking?.waiting_charge_per_min || 2}
+                categoryName={booking?.vehicle_type_name || vehicleName || 'Cab'}
+              />
+            </>
           )}
 
           {/* Stage: Return Pickup Banner */}
@@ -807,7 +996,7 @@ export default function BookingTrackScreen({ route, navigation }) {
               <Text style={styles.shareLocationBtnText}>Share Live Location</Text>
             </TouchableOpacity>
 
-            {!isInTripNavigation && !isCompleted && (
+            {canCustomerCancel && (
               <TouchableOpacity
                 style={styles.cancelRideBtn}
                 onPress={handleCancelRide}
@@ -911,6 +1100,34 @@ export default function BookingTrackScreen({ route, navigation }) {
                   ₹{Math.round(Number(booking?.cash_pending ?? (Number(fareAmount) - Number(booking?.online_paid || 0))))}
                 </Text>
               </View>
+
+              {/* 🖨️ View & Download Official Tax Invoice Button */}
+              <TouchableOpacity
+                style={{
+                  backgroundColor: '#0F172A',
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  paddingVertical: 11,
+                  borderRadius: 10,
+                  marginTop: 12,
+                }}
+                onPress={async () => {
+                  try {
+                    const invoiceUrl = await getInvoiceUrl(booking.id, true, booking?.booking_ref)
+                    Linking.openURL(invoiceUrl)
+                  } catch (e) {
+                    Alert.alert('Error', 'Unable to open invoice.')
+                  }
+                }}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="receipt-outline" size={17} color="#FFFFFF" />
+                <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>
+                  Download / Print Tax Invoice (PDF)
+                </Text>
+              </TouchableOpacity>
             </View>
 
             {/* Rating Stars */}
@@ -1293,6 +1510,235 @@ export default function BookingTrackScreen({ route, navigation }) {
                 </Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── DRIVER & VEHICLE PROFILE MODAL ── */}
+      <Modal
+        visible={showDriverProfileModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDriverProfileModal(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' }}>
+          <View style={{
+            backgroundColor: '#FFFFFF',
+            borderTopLeftRadius: 28,
+            borderTopRightRadius: 28,
+            paddingHorizontal: 20,
+            paddingTop: 16,
+            paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+            maxHeight: SCREEN_HEIGHT * 0.85,
+            ...SHADOW.lg,
+          }}>
+            {/* Top Indicator */}
+            <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: '#CBD5E1', alignSelf: 'center', marginBottom: 14 }} />
+
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <View>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: '#0F172A' }}>Driver & Vehicle Details</Text>
+                <Text style={{ fontSize: 12, color: '#64748B' }}>Verified CityOneTaxi Partner</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowDriverProfileModal(false)}
+                style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
+              {/* Profile Card */}
+              <View style={{
+                alignItems: 'center',
+                backgroundColor: '#F8FAFC',
+                borderRadius: 20,
+                padding: 18,
+                borderWidth: 1,
+                borderColor: '#E2E8F0',
+                marginBottom: 16,
+              }}>
+                <View style={{ position: 'relative' }}>
+                  <View style={{
+                    width: 84,
+                    height: 84,
+                    borderRadius: 42,
+                    overflow: 'hidden',
+                    backgroundColor: '#FEF3C7',
+                    borderWidth: 3,
+                    borderColor: '#10B981',
+                  }}>
+                    {driverAvatar ? (
+                      <Image source={{ uri: driverAvatar }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                    ) : (
+                      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                        <Text style={{ fontSize: 34, fontWeight: '900', color: '#B45309' }}>
+                          {(driverName[0] || 'D').toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={{
+                    position: 'absolute',
+                    bottom: 0,
+                    right: 0,
+                    backgroundColor: '#10B981',
+                    borderRadius: 12,
+                    padding: 3,
+                    borderWidth: 2,
+                    borderColor: '#FFFFFF',
+                  }}>
+                    <Ionicons name="shield-checkmark" size={14} color="#FFFFFF" />
+                  </View>
+                </View>
+
+                <Text style={{ fontSize: 19, fontWeight: '800', color: '#0F172A', marginTop: 10 }}>{driverName}</Text>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                    <Ionicons name="star" size={13} color="#F59E0B" />
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#B45309', marginLeft: 3 }}>{driverRating}</Text>
+                  </View>
+                  <Text style={{ fontSize: 12, color: '#64748B' }}>•</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#64748B' }}>
+                    {Number(driverRatingCount) > 0 ? `${driverRatingCount}+ Completed Trips` : 'Verified Partner'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Vehicle Card */}
+              <View style={{
+                backgroundColor: '#FFFFFF',
+                borderRadius: 18,
+                padding: 16,
+                borderWidth: 1.5,
+                borderColor: '#E2E8F0',
+                marginBottom: 16,
+              }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5 }}>Vehicle Information</Text>
+                  <View style={{ backgroundColor: '#EEF2FF', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#4F46E5' }}>{vehicleName || 'Standard'}</Text>
+                  </View>
+                </View>
+
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#CBD5E1' }}>
+                    <Ionicons name="car-sport" size={24} color="#0F172A" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '800', color: '#0F172A' }}>
+                      {[vehicleModel, vehicleColor].filter(Boolean).join(' · ') || 'Assigned Vehicle'}
+                    </Text>
+                    <Text style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>
+                      Class: {vehicleName}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Number Plate Display */}
+                {plateNo ? (
+                  <View style={{
+                    marginTop: 14,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: '#FEF3C7',
+                    borderWidth: 2,
+                    borderColor: '#F59E0B',
+                    borderRadius: 10,
+                    paddingHorizontal: 12,
+                    paddingVertical: 7,
+                    alignSelf: 'flex-start',
+                  }}>
+                    <View style={{
+                      backgroundColor: '#2563EB',
+                      paddingHorizontal: 5,
+                      paddingVertical: 2,
+                      borderRadius: 4,
+                      marginRight: 8,
+                    }}>
+                      <Text style={{ fontSize: 9, fontWeight: '900', color: '#FFFFFF' }}>IND</Text>
+                    </View>
+                    <Text style={{ fontSize: 16, fontWeight: '900', color: '#0F172A', letterSpacing: 1.5 }}>
+                      {plateNo.toUpperCase()}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+
+              {/* Safety Badges */}
+              <View style={{
+                backgroundColor: '#ECFDF5',
+                borderRadius: 16,
+                padding: 14,
+                borderWidth: 1,
+                borderColor: '#A7F3D0',
+                marginBottom: 16,
+                gap: 8,
+              }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="checkmark-circle" size={16} color="#059669" />
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#065F46' }}>Driver KYC & Police Background Verified</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="shield-checkmark" size={16} color="#059669" />
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#065F46' }}>Commercial Driving License & Fitness Certified</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="sparkles" size={16} color="#059669" />
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: '#065F46' }}>Sanitized & Clean Vehicle Guaranteed</Text>
+                </View>
+              </View>
+
+              {/* Action Buttons */}
+              {driverPhone ? (
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#16A34A',
+                      paddingVertical: 14,
+                      borderRadius: 14,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                    }}
+                    onPress={() => {
+                      setShowDriverProfileModal(false)
+                      Linking.openURL(`tel:${driverPhone}`)
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="call" size={18} color="#FFFFFF" />
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#FFFFFF' }}>Call Driver</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#2563EB',
+                      paddingVertical: 14,
+                      borderRadius: 14,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 8,
+                    }}
+                    onPress={() => {
+                      setShowDriverProfileModal(false)
+                      Linking.openURL(`sms:${driverPhone}`)
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="chatbubble-ellipses" size={18} color="#FFFFFF" />
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: '#FFFFFF' }}>SMS Driver</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+            </ScrollView>
           </View>
         </View>
       </Modal>

@@ -10,10 +10,11 @@ import {
   Image,
   Modal,
   TextInput,
+  Linking,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { paymentAPI, reviewsAPI, resolveAssetUrl } from '../../api/api'
+import { paymentAPI, reviewsAPI, resolveAssetUrl, getInvoiceUrl } from '../../api/api'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 
 const DriverPaymentScreen = ({ navigation, route }) => {
@@ -299,6 +300,16 @@ const DriverPaymentScreen = ({ navigation, route }) => {
               </Text>
             </View>
           )}
+          {Number(booking.waiting_charge) > 0 && (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>
+                Waiting Charge ({booking.waiting_mins || 0} mins)
+              </Text>
+              <Text style={[styles.detailValue, { color: '#D97706', fontWeight: '700' }]}>
+                + ₹{Math.round(Number(booking.waiting_charge))}
+              </Text>
+            </View>
+          )}
           {discountAmount > 0 && (
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Coupon Discount</Text>
@@ -315,6 +326,35 @@ const DriverPaymentScreen = ({ navigation, route }) => {
             <Text style={[styles.totalLabel, { color: '#D97706', fontWeight: '800' }]}>Remaining Cash to Collect</Text>
             <Text style={[styles.totalValue, { color: '#D97706', fontSize: 18, fontWeight: '900' }]}>₹{remainingCash}</Text>
           </View>
+
+          {/* 🖨️ View & Print Official Trip Tax Invoice */}
+          <TouchableOpacity
+            style={{
+              backgroundColor: '#0F172A',
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              paddingVertical: 11,
+              borderRadius: 10,
+              marginTop: 10,
+            }}
+            onPress={async () => {
+              if (!bookingId) return
+              try {
+                const invoiceUrl = await getInvoiceUrl(bookingId, true)
+                Linking.openURL(invoiceUrl)
+              } catch {
+                Alert.alert('Error', 'Unable to open invoice.')
+              }
+            }}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="receipt-outline" size={17} color="#FFFFFF" />
+            <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>
+              View & Print Official Tax Invoice (PDF)
+            </Text>
+          </TouchableOpacity>
           {Boolean(booking.converted_from_shared == 1) && (
             <View style={{ backgroundColor: '#FEF3C7', padding: 8, borderRadius: 6, marginTop: 8 }}>
               <Text style={{ fontSize: 11, color: '#92400E', fontWeight: '700' }}>

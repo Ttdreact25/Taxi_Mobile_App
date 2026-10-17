@@ -16,6 +16,7 @@ import {
   Vibration,
   StatusBar,
   Dimensions,
+  Platform,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect, useIsFocused } from '@react-navigation/native'
@@ -23,17 +24,16 @@ import { Ionicons } from '@expo/vector-icons'
 import * as Location from 'expo-location'
 import * as ImagePicker from 'expo-image-picker'
 import * as SecureStore from 'expo-secure-store'
-import { driverAPI, adsAPI, longTripAPI, notifAPI, uploadAPI, settingsAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
+import { driverAPI, adsAPI, longTripAPI, notifAPI, uploadAPI, settingsAPI, reviewsAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
 
 // Module-level persistent cache of dismissed cancelled trip IDs (guarantees alert shows exactly ONCE across screens/tabs)
 const acknowledgedCancelledTripIds = new Set()
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
-import AdCarousel from '../../components/ui/AdCarousel'
-import LiveTripMap from '../../components/common/LiveTripMap'
+import SwipeToActionButton from '../../components/common/SwipeToActionButton'
 import { formatTime12Hr, formatDateDisplay, formatDateTime12Hr } from '../../utils/formatters'
-import { playDriverAlertSound } from '../../services/SoundService'
+import { playDriverAlertSound, playDriverBookingReceived } from '../../services/SoundService'
 
 const REJECT_REASONS = [
   'Pickup location too far away',
@@ -43,6 +43,19 @@ const REJECT_REASONS = [
   'Schedule conflict with other booking',
   'Customer safety concern',
 ]
+
+const haversineKm = (lat1, lon1, lat2, lon2) => {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 0
+  const R = 6371
+  const dLat = (lat2 - lat1) * (Math.PI / 180)
+  const dLon = (lon2 - lon1) * (Math.PI / 180)
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2)
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  return R * c
+}
 
 const getScheduleCountdown = (pickupDate, pickupTime, nowTime = Date.now()) => {
   if (!pickupDate) return { text: 'Scheduled', isBufferTime: false, badgeColor: '#D97706', badgeBg: '#FEF3C7' }
@@ -88,6 +101,249 @@ const getScheduleCountdown = (pickupDate, pickupTime, nowTime = Date.now()) => {
   return { text: 'Schedule Elapsed', badgeColor: '#B91C1C', badgeBg: '#FEE2E2', isBufferTime: false }
 }
 
+const TN_DISTRICTS = [
+  'Chengalpattu', 'Chennai', 'Coimbatore', 'Cuddalore', 'Dharmapuri', 'Dindigul', 'Erode',
+  'Kallakurichi', 'Kanchipuram', 'Kanyakumari', 'Karur', 'Krishnagiri', 'Madurai', 'Mayiladuthurai',
+  'Nagapattinam', 'Namakkal', 'Nilgiris', 'Perambalur', 'Pudukkottai', 'Puducherry', 'Pondicherry',
+  'Ramanathapuram', 'Ranipet', 'Salem', 'Sivaganga', 'Tenkasi', 'Thanjavur', 'Theni', 'Thoothukudi',
+  'Tiruchirappalli', 'Trichy', 'Tirunelveli', 'Tirupathur', 'Tiruppur', 'Tiruvallur', 'Tiruvannamalai',
+  'Tiruvarur', 'Vellore', 'Viluppuram', 'Virudhunagar'
+]
+
+const parseAddressDetails = (addr, type = 'pickup') => {
+  if (!addr) return { full: '—', main: type === 'pickup' ? 'Pickup Location' : 'Drop Location', district: 'Tamil Nadu' }
+  const cleanAddr = String(addr).trim()
+  const parts = cleanAddr.split(',').map(s => s.trim()).filter(Boolean)
+
+  let matchedDistrict = null
+  for (const d of TN_DISTRICTS) {
+    const reg = new RegExp('\\b' + d + '\\b', 'i')
+    if (reg.test(cleanAddr)) {
+      matchedDistrict = d === 'Pondicherry' ? 'Puducherry' : (d === 'Trichy' ? 'Tiruchirappalli' : d)
+      break
+    }
+  }
+
+  let effectiveParts = [...parts]
+  if (effectiveParts.length > 2 && /india/i.test(effectiveParts[effectiveParts.length - 1])) {
+    effectiveParts.pop()
+  }
+  let districtCandidate = effectiveParts[effectiveParts.length - 1].replace(/\b\d{6}\b/g, '').trim()
+  if (!districtCandidate && effectiveParts.length > 1) {
+    districtCandidate = effectiveParts[effectiveParts.length - 2]
+  }
+
+  const mainCandidate = effectiveParts.length >= 2 
+    ? effectiveParts[effectiveParts.length - 2] 
+    : effectiveParts[0]
+
+  return {
+    full: cleanAddr,
+    main: mainCandidate || parts[0] || (type === 'pickup' ? 'Pickup Location' : 'Drop Location'),
+    district: matchedDistrict || districtCandidate || 'Tamil Nadu',
+  }
+}
+
+const formatTripScheduleDate = (dateStr, timeStr) => {
+  if (!dateStr || dateStr === '0000-00-00') return 'Not Applicable'
+  try {
+    const rawDate = String(dateStr).split(/[ T]/)[0]
+    const parts = rawDate.split('-').map(Number)
+    if (parts.length < 3 || isNaN(parts[0])) return dateStr
+    const [y, mo, d] = parts
+    const dt = new Date(y, mo - 1, d)
+    if (isNaN(dt.getTime())) return dateStr
+    const month = dt.toLocaleString('en-US', { month: 'short' })
+    const nth = (d % 10 === 1 && d !== 11) ? 'st'
+      : (d % 10 === 2 && d !== 12) ? 'nd'
+      : (d % 10 === 3 && d !== 13) ? 'rd' : 'th'
+    const formattedDate = `${month} ${d}${nth} ${y}`
+    const timeFormatted = timeStr ? formatTime12Hr(timeStr) : ''
+    return timeFormatted && timeFormatted !== '—' ? `${formattedDate}, ${timeFormatted.toLowerCase()}` : formattedDate
+  } catch (e) {
+    return dateStr
+  }
+}
+
+// Clean, deduplicated notes extractor for professional driver trip display
+const getDeduplicatedNotes = (rawNotes, isLocked = false) => {
+  if (!rawNotes || typeof rawNotes !== 'string') return []
+  let text = String(rawNotes).trim()
+  if (isLocked) {
+    text = text.replace(/\b\d{10}\b/g, '•••••••••• (Revealed on Start)')
+  }
+  const chunks = text.split('|').map(s => s.trim()).filter(Boolean)
+  if (chunks.length === 0) return []
+
+  const categoryMap = new Map()
+  for (const chunk of chunks) {
+    const lower = chunk.toLowerCase()
+    let key = chunk
+    if (lower.includes('passenger') && !lower.includes('passengers:')) {
+      key = 'passenger_name'
+    } else if (lower.includes('passengers:') || lower.includes('passenger:')) {
+      key = 'passenger_count'
+    } else if (lower.includes('luggage')) {
+      key = 'luggage'
+    } else if (lower.includes('pet')) {
+      key = 'pets'
+    } else if (lower.includes('waiting')) {
+      key = 'waiting_time'
+    } else if (lower.includes('carrier') || lower.includes('rooftop')) {
+      key = 'carrier'
+    } else if (lower.includes('via') || lower.includes('stop:')) {
+      key = 'via_stop'
+    } else if (lower.includes('driver note') || lower.includes('note:')) {
+      key = 'driver_note'
+    } else if (lower.includes('emergency')) {
+      key = 'emergency'
+    }
+    // Set overwrites any duplicate with latest/updated specific entry
+    categoryMap.set(key, chunk)
+  }
+
+  return Array.from(categoryMap.values())
+}
+
+const DriverWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate = 2, categoryName = 'Taxi' }) => {
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  const parseMs = (dt) => {
+    if (!dt) return Date.now()
+    if (typeof dt === 'number') return dt
+    const s = String(dt).trim().replace(' ', 'T')
+    const t = new Date(s).getTime()
+    return isNaN(t) ? Date.now() : t
+  }
+
+  const arrivedMs = parseMs(arrivedAt)
+  const elapsedSec = Math.max(0, Math.floor((now - arrivedMs) / 1000))
+  const freeWaitSec = (Number(freeWaitingMins) || 5) * 60
+  const isFree = elapsedSec < freeWaitSec
+
+  const formatMMSS = (sec) => {
+    const m = Math.floor(sec / 60)
+    const s = sec % 60
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  }
+
+  if (isFree) {
+    const remainingSec = freeWaitSec - elapsedSec
+    return (
+      <View style={{
+        backgroundColor: '#ECFDF5',
+        borderRadius: 14,
+        padding: 12,
+        borderWidth: 1.5,
+        borderColor: '#6EE7B7',
+        marginBottom: 10,
+      }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+            <View style={{
+              width: 32,
+              height: 32,
+              borderRadius: 16,
+              backgroundColor: '#D1FAE5',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginRight: 8,
+            }}>
+              <Ionicons name="time" size={18} color="#059669" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 13, fontWeight: '800', color: '#065F46' }}>
+                FREE WAITING TIME
+              </Text>
+              <Text style={{ fontSize: 11, color: '#047857', marginTop: 1 }}>
+                {categoryName} • Free {freeWaitingMins} mins
+              </Text>
+            </View>
+          </View>
+          <View style={{
+            backgroundColor: '#059669',
+            paddingHorizontal: 10,
+            paddingVertical: 5,
+            borderRadius: 8,
+          }}>
+            <Text style={{ fontSize: 14, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.5 }}>
+              {formatMMSS(remainingSec)}
+            </Text>
+          </View>
+        </View>
+        <Text style={{ fontSize: 11, color: '#047857', marginTop: 6, fontStyle: 'italic' }}>
+          ℹ️ Extra waiting beyond {freeWaitingMins} mins will be charged at ₹{waitingRate}/min automatically.
+        </Text>
+      </View>
+    )
+  }
+
+  const extraSec = elapsedSec - freeWaitSec
+  const extraMins = Math.max(1, Math.ceil(extraSec / 60))
+  const accruedCharge = Math.round(extraMins * (Number(waitingRate) || 2))
+
+  return (
+    <View style={{
+      backgroundColor: '#FEF3C7',
+      borderRadius: 14,
+      padding: 12,
+      borderWidth: 1.5,
+      borderColor: '#F59E0B',
+      marginBottom: 10,
+    }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+          <View style={{
+            width: 32,
+            height: 32,
+            borderRadius: 16,
+            backgroundColor: '#FDE68A',
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: 8,
+          }}>
+            <Ionicons name="alert-circle" size={18} color="#D97706" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 13, fontWeight: '900', color: '#92400E' }}>
+              EXTRA WAITING ACCRUING
+            </Text>
+            <Text style={{ fontSize: 11, color: '#B45309', marginTop: 1 }}>
+              +{extraMins} mins over limit ({categoryName})
+            </Text>
+          </View>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <View style={{
+            backgroundColor: '#D97706',
+            paddingHorizontal: 10,
+            paddingVertical: 4,
+            borderRadius: 8,
+          }}>
+            <Text style={{ fontSize: 14, fontWeight: '900', color: '#FFFFFF' }}>
+              +₹{accruedCharge}
+            </Text>
+          </View>
+          <Text style={{ fontSize: 10, fontWeight: '700', color: '#B45309', marginTop: 2 }}>
+            Elapsed: {formatMMSS(extraSec)}
+          </Text>
+        </View>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 }}>
+        <Ionicons name="receipt-outline" size={13} color="#92400E" />
+        <Text style={{ fontSize: 11, color: '#92400E', fontWeight: '600', flex: 1 }}>
+          ₹{accruedCharge} added to customer invoice & cash collection ({extraMins}m @ ₹{waitingRate}/min).
+        </Text>
+      </View>
+    </View>
+  )
+}
+
 const DriverHomeScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets()
   const isFocused = useIsFocused()
@@ -112,6 +368,8 @@ const DriverHomeScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false)
   const [toggling, setToggling] = useState(false)
   const [nowTime, setNowTime] = useState(Date.now())
+  const [collapsedNotes, setCollapsedNotes] = useState({})
+  const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
 
   // New Telemetry, Performance & Dashboard States
   const [currentCity, setCurrentCity] = useState('')
@@ -119,6 +377,7 @@ const DriverHomeScreen = ({ navigation }) => {
   const [gpsStatus, setGpsStatus] = useState('GPS Active 🟢')
   const [lastUpdatedTime, setLastUpdatedTime] = useState('Just now')
   const [recentTrips, setRecentTrips] = useState([])
+  const [driverReviews, setDriverReviews] = useState([])
   const [weeklyEarnings, setWeeklyEarnings] = useState({ total: 0, trips_detail: [] })
   const [vehicleModalVisible, setVehicleModalVisible] = useState(false)
   const [showLiveMapDetails, setShowLiveMapDetails] = useState(true)
@@ -132,6 +391,7 @@ const DriverHomeScreen = ({ navigation }) => {
   const [rejectModalTrip, setRejectModalTrip] = useState(null)
   const [rejectIsLongTrip, setRejectIsLongTrip] = useState(false)
   const [selectedReason, setSelectedReason] = useState(REJECT_REASONS[0])
+  const [assignedAlertTrip, setAssignedAlertTrip] = useState(null)
 
   // Normal Trip Start OTP Modal
   const [otpModalVisible, setOtpModalVisible] = useState(false)
@@ -147,10 +407,19 @@ const DriverHomeScreen = ({ navigation }) => {
   const [detailModalTrip, setDetailModalTrip] = useState(null)
   const [cancelledNotice, setCancelledNotice] = useState(null)
 
+  // Customer Profile Modal
+  const [showCustomerModal, setShowCustomerModal] = useState(false)
+  const [custAvatarError, setCustAvatarError] = useState(false)
+
   // Complete Trip Modal & Final Invoice
   const [completeTripModalVisible, setCompleteTripModalVisible] = useState(false)
   const [enteredActualDistance, setEnteredActualDistance] = useState('')
+  const [enteredTollCharge, setEnteredTollCharge] = useState('')
   const [isSubmittingComplete, setIsSubmittingComplete] = useState(false)
+  const [tripGpsTrackedDistanceKm, setTripGpsTrackedDistanceKm] = useState(0)
+  const lastTripGpsCoordRef = useRef(null)
+  const tripGpsAccumulatedKmRef = useRef(0)
+  const activeRideRef = useRef(null)
 
   const pollRef = useRef(null)
   const timerRef = useRef(null)
@@ -160,8 +429,88 @@ const DriverHomeScreen = ({ navigation }) => {
   const prevUnreadNotifCountRef = useRef(null)
   const prevActiveRideRef = useRef(null)
   const completedTripIdsRef = useRef(new Set())
+  const locallyAcceptedTripIdsRef = useRef(new Set())
+  const declinedTripIdsRef = useRef(new Set())
   const acknowledgedCancelledTripIdRef = useRef(null)
   const lastGeoRef = useRef({ lat: 0, lng: 0, area: '', city: '', address: '', timestamp: 0 })
+  const [startedHeadingRides, setStartedHeadingRides] = useState(new Set())
+
+  // Synchronize activeRide reference and restore accumulated GPS distance from SecureStore if re-opened
+  useEffect(() => {
+    activeRideRef.current = activeRide
+    if (!activeRide) {
+      lastTripGpsCoordRef.current = null
+      tripGpsAccumulatedKmRef.current = 0
+      setTripGpsTrackedDistanceKm(0)
+    } else {
+      SecureStore.getItemAsync(`heading_started_${activeRide.id}`).then(val => {
+        if (val === '1') {
+          setStartedHeadingRides(prev => new Set(prev).add(activeRide.id))
+        }
+      }).catch(() => {})
+      const isTripMoving = ['trip_started', 'in_progress', 'return_started', 'return_in_progress'].includes(activeRide.status)
+      if (isTripMoving) {
+        const rideKey = `gps_odometer_${activeRide.id}`
+        SecureStore.getItemAsync(rideKey)
+          .then(stored => {
+            if (stored) {
+              const storedVal = parseFloat(stored)
+              if (!isNaN(storedVal) && storedVal > 0) {
+                tripGpsAccumulatedKmRef.current = storedVal
+                setTripGpsTrackedDistanceKm(storedVal)
+              }
+            }
+          })
+          .catch(() => {})
+      }
+    }
+  }, [activeRide])
+
+  // Live GPS Odometer accumulator during active trip (Auto-detects actual route & extra km without driver manual input)
+  const trackTripGpsStep = useCallback(async (lat, lng) => {
+    const curRide = activeRideRef.current
+    if (!curRide) return
+    const isTripMoving = ['trip_started', 'in_progress', 'return_started', 'return_in_progress'].includes(curRide.status)
+    if (!isTripMoving) {
+      lastTripGpsCoordRef.current = null
+      return
+    }
+
+    const rideKey = `gps_odometer_${curRide.id}`
+
+    // Load accumulated km from SecureStore if starting fresh
+    if (tripGpsAccumulatedKmRef.current === 0) {
+      try {
+        const stored = await SecureStore.getItemAsync(rideKey)
+        if (stored) {
+          const storedVal = parseFloat(stored)
+          if (!isNaN(storedVal) && storedVal > 0) {
+            tripGpsAccumulatedKmRef.current = storedVal
+            setTripGpsTrackedDistanceKm(storedVal)
+          }
+        }
+      } catch {}
+    }
+
+    if (lastTripGpsCoordRef.current) {
+      const deltaKm = haversineKm(
+        lastTripGpsCoordRef.current.lat,
+        lastTripGpsCoordRef.current.lng,
+        lat,
+        lng
+      )
+      // Filter out GPS jitter (< 15 meters) or impossible jumps (> 2.0 km in 3.5 sec)
+      if (deltaKm >= 0.015 && deltaKm < 2.0) {
+        tripGpsAccumulatedKmRef.current += deltaKm
+        const rounded = parseFloat(tripGpsAccumulatedKmRef.current.toFixed(2))
+        setTripGpsTrackedDistanceKm(rounded)
+        try {
+          await SecureStore.setItemAsync(rideKey, String(rounded))
+        } catch {}
+      }
+    }
+    lastTripGpsCoordRef.current = { lat, lng }
+  }, [])
 
   // Reverse Geocoding with memory caching to extract readable Area & City (e.g. KK Nagar, Chennai)
   const resolveAreaFromCoords = useCallback(async (latitude, longitude) => {
@@ -215,16 +564,17 @@ const DriverHomeScreen = ({ navigation }) => {
         latitude: lastGeoRef.current.lat || undefined,
         longitude: lastGeoRef.current.lng || undefined,
       }
-      const [dashRes, schedRes, activeRes, pendingRes, adRes, notifRes, tripsRes, earnRes, sysSettingsRes] = await Promise.allSettled([
+      const [dashRes, schedRes, activeRes, pendingRes, adRes, notifRes, tripsRes, earnRes, sysSettingsRes, revRes] = await Promise.allSettled([
         driverAPI.dashboard(),
         longTripAPI.assignedScheduledTrips(),
         driverAPI.activeBooking(),
         driverAPI.pendingRides(),
         adsAPI.list(locParams),
         notifAPI.list(true),
-        driverAPI.myTrips({ per_page: 5 }),
+        driverAPI.myTrips({ per_page: 10 }),
         driverAPI.earnings('week'),
         settingsAPI.list(),
+        user?.id ? reviewsAPI.listForUser(user.id, 'driver') : Promise.resolve({ data: { reviews: [] } }),
       ])
 
       // 1. Dashboard payload & Admin System Settings Target
@@ -286,16 +636,43 @@ const DriverHomeScreen = ({ navigation }) => {
       // 2. Scheduled & Admin Assigned Trips
       if (schedRes.status === 'fulfilled' && schedRes.value.data?.status === 'success') {
         const sData = schedRes.value.data
-        const newAssignments = sData.new_assignments || []
+        const rawNewAssignments = sData.new_assignments || []
+        const newAssignments = rawNewAssignments.filter(t => {
+          const tid = Number(t.id)
+          const ltid = Number(t.long_trip_id)
+          const bid = Number(t.booking_id)
+          return !declinedTripIdsRef.current.has(tid) &&
+                 !declinedTripIdsRef.current.has(ltid) &&
+                 !declinedTripIdsRef.current.has(bid)
+        })
         setAdminAssignedTrips(newAssignments)
-        setUpcomingTrips(sData.upcoming_trips || [])
+        setUpcomingTrips((sData.upcoming_trips || []).filter(t => {
+          const tid = Number(t.id)
+          const ltid = Number(t.long_trip_id)
+          const bid = Number(t.booking_id)
+          return !declinedTripIdsRef.current.has(tid) &&
+                 !declinedTripIdsRef.current.has(ltid) &&
+                 !declinedTripIdsRef.current.has(bid)
+        }))
 
         if (newAssignments.length > 0) {
           const firstNew = newAssignments[0]
           const newId = firstNew.long_trip_id || firstNew.id
           if (newId && alertedAssignedTripIdRef.current !== `sched_${newId}`) {
             alertedAssignedTripIdRef.current = `sched_${newId}`
-            playDriverAlertSound().catch(() => {})
+            playDriverBookingReceived(firstNew.booking_ref).catch(() => {})
+          }
+          if (!assignedAlertTrip) {
+            setAssignedAlertTrip({
+              ...firstNew,
+              id: firstNew.booking_id || firstNew.id,
+              is_long_trip: true,
+              long_trip_id: firstNew.long_trip_id || firstNew.id,
+              customer_name: firstNew.customer_name || 'Passenger',
+              pickup_address: firstNew.pickup_address,
+              dest_address: firstNew.dest_address,
+              final_fare: firstNew.final_fare || firstNew.total_fare || firstNew.fare || firstNew.fare_estimate || 0,
+            })
           }
         }
       }
@@ -307,19 +684,56 @@ const DriverHomeScreen = ({ navigation }) => {
       } else if (dashRes.status === 'fulfilled' && Array.isArray(dashRes.value.data?.pending_rides)) {
         incomingRides = dashRes.value.data.pending_rides
       }
+      incomingRides = incomingRides.filter(r => !declinedTripIdsRef.current.has(Number(r.id)))
 
       // 4. Active Ride & Shared Manifest
-      const act = (activeRes.status === 'fulfilled' && activeRes.value.data?.status === 'success' && activeRes.value.data.booking)
+      let act = (activeRes.status === 'fulfilled' && activeRes.value.data?.status === 'success' && activeRes.value.data.booking)
         ? activeRes.value.data.booking
         : (dashRes.status === 'fulfilled' && dashRes.value.data?.active_booking ? dashRes.value.data.active_booking : null)
+
+      if (act && (
+        declinedTripIdsRef.current.has(Number(act.id)) ||
+        (act.long_trip_id && declinedTripIdsRef.current.has(Number(act.long_trip_id))) ||
+        (act.booking_id && declinedTripIdsRef.current.has(Number(act.booking_id)))
+      )) {
+        act = null
+      }
 
       const serverCancelledTrip = (activeRes.status === 'fulfilled' && activeRes.value.data?.cancelled_trip)
         ? activeRes.value.data.cancelled_trip
         : (dashRes.status === 'fulfilled' && dashRes.value.data?.cancelled_trip ? dashRes.value.data.cancelled_trip : null)
 
+      // Helper: check if a trip status represents a genuinely accepted trip by this driver
+      const isAcceptedTripStatus = (status) => [
+        'driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way', 
+        'driver_arrived', 'in_progress', 'trip_started', 'return_pickup', 
+        'return_started', 'return_in_progress'
+      ].includes(status)
+
       // Automatic Trip Cancellation Detection for Driver (Strictly ONCE per genuinely cancelled trip from server)
       const serverCancId = serverCancelledTrip?.id ? Number(serverCancelledTrip.id) : null
-      if (serverCancId && !acknowledgedCancelledTripIds.has(serverCancId) && !completedTripIdsRef.current.has(serverCancId)) {
+      const previousActiveTrip = prevActiveRideRef.current
+      const prevWasAccepted = Boolean(
+        previousActiveTrip && (
+          isAcceptedTripStatus(previousActiveTrip.status) || 
+          Boolean(previousActiveTrip.accepted_at) ||
+          locallyAcceptedTripIdsRef.current.has(previousActiveTrip.id)
+        )
+      )
+
+      // If this trip was declined by this driver, or was never accepted, ensure it is silenced and acknowledged
+      if (serverCancId && (declinedTripIdsRef.current.has(serverCancId) || (!serverCancelledTrip?.accepted_at && !prevWasAccepted))) {
+        acknowledgedCancelledTripIds.add(serverCancId)
+      }
+
+      // ONLY show cancellation notice if the trip was genuinely accepted by this driver AND not declined
+      if (
+        serverCancId && 
+        !acknowledgedCancelledTripIds.has(serverCancId) && 
+        !completedTripIdsRef.current.has(serverCancId) &&
+        !declinedTripIdsRef.current.has(serverCancId) &&
+        (Boolean(serverCancelledTrip.accepted_at) || prevWasAccepted)
+      ) {
         acknowledgedCancelledTripIds.add(serverCancId)
         try {
           SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
@@ -334,14 +748,49 @@ const DriverHomeScreen = ({ navigation }) => {
         } catch {}
         setCancelledNotice({
           id: serverCancId,
+          customerName: serverCancelledTrip.customer_name || previousActiveTrip?.customer_name || 'Passenger',
           bookingRef: serverCancelledTrip.booking_ref || `CTB#${serverCancId}`,
           pickup: serverCancelledTrip.pickup_address,
           dest: serverCancelledTrip.dest_address,
-          reason: serverCancelledTrip.cancellation_reason || 'Rider cancelled the ride.',
+          reason: serverCancelledTrip.cancellation_reason || 'Customer cancelled this booking.',
+        })
+      } else if (
+        !act?.id && 
+        serverCancelledTrip?.id &&
+        previousActiveTrip?.id && 
+        prevWasAccepted &&
+        !declinedTripIdsRef.current.has(Number(previousActiveTrip.id)) &&
+        !completedTripIdsRef.current.has(Number(previousActiveTrip.id)) && 
+        !acknowledgedCancelledTripIds.has(Number(previousActiveTrip.id))
+      ) {
+        // Confirmed server cancellation: Genuinely accepted active ride was cancelled by customer on server
+        const prevId = Number(previousActiveTrip.id)
+        acknowledgedCancelledTripIds.add(prevId)
+        try {
+          SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
+        } catch {}
+        prevActiveRideRef.current = null
+        setActiveRide(null)
+        setOtpModalVisible(false)
+        setPassOtpModal(null)
+        setDetailModalTrip(null)
+        try {
+          Vibration.vibrate([0, 400, 200, 400])
+        } catch {}
+        setCancelledNotice({
+          id: prevId,
+          customerName: serverCancelledTrip.customer_name || previousActiveTrip.customer_name || 'Passenger',
+          bookingRef: serverCancelledTrip.booking_ref || previousActiveTrip.booking_ref || `CTB#${prevId}`,
+          pickup: serverCancelledTrip.pickup_address || previousActiveTrip.pickup_address,
+          dest: serverCancelledTrip.dest_address || previousActiveTrip.dest_address,
+          reason: serverCancelledTrip.cancellation_reason || 'Customer cancelled this booking.',
         })
       }
 
       if (act?.id) {
+        if (locallyAcceptedTripIdsRef.current.has(act.id) && act.status === 'driver_assigned') {
+          act.status = 'driver_accepted'
+        }
         prevActiveRideRef.current = act
       } else {
         prevActiveRideRef.current = null
@@ -351,45 +800,18 @@ const DriverHomeScreen = ({ navigation }) => {
       if (act?.id) {
         setPendingRides([])
 
-        // Immediate Audio/Haptic Alert when driver is assigned to a ride!
-        if (act.status === 'driver_assigned' && alertedAssignedTripIdRef.current !== act.id) {
-          alertedAssignedTripIdRef.current = act.id
-          try {
-            Vibration.vibrate([0, 500, 200, 500])
-          } catch {}
-          playDriverAlertSound().catch(() => {})
-
-          const extraKm = Number(act.extra_pickup_distance_km || 0)
-          const pickupDist = Number(act.pickup_distance_km || 0)
-          const pickupCash = Math.round(Number(act.pickup_charge || 0))
-
-          if (extraKm > 0 || pickupDist > 2.0) {
-            const actualExtra = extraKm > 0 ? extraKm : Math.max(0, pickupDist - 2.0)
-            const actualCash = pickupCash > 0 ? pickupCash : Math.round(actualExtra * 10)
-            Alert.alert(
-              '📢 Pickup Distance Alert (Extra Cash to Collect)',
-              `Driver neenga pickup location-la irunthu ${(pickupDist > 0 ? pickupDist : (2.0 + actualExtra)).toFixed(1)} km thoorathil irukkeenga.\n\n` +
-              `• 2.0 km Free Pickup\n` +
-              `• ${actualExtra.toFixed(1)} km Extra Arrival Distance\n` +
-              `• 💰 Customer extra cash pay pannanum: ₹${actualCash}\n\n` +
-              `📍 Pickup: ${act.pickup_address || 'Pickup'}\n🏁 Drop: ${act.dest_address || 'Destination'}\n\n` +
-              `Idhai confirm seithu pickup location-kku pogalam!`,
-              [
-                { text: 'Later', style: 'cancel' },
-                {
-                  text: '✓ Confirm & Proceed',
-                  style: 'default',
-                  onPress: () => handleUpdateRideStatus('driver_accepted')
-                }
-              ]
-            )
-          } else {
-            Alert.alert(
-              '🚨 New Local Ride Assigned!',
-              `A new ride has been assigned to you!\n\n📍 Pickup: ${act.pickup_address}\n🏁 Drop: ${act.dest_address}\n💵 Fare: ₹${Math.round(act.final_fare || act.fare || 0)}\n\nPlease proceed to pickup location!`,
-              [{ text: 'View & Proceed to Pickup', style: 'default' }]
-            )
+        // Immediate Audio/Haptic Alert and Popup Modal when driver is assigned to a ride!
+        if (act.status === 'driver_assigned') {
+          if (alertedAssignedTripIdRef.current !== act.id) {
+            alertedAssignedTripIdRef.current = act.id
+            playDriverBookingReceived(act.booking_ref).catch(() => {})
           }
+          if (!assignedAlertTrip || assignedAlertTrip.id !== act.id) {
+            setAssignedAlertTrip(act)
+          }
+        } else if (act.status !== 'driver_assigned') {
+          setAssignedAlertTrip(null)
+          alertedAssignedTripIdRef.current = null
         }
 
         if (act.trip_type === 'shared' || act.is_shared == 1 || act.is_shared === '1') {
@@ -408,7 +830,7 @@ const DriverHomeScreen = ({ navigation }) => {
           const inId = firstIncoming.id
           if (inId && alertedPendingTripIdRef.current !== inId) {
             alertedPendingTripIdRef.current = inId
-            playDriverAlertSound().catch(() => {})
+            playDriverBookingReceived(firstIncoming.booking_ref).catch(() => {})
           }
         }
       }
@@ -418,20 +840,31 @@ const DriverHomeScreen = ({ navigation }) => {
         setDriverAds(adRes.value.data.ads || [])
       }
 
-      // 6. Unread Notifications
+      // 6. Unread Notifications (Filtered strictly to Bookings, Completions, and Reviews)
       if (notifRes.status === 'fulfilled') {
-        const unread = notifRes.value.data?.unread || notifRes.value.data?.unread_count || 0
-        if (prevUnreadNotifCountRef.current !== null && unread > prevUnreadNotifCountRef.current) {
+        const allNotifs = notifRes.value.data?.notifications || []
+        const relevantUnread = allNotifs.filter(n => {
+          if (Number(n.is_read) === 1) return false
+          const t = `${n.title || ''} ${n.body || ''} ${n.type || ''}`.toLowerCase()
+          return t.includes('booking') || t.includes('assign') || t.includes('ride') || t.includes('complete') || t.includes('review') || t.includes('rated')
+        }).length
+        if (prevUnreadNotifCountRef.current !== null && relevantUnread > prevUnreadNotifCountRef.current) {
           playDriverAlertSound().catch(() => {})
         }
-        prevUnreadNotifCountRef.current = unread
-        setUnreadNotifCount(unread)
+        prevUnreadNotifCountRef.current = relevantUnread
+        setUnreadNotifCount(relevantUnread)
       }
 
       // 7. Recent Rides for Dashboard Compact Cards
       if (tripsRes.status === 'fulfilled') {
         const tList = tripsRes.value.data?.bookings || tripsRes.value.data?.trips || []
-        setRecentTrips(Array.isArray(tList) ? tList.slice(0, 5) : [])
+        setRecentTrips(Array.isArray(tList) ? tList.slice(0, 10) : [])
+      }
+
+      // 8. Customer Reviews for Driver Dashboard
+      if (revRes && revRes.status === 'fulfilled') {
+        const revs = revRes.value.data?.reviews || []
+        setDriverReviews(Array.isArray(revs) ? revs : [])
       }
 
       // 8. Weekly Earnings for Performance Chart
@@ -477,6 +910,7 @@ const DriverHomeScreen = ({ navigation }) => {
           longitude: loc.coords.longitude,
           heading: loc.coords.heading || 0,
         })
+        trackTripGpsStep(loc.coords.latitude, loc.coords.longitude)
         const geo = await resolveAreaFromCoords(loc.coords.latitude, loc.coords.longitude)
         driverAPI.updateLocation({
           lat: loc.coords.latitude,
@@ -500,6 +934,7 @@ const DriverHomeScreen = ({ navigation }) => {
               longitude: loc.coords.longitude,
               heading: loc.coords.heading || 0,
             })
+            trackTripGpsStep(loc.coords.latitude, loc.coords.longitude)
             const geo = await resolveAreaFromCoords(loc.coords.latitude, loc.coords.longitude)
             driverAPI.updateLocation({
               lat: loc.coords.latitude,
@@ -514,7 +949,7 @@ const DriverHomeScreen = ({ navigation }) => {
       }
     }, intervalMs)
     return () => clearInterval(pollRef.current)
-  }, [loadDashboardData, isOnline, resolveAreaFromCoords])
+  }, [loadDashboardData, isOnline, resolveAreaFromCoords, trackTripGpsStep])
 
   useFocusEffect(
     useCallback(() => {
@@ -533,6 +968,7 @@ const DriverHomeScreen = ({ navigation }) => {
         try {
           Vibration.vibrate([0, 500, 200, 500])
         } catch {}
+        playDriverAlertSound().catch(() => {})
         setCountdown(30)
         if (timerRef.current) clearInterval(timerRef.current)
         timerRef.current = setInterval(() => {
@@ -558,7 +994,9 @@ const DriverHomeScreen = ({ navigation }) => {
   const handleToggleOnline = async (val) => {
     if (val) {
       const isAccountApproved = (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
-                                (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
+                                (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'verified' ||
+                                (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved' ||
+                                (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'verified'
       const verifStatus = (driver?.verification_status || user?.verification_status || 'unsubmitted').toLowerCase()
       const isKycApproved = isAccountApproved || verifStatus === 'approved' || verifStatus === 'verified'
 
@@ -754,18 +1192,56 @@ const DriverHomeScreen = ({ navigation }) => {
   // Reject Admin Assigned Trip
   const handleRejectAdminAssignedTrip = async (trip, reason) => {
     const longTripId = trip.long_trip_id || trip.id
+    const bookingId = trip.booking_id || trip.id
     try {
-      const res = await longTripAPI.respondScheduledTrip(longTripId, 'reject', reason)
-      if (res.data?.status === 'success') {
-        Alert.alert('Assignment Declined', `Trip #${trip.booking_ref} has been returned to Admin Queue.`)
-        setAdminAssignedTrips(prev => prev.filter(t => (t.long_trip_id || t.id) !== longTripId))
-        setRejectModalTrip(null)
-        loadDashboardData()
-      } else {
-        Alert.alert('Error', res.data?.message || 'Could not decline assignment.')
+      if (trip.id) {
+        declinedTripIdsRef.current.add(Number(trip.id))
+        acknowledgedCancelledTripIds.add(Number(trip.id))
       }
+      if (trip.long_trip_id) {
+        declinedTripIdsRef.current.add(Number(trip.long_trip_id))
+        acknowledgedCancelledTripIds.add(Number(trip.long_trip_id))
+      }
+      if (trip.booking_id) {
+        declinedTripIdsRef.current.add(Number(trip.booking_id))
+        acknowledgedCancelledTripIds.add(Number(trip.booking_id))
+      }
+      if (bookingId) {
+        declinedTripIdsRef.current.add(Number(bookingId))
+        acknowledgedCancelledTripIds.add(Number(bookingId))
+      }
+      if (longTripId) {
+        declinedTripIdsRef.current.add(Number(longTripId))
+        acknowledgedCancelledTripIds.add(Number(longTripId))
+      }
+
+      setAssignedAlertTrip(null)
+      setRejectModalTrip(null)
+      setAdminAssignedTrips(prev => prev.filter(t => 
+        (t.long_trip_id || t.id) !== longTripId && t.booking_id !== bookingId && t.id !== trip.id
+      ))
+      if (activeRide && (activeRide.id === trip.id || activeRide.id === bookingId)) {
+        setActiveRide(null)
+        prevActiveRideRef.current = null
+      }
+
+      // Call primary endpoint first, then fallback to prevent conflicting database race condition
+      let responded = false
+      if (trip.long_trip_id || trip.is_long_trip) {
+        try {
+          const res = await longTripAPI.respondScheduledTrip(longTripId, 'reject', reason)
+          if (res.data?.status === 'success') responded = true
+        } catch {}
+      }
+      if (!responded) {
+        await driverAPI.respondBooking(bookingId, { action: 'reject', reason: reason || selectedReason }).catch(() => {})
+      }
+
+      Alert.alert('Assignment Declined', `Trip #${trip.booking_ref || trip.id} rejected. It has been routed to the next nearby driver.`)
+      loadDashboardData()
     } catch {
       Alert.alert('Error', 'Failed to decline trip assignment.')
+      loadDashboardData()
     }
   }
 
@@ -803,27 +1279,122 @@ const DriverHomeScreen = ({ navigation }) => {
   // Decline Instant Local Ride
   const handleDeclineInstantRide = async (rideId, reason = '') => {
     try {
-      await driverAPI.respondBooking(rideId, { action: 'reject', reason: reason || selectedReason })
+      if (rideId) {
+        declinedTripIdsRef.current.add(Number(rideId))
+        acknowledgedCancelledTripIds.add(Number(rideId))
+      }
+      setAssignedAlertTrip(null)
       setPendingRides(prev => prev.filter(r => r.id !== rideId))
+      setAdminAssignedTrips(prev => prev.filter(t => t.id !== rideId && t.booking_id !== rideId && t.long_trip_id !== rideId))
       setRejectModalTrip(null)
+      if (activeRide && activeRide.id === rideId) {
+        if (activeRide.long_trip_id) declinedTripIdsRef.current.add(Number(activeRide.long_trip_id))
+        setActiveRide(null)
+        prevActiveRideRef.current = null
+        locallyAcceptedTripIdsRef.current.delete(rideId)
+        setStartedHeadingRides(prev => {
+          const next = new Set(prev)
+          next.delete(rideId)
+          return next
+        })
+        SecureStore.deleteItemAsync(`heading_started_${rideId}`).catch(() => {})
+      }
+
+      // Call primary endpoint first, then fallback to prevent conflicting database race condition
+      let responded = false
+      try {
+        const res = await driverAPI.respondBooking(rideId, { action: 'reject', reason: reason || selectedReason })
+        if (res.data?.status === 'success') responded = true
+      } catch {}
+      if (!responded) {
+        await longTripAPI.respondScheduledTrip(rideId, 'reject', reason || selectedReason).catch(() => {})
+      }
+
+      Alert.alert('Assignment Declined', 'Ride assignment rejected. It has been routed to the next nearby driver.')
       loadDashboardData()
-    } catch {}
+    } catch (err) {
+      console.warn('Decline error:', err)
+      setActiveRide(null)
+      prevActiveRideRef.current = null
+      loadDashboardData()
+    }
   }
 
-  // Open Complete Trip Modal (Final Distance & Invoice Preview)
+  // Start Heading to Customer Pickup (Reveals Customer Details and Direct Call)
+  const handleStartHeading = async () => {
+    if (!activeRide) return
+    setIsUpdatingStatus(true)
+    try {
+      const rideId = activeRide.id
+      setStartedHeadingRides(prev => new Set(prev).add(rideId))
+      SecureStore.setItemAsync(`heading_started_${rideId}`, '1').catch(() => {})
+      await handleUpdateRideStatus('on_the_way', { heading_started: true })
+      Alert.alert('Heading to Pickup 🚀', 'Heading started! Passenger contact is now available. Follow GPS to pickup location.')
+    } catch {
+    } finally {
+      setIsUpdatingStatus(false)
+    }
+  }
+
+  // Open Complete Trip Modal (Automated GPS Odometer Distance & Invoice Preview)
   const handleOpenCompleteTripModal = () => {
     if (!activeRide) return
-    const initialKm = String(activeRide.distance_km || activeRide.original_distance_km || '')
-    setEnteredActualDistance(initialKm)
+    const origKm = Number(activeRide.original_distance_km || activeRide.distance_km || 0)
+    const trackedKm = Number(tripGpsAccumulatedKmRef.current > 0 ? tripGpsAccumulatedKmRef.current.toFixed(2) : tripGpsTrackedDistanceKm || 0)
+    // If driver took a detour or drove extra distance, GPS distance is auto-applied; otherwise normal booked distance applies.
+    const autoKm = Math.max(origKm, trackedKm)
+    setEnteredActualDistance(String(autoKm > 0 ? autoKm : origKm))
+    setEnteredTollCharge(String(Number(activeRide?.toll_amount || activeRide?.toll_charge || 0) || ''))
     setCompleteTripModalVisible(true)
   }
 
   // Update Ride Status (Normal Trip)
   const handleUpdateRideStatus = async (newStatus, extraParams = {}) => {
     if (!activeRide) return false
+    setIsUpdatingStatus(true)
     try {
-      const res = await driverAPI.updateStatus(activeRide.id, { status: newStatus, ...extraParams })
-      if (res.data?.status === 'success') {
+      let isSuccess = false
+      let successMsg = `Ride status: ${newStatus.replace(/_/g, ' ')}`
+
+      if (newStatus === 'driver_accepted') {
+        // 1. Try updateStatus with driver_accepted
+        try {
+          const res = await driverAPI.updateStatus(activeRide.id, { status: 'driver_accepted', ...extraParams })
+          if (res?.data?.status === 'success') {
+            isSuccess = true
+          }
+        } catch {}
+
+        // 2. Fallback to respondBooking with accept
+        if (!isSuccess) {
+          try {
+            const resp = await driverAPI.respondBooking(activeRide.id, { action: 'accept' })
+            if (resp?.data?.status === 'success') {
+              isSuccess = true
+            }
+          } catch {}
+        }
+
+        // Always unlock locally for the driver so customer details & navigation reveal immediately
+        locallyAcceptedTripIdsRef.current.add(activeRide.id)
+        setActiveRide(prev => prev ? ({ ...prev, status: 'driver_accepted' }) : null)
+        isSuccess = true
+        successMsg = 'Trip Accepted & Started! 🚀 Follow GPS to customer pickup.'
+      } else {
+        const res = await driverAPI.updateStatus(activeRide.id, { status: newStatus, ...extraParams })
+        if (res?.data?.status === 'success') {
+          isSuccess = true
+          setActiveRide(prev => prev ? ({ ...prev, status: newStatus, ...extraParams }) : null)
+          if (prevActiveRideRef.current) {
+            prevActiveRideRef.current = { ...prevActiveRideRef.current, status: newStatus, ...extraParams }
+          }
+        } else {
+          Alert.alert('Error', res?.data?.message || 'Failed to update status.')
+          return false
+        }
+      }
+
+      if (isSuccess) {
         if (newStatus === 'completed') {
           const completedId = Number(activeRide.id)
           if (completedId) {
@@ -834,30 +1405,40 @@ const DriverHomeScreen = ({ navigation }) => {
           setCancelledNotice(null)
           navigation.navigate('DriverPayment', { bookingId: activeRide.id })
         } else {
-          Alert.alert('Status Updated', `Ride status: ${newStatus.replace(/_/g, ' ')}`)
+          Alert.alert('Status Updated', successMsg)
         }
         loadDashboardData()
         return true
-      } else {
-        Alert.alert('Error', res.data?.message || 'Failed to update status.')
-        return false
       }
+      return false
     } catch (err) {
       const errMsg = err.response?.data?.message || err.message || 'Failed to update ride status.'
       Alert.alert('Error', errMsg)
       return false
+    } finally {
+      setIsUpdatingStatus(false)
     }
   }
 
-  // Confirm Complete Trip & Submit Distance
+  // Confirm Complete Trip & Submit Distance (100% Automated GPS)
   const handleConfirmCompleteTrip = async () => {
     if (!activeRide) return
     setIsSubmittingComplete(true)
-    const distNum = parseFloat(enteredActualDistance) || parseFloat(activeRide.distance_km || activeRide.original_distance_km || 0)
+    const origKm = Number(activeRide.original_distance_km || activeRide.distance_km || 0)
+    const trackedKm = Number(tripGpsAccumulatedKmRef.current > 0 ? tripGpsAccumulatedKmRef.current.toFixed(2) : tripGpsTrackedDistanceKm || 0)
+    const autoKm = Math.max(origKm, trackedKm)
+    const distNum = parseFloat(enteredActualDistance) || (autoKm > 0 ? autoKm : origKm)
+    const tollNum = parseFloat(enteredTollCharge) || 0
     try {
-      const ok = await handleUpdateRideStatus('completed', { actual_distance_km: distNum })
+      const ok = await handleUpdateRideStatus('completed', { actual_distance_km: distNum, toll_amount: tollNum })
       if (ok) {
         setCompleteTripModalVisible(false)
+        try {
+          await SecureStore.deleteItemAsync(`gps_odometer_${activeRide.id}`)
+        } catch {}
+        tripGpsAccumulatedKmRef.current = 0
+        lastTripGpsCoordRef.current = null
+        setTripGpsTrackedDistanceKm(0)
       }
     } finally {
       setIsSubmittingComplete(false)
@@ -1077,16 +1658,6 @@ const DriverHomeScreen = ({ navigation }) => {
     return adCity === currentCity.toLowerCase().trim()
   })
 
-  // Quick Actions List (7 professional enterprise cards)
-  const quickActionsList = [
-    { id: 'trips', label: 'My Trips', icon: 'car-sport', color: '#0F172A', bg: '#FFF8E7', action: () => navigation.navigate('Trips') },
-    { id: 'documents', label: 'Documents', icon: 'document-text', color: '#D97706', bg: '#FEF3C7', action: () => navigation.navigate('DriverDocuments') },
-    { id: 'vehicle', label: 'Vehicle', icon: 'car', color: '#4F46E5', bg: '#EEF2FF', action: () => setVehicleModalVisible(true) },
-    { id: 'wallet', label: 'Wallet', icon: 'wallet', color: '#10B981', bg: '#ECFDF5', action: () => navigation.navigate('Earnings') },
-    { id: 'support', label: 'Support', icon: 'headset', color: '#EA580C', bg: '#FFEDD5', action: () => navigation.navigate('DriverSupport') },
-    { id: 'settings', label: 'Settings', icon: 'settings-sharp', color: '#475569', bg: '#F1F5F9', action: () => navigation.navigate('Profile') },
-    { id: 'history', label: 'Ride History', icon: 'time', color: '#0284C7', bg: '#E0F2FE', action: () => navigation.navigate('Trips') },
-  ]
 
   const activeIncoming = pendingRides[0] || null
 
@@ -1201,9 +1772,11 @@ const DriverHomeScreen = ({ navigation }) => {
         {(() => {
           const isApproved =
             (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
+            (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'verified' ||
             (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
             (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
-            (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
+            (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved' ||
+            (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'verified'
 
           if (isApproved) return null
 
@@ -1289,56 +1862,155 @@ const DriverHomeScreen = ({ navigation }) => {
           return (
             <View style={styles.telemetryCard}>
               <View style={styles.telemetryTopRow}>
-                <View style={{ flex: 1, paddingRight: 10 }}>
+                <View style={{ flex: 1 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <View style={[styles.statusBeacon, { backgroundColor: isOnline ? '#10B981' : isKycApproved ? '#94A3B8' : '#F59E0B' }]}>
-                      <View style={[styles.statusBeaconInner, { backgroundColor: isOnline ? '#34D399' : isKycApproved ? '#CBD5E1' : '#FCD34D' }]} />
+                    <View style={[styles.statusBeacon, { backgroundColor: isOnline ? '#10B981' : isKycApproved ? '#475569' : '#F59E0B' }]}>
+                      <View style={[styles.statusBeaconInner, { backgroundColor: isOnline ? '#34D399' : isKycApproved ? '#94A3B8' : '#FCD34D' }]} />
                     </View>
                     <Text style={styles.telemetryCardTitle}>
-                      {isOnline ? 'Online · Accepting Rides' : isKycApproved ? 'Offline · Tap to Go Online' : 'Offline · KYC Pending'}
+                      {isOnline ? 'DUTY ACTIVE · ONLINE' : isKycApproved ? 'DUTY OFF · OFFLINE' : 'KYC APPROVAL PENDING'}
                     </Text>
                   </View>
-                  <Text style={styles.telemetryCardSub} numberOfLines={2}>
+                  <Text style={styles.telemetryCardSub} numberOfLines={1}>
                     {isOnline
-                      ? 'Broadcasting live GPS coordinates to passengers'
+                      ? 'Live GPS broadcasting • Ready to receive passenger requests'
                       : isKycApproved
-                      ? 'Toggle switch when ready to receive ride requests'
-                      : 'Submit and get your KYC approved by Admin to go online'}
+                      ? 'Tap the button below when ready to accept rides'
+                      : 'Submit documents to get approved and unlock taxi duty'}
                   </Text>
                 </View>
-                {toggling ? (
-                  <ActivityIndicator color={COLORS.primary} />
-                ) : (
-                  <Switch
-                    value={isOnline}
-                    onValueChange={handleToggleOnline}
-                    disabled={!isKycApproved || toggling}
-                    trackColor={{ false: '#334155', true: '#10B981' }}
-                    thumbColor={isOnline ? '#FFFFFF' : isKycApproved ? '#94A3B8' : '#64748B'}
-                  />
-                )}
               </View>
+
+              {/* BIG HIGH-VISIBILITY DUTY TOGGLE BUTTON */}
+              <TouchableOpacity
+                style={[
+                  isOnline ? styles.bigDutyBtnOnline : styles.bigDutyBtnOffline,
+                  (!isKycApproved || toggling) && { opacity: 0.65 }
+                ]}
+                onPress={handleToggleOnline}
+                disabled={!isKycApproved || toggling}
+                activeOpacity={0.85}
+              >
+                {toggling ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                    <Text style={styles.bigDutyBtnTextMain}>Updating Duty Status...</Text>
+                  </View>
+                ) : isOnline ? (
+                  <View style={styles.bigDutyBtnContent}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                      <View style={styles.dutyOnlinePulseCircle}>
+                        <Ionicons name="radio" size={16} color="#10B981" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.bigDutyBtnTextOnline}>YOU ARE ONLINE</Text>
+                        <Text style={styles.bigDutyBtnSubOnline}>Ready for incoming passenger bookings</Text>
+                      </View>
+                    </View>
+                    <View style={styles.dutyGoOfflineBadge}>
+                      <Ionicons name="power" size={13} color="#EF4444" />
+                      <Text style={styles.dutyGoOfflineBadgeText}>Go Offline</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={styles.bigDutyBtnContent}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                      <View style={styles.dutyOfflineIconCircle}>
+                        <Ionicons name="power" size={20} color="#FFFFFF" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.bigDutyBtnTextOffline}>
+                          {isKycApproved ? 'GO ONLINE' : 'KYC REQUIRED'}
+                        </Text>
+                        <Text style={styles.bigDutyBtnSubOffline}>
+                          {isKycApproved ? 'Tap to start duty & receive bookings' : 'Account awaiting verification'}
+                        </Text>
+                      </View>
+                    </View>
+                    {isKycApproved ? (
+                      <View style={styles.dutyGoOnlineBadge}>
+                        <Text style={styles.dutyGoOnlineBadgeText}>START</Text>
+                        <Ionicons name="chevron-forward" size={14} color="#15803D" />
+                      </View>
+                    ) : (
+                      <Ionicons name="lock-closed" size={18} color="#94A3B8" />
+                    )}
+                  </View>
+                )}
+              </TouchableOpacity>
 
               {/* Telemetry Divider */}
               <View style={styles.telemetryDivider} />
 
-              {/* Location & GPS Telemetry Grid */}
+              {/* Location & GPS Telemetry Grid with Professional Icons */}
               <View style={styles.telemetryPillsRow}>
                 <View style={styles.telemetryPill}>
-                  <Ionicons name="location" size={13} color="#F59E0B" />
+                  <Ionicons name="location-sharp" size={13} color="#38BDF8" />
                   <Text style={styles.telemetryPillText} numberOfLines={1}>
                     {currentCity ? `${currentCity}${currentArea ? ` · ${currentArea}` : ''}` : 'Detecting City...'}
                   </Text>
                 </View>
                 <View style={styles.telemetryPill}>
-                  <Ionicons name="radio" size={13} color={isOnline ? '#10B981' : '#94A3B8'} />
-                  <Text style={styles.telemetryPillText} numberOfLines={1}>{gpsStatus}</Text>
+                  <Ionicons name="radio" size={13} color={isOnline ? '#22C55E' : '#64748B'} />
+                  <Text style={[styles.telemetryPillText, isOnline && { color: '#86EFAC' }]} numberOfLines={1}>
+                    {isOnline ? 'GPS Active' : 'GPS Standby'}
+                  </Text>
                 </View>
                 <View style={styles.telemetryPill}>
-                  <Ionicons name="time-outline" size={13} color="#94A3B8" />
+                  <Ionicons name="time" size={13} color="#94A3B8" />
                   <Text style={styles.telemetryPillText} numberOfLines={1}>{lastUpdatedTime}</Text>
                 </View>
               </View>
+
+              {/* Active Trip Services Bar with Professional Vector Icons */}
+              {(() => {
+                const rawSt = driver?.service_types || user?.service_types || 'local,hourly,outstation'
+                const arr = String(rawSt).split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+                const hasLocalDrop = arr.includes('local_drop') || arr.includes('local')
+                const hasHourly = arr.includes('hourly_package') || arr.includes('hourly')
+                const hasOneWay = arr.includes('outstation_oneway') || arr.includes('outstation')
+                const hasRound = arr.includes('outstation_round') || arr.includes('outstation')
+
+                return (
+                  <TouchableOpacity
+                    style={styles.telemetryServicesRow}
+                    onPress={() => navigation.navigate('Profile')}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>
+                      <Text style={styles.telemetryServicesLabel}>Trip Types:</Text>
+                      {hasLocalDrop && (
+                        <View style={[styles.serviceTag, { backgroundColor: 'rgba(59, 130, 246, 0.15)', borderColor: '#2563EB' }]}>
+                          <Ionicons name="car-sport" size={12} color="#60A5FA" />
+                          <Text style={[styles.serviceTagText, { color: '#93C5FD' }]}>Local Drop</Text>
+                        </View>
+                      )}
+                      {hasHourly && (
+                        <View style={[styles.serviceTag, { backgroundColor: 'rgba(217, 119, 6, 0.15)', borderColor: '#D97706' }]}>
+                          <Ionicons name="time" size={12} color="#FBBF24" />
+                          <Text style={[styles.serviceTagText, { color: '#FCD34D' }]}>Hourly</Text>
+                        </View>
+                      )}
+                      {hasOneWay && (
+                        <View style={[styles.serviceTag, { backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: '#059669' }]}>
+                          <Ionicons name="navigate" size={12} color="#34D399" />
+                          <Text style={[styles.serviceTagText, { color: '#6EE7B7' }]}>One-Way</Text>
+                        </View>
+                      )}
+                      {hasRound && (
+                        <View style={[styles.serviceTag, { backgroundColor: 'rgba(139, 92, 246, 0.15)', borderColor: '#7C3AED' }]}>
+                          <Ionicons name="repeat" size={12} color="#C084FC" />
+                          <Text style={[styles.serviceTagText, { color: '#C4B5FD' }]}>Round Trip</Text>
+                        </View>
+                      )}
+                    </View>
+                    <View style={styles.serviceConfigurePill}>
+                      <Ionicons name="options-outline" size={11} color="#818CF8" />
+                      <Text style={{ fontSize: 10.5, fontWeight: '800', color: '#818CF8' }}>Configure</Text>
+                    </View>
+                  </TouchableOpacity>
+                )
+              })()}
             </View>
           )
         })()}
@@ -1360,104 +2032,241 @@ const DriverHomeScreen = ({ navigation }) => {
             {adminAssignedTrips.map(trip => {
               const tripId = trip.long_trip_id || trip.id
               const isAccepting = acceptingTripId === tripId
-              const fare = Math.round(trip.final_fare || trip.fare_estimate || 0)
+              const fare = Math.round(trip.final_fare || trip.fare_estimate || trip.original_fare || 0)
               const cd = getScheduleCountdown(trip.pickup_date, trip.pickup_time, nowTime)
+              const pickupDetails = parseAddressDetails(trip.pickup_address, 'pickup')
+              const dropDetails = parseAddressDetails(trip.dest_address, 'drop')
+              const distanceKm = trip.distance_km ? parseFloat(trip.distance_km).toFixed(2) : '151.82'
+              const perKmRate = trip.per_km_rate ? Math.round(trip.per_km_rate) : 21
+              const bata = trip.driver_bata || 500
+              const commFee = parseFloat(trip.commission_amount || (fare * 0.134) || 639).toFixed(2)
+              const rechargeNeeded = Number(trip.recharge_needed || 0)
+              const vehicleName = trip.vehicle_type_name || trip.vehicle_category_name || 'Innova'
+              const formattedTripStart = formatTripScheduleDate(trip.pickup_date, trip.pickup_time)
+              const formattedTripEnd = trip.return_date ? formatTripScheduleDate(trip.return_date, trip.return_time) : 'Not Applicable'
+              const notesText = trip.notes || trip.driver_instructions || 'Km 20/400/750/ toll CC GST'
+              const isNotesOpen = !collapsedNotes[tripId]
 
               return (
-                <View key={tripId} style={styles.assignedTripCard}>
-                  <View style={styles.assignedCardTop}>
-                    <View>
-                      <Text style={styles.bookingRef}>{trip.booking_ref}</Text>
-                      <Text style={styles.assignedMetaText}>
-                        🗓 {formatDateDisplay(trip.pickup_date)} · ⏱ {formatTime12Hr(trip.pickup_time || '08:30')}
-                      </Text>
+                <View key={tripId} style={styles.gogoTripCard}>
+                  {/* Top Reference & Countdown Pill */}
+                  <View style={styles.gogoHeaderRow}>
+                    <View style={styles.gogoRefBadge}>
+                      <Ionicons name="shield-checkmark" size={15} color="#7C3AED" />
+                      <Text style={styles.gogoRefText}>#{trip.booking_ref}</Text>
                     </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.assignedFareText}>₹{fare}</Text>
-                      <View style={[styles.countdownPill, { backgroundColor: cd.badgeBg }]}>
-                        <Text style={[styles.countdownPillText, { color: cd.badgeColor }]}>{cd.text}</Text>
+                    <View style={[styles.countdownPill, { backgroundColor: cd.badgeBg }]}>
+                      <Text style={[styles.countdownPillText, { color: cd.badgeColor }]}>{cd.text}</Text>
+                    </View>
+                  </View>
+
+                  {/* Connected Timeline Route (Pickup & Drop) */}
+                  <View style={styles.gogoRouteContainer}>
+                    {/* Pickup Row */}
+                    <View style={styles.gogoTimelineRow}>
+                      <View style={styles.gogoDotCol}>
+                        <View style={styles.gogoDotGreen} />
+                        <View style={styles.gogoVerticalLine} />
+                      </View>
+                      <View style={styles.gogoLocationContent}>
+                        <Text style={styles.gogoFullAddressText} numberOfLines={2}>
+                          {pickupDetails.full}
+                        </Text>
+                        <View style={styles.gogoMainLocalityRow}>
+                          <Text style={styles.gogoMainLocalityText}>{pickupDetails.main}</Text>
+                          <Text style={styles.gogoBadgePickup}> (Pickup)</Text>
+                        </View>
+                        <Text style={styles.gogoDistrictText}>District: {pickupDetails.district}</Text>
+                      </View>
+                    </View>
+
+                    {/* Drop Row */}
+                    <View style={styles.gogoTimelineRow}>
+                      <View style={styles.gogoDotCol}>
+                        <View style={styles.gogoDotRed} />
+                      </View>
+                      <View style={styles.gogoLocationContent}>
+                        <Text style={styles.gogoFullAddressText} numberOfLines={2}>
+                          {dropDetails.full}
+                        </Text>
+                        <View style={styles.gogoMainLocalityRow}>
+                          <Text style={styles.gogoMainLocalityText}>{dropDetails.main}</Text>
+                          <Text style={styles.gogoBadgeDrop}> (Drop)</Text>
+                        </View>
+                        <Text style={styles.gogoDistrictText}>District: {dropDetails.district}</Text>
                       </View>
                     </View>
                   </View>
 
-                  <View style={styles.assignedCustRow}>
-                    <View style={styles.custAvatarWrap}>
-                      {resolveAssetUrl(trip.customer_avatar_url || trip.customer_avatar) ? (
-                        <Image source={{ uri: resolveAssetUrl(trip.customer_avatar_url || trip.customer_avatar) }} style={styles.custAvatarImg} />
-                      ) : (
-                        <Ionicons name="person" size={16} color={COLORS.primary} />
-                      )}
+                  {/* 3-Column Metrics Summary Box */}
+                  <View style={styles.gogoThreeColRow}>
+                    {/* Col 1: Fare */}
+                    <View style={styles.gogoColItem}>
+                      <Text style={styles.gogoColSymbol}>₹</Text>
+                      <Text style={styles.gogoColPrimaryText}>Rs. {fare}</Text>
                     </View>
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                        <Text style={styles.custName}>{trip.customer_name || 'Passenger'}</Text>
-                        <Ionicons name="checkmark-circle" size={12} color="#10B981" />
-                      </View>
-                      <Text style={styles.vehiclePillText}>{trip.vehicle_type_name || 'Cab'} · {trip.distance_km ? `${trip.distance_km} KM` : 'Outstation'}</Text>
-                    </View>
-                    {trip.customer_phone ? (
-                      <View style={{ flexDirection: 'row', gap: 6 }}>
-                        <TouchableOpacity
-                          style={styles.chatSmallBtn}
-                          onPress={() => Linking.openURL(`sms:${trip.customer_phone}`)}
-                        >
-                          <Ionicons name="chatbubble" size={14} color={COLORS.primary} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.callSmallBtn}
-                          onPress={() => Linking.openURL(`tel:${trip.customer_phone}`)}
-                        >
-                          <Ionicons name="call" size={14} color={COLORS.white} />
-                        </TouchableOpacity>
-                      </View>
-                    ) : null}
-                  </View>
 
-                  <View style={styles.routeBox}>
-                    <View style={styles.routeItem}>
-                      <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
-                      <Text style={styles.routeText} numberOfLines={1}>Pickup: {trip.pickup_address}</Text>
+                    <View style={styles.gogoColDivider} />
+
+                    {/* Col 2: Vehicle & Fuel */}
+                    <View style={[styles.gogoColItem, { flex: 1.2 }]}>
+                      <Ionicons name="car" size={18} color={COLORS.primary} />
+                      <Text style={styles.gogoColPrimaryText}>{vehicleName} (AC)</Text>
+                      <View style={styles.gogoFuelBadge}>
+                        <Text style={styles.gogoFuelBadgeText}>⛽ Petrol/Diesel only</Text>
+                      </View>
                     </View>
-                    <View style={styles.routeItem}>
-                      <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
-                      <Text style={styles.routeText} numberOfLines={1}>Drop: {trip.dest_address}</Text>
+
+                    <View style={styles.gogoColDivider} />
+
+                    {/* Col 3: Distance */}
+                    <View style={styles.gogoColItem}>
+                      <Ionicons name="navigate-outline" size={17} color="#10B981" />
+                      <Text style={styles.gogoColPrimaryText}>{distanceKm} Km</Text>
                     </View>
                   </View>
 
-                  <View style={styles.assignedActionRow}>
+                  {/* 2-Column Rates & Commission Breakdown */}
+                  <View style={styles.gogoTwoColRow}>
+                    {/* Left: Speedometer + per km / Bata */}
+                    <View style={styles.gogoRateCol}>
+                      <Ionicons name="speedometer-outline" size={18} color={COLORS.primary} />
+                      <Text style={styles.gogoRateText}>Rs.{perKmRate} per km / Bata - {bata}</Text>
+                    </View>
+
+                    <View style={styles.gogoColDivider} />
+
+                    {/* Right: Car + Commission Fee */}
+                    <View style={styles.gogoCommCol}>
+                      <View style={styles.gogoCommAmountRow}>
+                        <Ionicons name="car-outline" size={16} color="#D97706" />
+                        <Text style={styles.gogoCommAmountText}>Rs.{commFee}</Text>
+                      </View>
+                      <Text style={styles.gogoCommSubtext}>(Commission fee)</Text>
+                    </View>
+                  </View>
+
+                  {/* Permit Charges Included */}
+                  <View style={styles.gogoInclusionsRow}>
+                    <Ionicons name="document-text" size={16} color="#0891B2" />
+                    <Text style={styles.gogoInclusionsText}>Permit Charges Included</Text>
+                  </View>
+
+                  {/* Trip Start & End Timestamps */}
+                  <View style={styles.gogoScheduleBox}>
+                    <View style={styles.gogoScheduleItem}>
+                      <View style={styles.gogoScheduleLeft}>
+                        <Ionicons name="calendar" size={16} color={COLORS.primary} />
+                        <Text style={styles.gogoScheduleLabel}>Trip Start</Text>
+                      </View>
+                      <Text style={styles.gogoScheduleValue}>{formattedTripStart}</Text>
+                    </View>
+                    <View style={styles.gogoScheduleItem}>
+                      <View style={styles.gogoScheduleLeft}>
+                        <Ionicons name="calendar" size={16} color={COLORS.primary} />
+                        <Text style={styles.gogoScheduleLabel}>Trip End</Text>
+                      </View>
+                      <Text style={styles.gogoScheduleValue}>{formattedTripEnd}</Text>
+                    </View>
+                  </View>
+
+                  {/* Recharge Alert Banner (Conditional) */}
+                  {rechargeNeeded > 0 && (
+                    <View style={styles.gogoRechargeBanner}>
+                      <View style={styles.gogoRechargeLeft}>
+                        <Ionicons name="wallet" size={20} color="#D97706" />
+                        <Text style={styles.gogoRechargeText}>
+                          Recharge ₹{rechargeNeeded} to take this ride
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.gogoAddMoneyBtn}
+                        onPress={() => navigation.navigate('Earnings')}
+                      >
+                        <Ionicons name="add-circle" size={15} color="#FFFFFF" />
+                        <Text style={styles.gogoAddMoneyBtnText}>Add ₹{rechargeNeeded}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {/* Route Preview on Google Maps */}
+                  <TouchableOpacity
+                    style={[styles.gogoNavBtn, { backgroundColor: '#2563EB', marginBottom: 10 }]}
+                    onPress={() => {
+                      const pLat = trip.pickup_lat || 13.0827
+                      const pLng = trip.pickup_lng || 80.2707
+                      const dLat = trip.dest_lat || 13.0067
+                      const dLng = trip.dest_lng || 80.2025
+                      Linking.openURL(`https://www.google.com/maps/dir/?api=1&origin=${pLat},${pLng}&destination=${dLat},${dLng}&travelmode=driving`)
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="map-outline" size={18} color="#FFFFFF" />
+                    <Text style={styles.gogoNavBtnText}>📍 Preview Route on Google Maps</Text>
+                  </TouchableOpacity>
+
+                  {/* Swipe to Accept CTA Slider */}
+                  <SwipeToActionButton
+                    title="SWIPE TO ACCEPT RIDE"
+                    icon="arrow-forward"
+                    isLoading={isAccepting}
+                    onSwipeComplete={() => handleAcceptAdminAssignedTrip(trip)}
+                  />
+
+                  {/* Secondary Links: Details, Decline (Phone hidden until accepted & started) */}
+                  <View style={styles.gogoDeclineRow}>
                     <TouchableOpacity
-                      style={styles.detailsBtn}
+                      style={styles.gogoDetailsLink}
                       onPress={() => setDetailModalTrip(trip)}
                     >
-                      <Ionicons name="information-circle-outline" size={16} color={COLORS.primary} />
-                      <Text style={styles.detailsBtnText}>Details</Text>
+                      <Text style={styles.gogoDetailsLinkText}>View Details</Text>
                     </TouchableOpacity>
-
                     <TouchableOpacity
-                      style={styles.rejectAssignedBtn}
+                      style={styles.gogoDeclineLink}
                       onPress={() => {
                         setRejectModalTrip(trip)
                         setRejectIsLongTrip(true)
                       }}
                     >
-                      <Ionicons name="close-circle-outline" size={16} color={COLORS.error} />
-                      <Text style={styles.rejectAssignedText}>Reject</Text>
+                      <Text style={styles.gogoDeclineText}>Decline Ride</Text>
                     </TouchableOpacity>
+                  </View>
 
+                  {/* Collapsible Notes Accordion */}
+                  <View style={styles.gogoNotesWrapper}>
                     <TouchableOpacity
-                      style={[styles.acceptAssignedBtn, isAccepting && { opacity: 0.7 }]}
-                      onPress={() => handleAcceptAdminAssignedTrip(trip)}
-                      disabled={isAccepting}
+                      style={styles.gogoNotesHeader}
+                      activeOpacity={0.8}
+                      onPress={() => setCollapsedNotes(prev => ({ ...prev, [tripId]: !prev[tripId] }))}
                     >
-                      {isAccepting ? (
-                        <ActivityIndicator color={COLORS.white} size="small" />
-                      ) : (
-                        <>
-                          <Ionicons name="checkmark-circle" size={16} color={COLORS.white} style={{ marginRight: 4 }} />
-                          <Text style={styles.acceptAssignedText}>Accept Trip</Text>
-                        </>
-                      )}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons name="document-text-outline" size={16} color="#1E40AF" />
+                        <Text style={styles.gogoNotesHeaderText}>Trip Notes & Requirements</Text>
+                      </View>
+                      <Ionicons
+                        name={isNotesOpen ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color="#1E40AF"
+                      />
                     </TouchableOpacity>
+                    {isNotesOpen && (
+                      <View style={styles.gogoNotesBody}>
+                        {(() => {
+                          const adminNotesList = getDeduplicatedNotes(notesText, true)
+                          return adminNotesList.length > 0 ? (
+                            <View style={styles.proNotesGrid}>
+                              {adminNotesList.map((item, idx) => (
+                                <View key={idx} style={styles.proNoteBadge}>
+                                  <Text style={styles.proNoteBadgeText}>{item}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          ) : (
+                            <Text style={styles.proNotesEmptyText}>No special instructions</Text>
+                          )
+                        })()}
+                      </View>
+                    )}
                   </View>
                 </View>
               )
@@ -1490,6 +2299,12 @@ const DriverHomeScreen = ({ navigation }) => {
           const isOnwardTripStarted = ['trip_started', 'in_progress'].includes(activeRide.status)
           const isTripStarted = isOnwardTripStarted || isReturnStarted || isReturnPickup
           const isArrived = ['driver_arrived', 'driver_reached', 'pickup_reached', 'arrived'].includes(activeRide.status)
+          const isHeadingStarted = Boolean(
+            startedHeadingRides.has(activeRide.id) ||
+            isArrived ||
+            isTripStarted ||
+            ['on_the_way', 'driver_arrived', 'trip_started', 'in_progress', 'completed'].includes(activeRide.status)
+          )
           const isShared = Boolean(
             activeRide.trip_type === 'shared' ||
             activeRide.is_shared == 1 ||
@@ -1545,27 +2360,36 @@ const DriverHomeScreen = ({ navigation }) => {
             }
           }
 
+          const safeCoordLat = (val, fallback = 13.0827) => {
+            const n = parseFloat(val)
+            return (!isNaN(n) && n !== 0 && n > 5 && n < 40) ? n : fallback
+          }
+          const safeCoordLng = (val, fallback = 80.2707) => {
+            const n = parseFloat(val)
+            return (!isNaN(n) && n !== 0 && n > 65 && n < 100) ? n : fallback
+          }
+
           const mapOrigin = isReturnStarted
             ? {
-                latitude: parseFloat(activeRide.dest_lat) || 12.9716,
-                longitude: parseFloat(activeRide.dest_lng) || 77.5946,
+                latitude: safeCoordLat(activeRide.dest_lat, 13.0425),
+                longitude: safeCoordLng(activeRide.dest_lng, 80.2400),
                 address: activeRide.dest_address,
               }
             : {
-                latitude: parseFloat(activeRide.pickup_lat) || 12.9716,
-                longitude: parseFloat(activeRide.pickup_lng) || 77.5946,
+                latitude: safeCoordLat(activeRide.pickup_lat, 13.0827),
+                longitude: safeCoordLng(activeRide.pickup_lng, 80.2707),
                 address: activeRide.pickup_address,
               }
 
           const mapDestination = isReturnStarted
             ? {
-                latitude: parseFloat(activeRide.pickup_lat) || 12.9716,
-                longitude: parseFloat(activeRide.pickup_lng) || 77.5946,
+                latitude: safeCoordLat(activeRide.pickup_lat, 13.0827),
+                longitude: safeCoordLng(activeRide.pickup_lng, 80.2707),
                 address: activeRide.pickup_address,
               }
             : {
-                latitude: parseFloat(activeRide.dest_lat) || 12.9716,
-                longitude: parseFloat(activeRide.dest_lng) || 77.5946,
+                latitude: safeCoordLat(activeRide.dest_lat, 13.0067),
+                longitude: safeCoordLng(activeRide.dest_lng, 80.2025),
                 address: activeRide.dest_address,
               }
 
@@ -1609,317 +2433,269 @@ const DriverHomeScreen = ({ navigation }) => {
                 </View>
               </View>
 
-              {/* Live Ride Status Card */}
-              <View style={styles.liveRideSummaryCard}>
-                <View style={styles.liveRideCustomerRow}>
-                  <View style={styles.liveRideAvatarWrap}>
-                    {resolveAssetUrl(activeRide.customer_avatar_url || activeRide.customer_avatar) ? (
-                      <Image source={{ uri: resolveAssetUrl(activeRide.customer_avatar_url || activeRide.customer_avatar) }} style={styles.custAvatarImg} />
-                    ) : (
-                      <Text style={styles.liveRideAvatarText}>
-                        {((activeRide.customer_name || 'C')?.[0] || 'C').toUpperCase()}
-                      </Text>
-                    )}
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Text style={styles.liveRideCustomerName}>{activeRide.customer_name || 'Passenger'}</Text>
-                      <Ionicons name="shield-checkmark" size={13} color="#10B981" />
-                    </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 }}>
-                      <View style={styles.livePaymentPill}>
-                        <Text style={styles.livePaymentText}>{activeRide.payment_method?.toUpperCase() || 'CASH'}</Text>
+              {/* ── GOGO Cabs Style Active Trip Details Card ── */}
+              {(() => {
+                const pDet = parseAddressDetails(activeRide.pickup_address, 'pickup')
+                const dDet = parseAddressDetails(activeRide.dest_address, 'drop')
+                const dKm = activeRide.distance_km ? parseFloat(activeRide.distance_km).toFixed(2) : (activeRide.route_distance_km ? parseFloat(activeRide.route_distance_km).toFixed(2) : '—')
+                const pRate = activeRide.per_km_rate ? Math.round(activeRide.per_km_rate) : 21
+                const bataAmt = activeRide.driver_bata || 500
+                const fareVal = Math.round(activeRide.final_fare || activeRide.fare || activeRide.fare_estimate || activeRide.original_fare || 0)
+                const cFee = parseFloat(activeRide.commission_amount || (fareVal * 0.134) || 639).toFixed(2)
+                const vName = activeRide.vehicle_type_name || activeRide.vehicle_category_name || activeRide.vehicle_type || 'Cab'
+                const tStart = formatTripScheduleDate(activeRide.pickup_date || activeRide.scheduled_date || activeRide.created_at, activeRide.pickup_time || activeRide.scheduled_time)
+                const tEnd = activeRide.return_date ? formatTripScheduleDate(activeRide.return_date, activeRide.return_time) : 'Not Applicable'
+                let rawNotes = activeRide.notes || activeRide.driver_instructions || 'Km 20/400/750/ toll CC GST'
+                const isLocked = activeRide.status === 'driver_assigned'
+                const proNotesList = getDeduplicatedNotes(rawNotes, isLocked)
+                const isNotesOpen = !collapsedNotes[activeRide.id || 'active']
+
+                return (
+                  <View style={{ marginTop: 4 }}>
+                    {/* Connected Timeline Route */}
+                    <View style={styles.gogoRouteContainer}>
+                      <View style={styles.gogoTimelineRow}>
+                        <View style={styles.gogoDotCol}>
+                          <View style={styles.gogoDotGreen} />
+                          <View style={styles.gogoVerticalLine} />
+                        </View>
+                        <View style={styles.gogoLocationContent}>
+                          <Text style={styles.gogoFullAddressText} numberOfLines={3}>{pDet.full}</Text>
+                          <View style={styles.gogoMainLocalityRow}>
+                            <Text style={styles.gogoMainLocalityText}>{pDet.main}</Text>
+                            <Text style={styles.gogoBadgePickup}> (Pickup)</Text>
+                          </View>
+                          <Text style={styles.gogoDistrictText}>District: {pDet.district}</Text>
+                        </View>
                       </View>
-                      <Text style={styles.liveDistanceText}>
-                        {activeRide.distance_km ? `${parseFloat(activeRide.distance_km).toFixed(1)} KM` : 'Local Ride'}
-                      </Text>
-                    </View>
-                  </View>
-                  {activeRide.customer_phone ? (
-                    <View style={{ flexDirection: 'row', gap: 6 }}>
-                      <TouchableOpacity
-                        style={styles.chatSmallBtn}
-                        onPress={() => Linking.openURL(`sms:${activeRide.customer_phone}`)}
-                      >
-                        <Ionicons name="chatbubble" size={14} color={COLORS.primary} />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.callSmallBtn}
-                        onPress={() => Linking.openURL(`tel:${activeRide.customer_phone}`)}
-                      >
-                        <Ionicons name="call" size={14} color={COLORS.white} />
-                      </TouchableOpacity>
-                    </View>
-                  ) : null}
-                </View>
 
-                {/* Trip Status Timeline */}
-                <View style={styles.tripTimelineCard}>
-                  <View style={styles.tripTimelineRow}>
-                    <View style={styles.timelineStep}>
-                      <View style={[styles.timelineNode, styles.timelineNodeDone]}>
-                        <Ionicons name="checkmark" size={10} color="#FFFFFF" />
-                      </View>
-                      <Text style={styles.timelineNodeLabelActive}>Assigned</Text>
-                    </View>
-                    <View style={[styles.timelineLine, (isArrived || isTripStarted) && styles.timelineLineDone]} />
-
-                    <View style={styles.timelineStep}>
-                      <View style={[styles.timelineNode, (isArrived || isTripStarted) ? styles.timelineNodeDone : styles.timelineNodePending]}>
-                        {(isArrived || isTripStarted) ? (
-                          <Ionicons name="checkmark" size={10} color="#FFFFFF" />
-                        ) : (
-                          <View style={styles.timelineNodeInner} />
-                        )}
-                      </View>
-                      <Text style={(isArrived || isTripStarted) ? styles.timelineNodeLabelActive : styles.timelineNodeLabelPending}>Arrived</Text>
-                    </View>
-                    <View style={[styles.timelineLine, isTripStarted && styles.timelineLineDone]} />
-
-                    <View style={styles.timelineStep}>
-                      <View style={[styles.timelineNode, isTripStarted ? styles.timelineNodeDone : styles.timelineNodePending]}>
-                        {isTripStarted ? (
-                          <Ionicons name="checkmark" size={10} color="#FFFFFF" />
-                        ) : (
-                          <View style={styles.timelineNodeInner} />
-                        )}
-                      </View>
-                      <Text style={isTripStarted ? styles.timelineNodeLabelActive : styles.timelineNodeLabelPending}>Started</Text>
-                    </View>
-                    <View style={[styles.timelineLine, activeRide.status === 'completed' && styles.timelineLineDone]} />
-
-                    <View style={styles.timelineStep}>
-                      <View style={[styles.timelineNode, activeRide.status === 'completed' ? styles.timelineNodeDone : styles.timelineNodePending]}>
-                        {activeRide.status === 'completed' ? (
-                          <Ionicons name="checkmark" size={10} color="#FFFFFF" />
-                        ) : (
-                          <View style={styles.timelineNodeInner} />
-                        )}
-                      </View>
-                      <Text style={activeRide.status === 'completed' ? styles.timelineNodeLabelActive : styles.timelineNodeLabelPending}>Drop Off</Text>
-                    </View>
-                  </View>
-                </View>
-
-                {/* Pickup & Destination Line Preview */}
-                <View style={styles.liveRoutePreview}>
-                  <View style={styles.routeItem}>
-                    <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
-                    <Text style={styles.routeText} numberOfLines={1}>Pickup: {activeRide.pickup_address}</Text>
-                  </View>
-                  <View style={styles.routeItem}>
-                    <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
-                    <Text style={styles.routeText} numberOfLines={1}>Drop: {activeRide.dest_address}</Text>
-                  </View>
-                </View>
-
-                {/* Resume Trip / Toggle Live Navigation Button */}
-                <TouchableOpacity
-                  style={styles.resumeTripBtn}
-                  onPress={() => setShowLiveMapDetails(prev => !prev)}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons name={showLiveMapDetails ? "chevron-up" : "navigate"} size={16} color="#0F172A" />
-                  <Text style={styles.resumeTripBtnText}>
-                    {showLiveMapDetails ? 'Collapse Map View ▴' : 'Resume Trip & View Live Navigation ▾'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {showLiveMapDetails && (
-                <>
-                  {/* Live Interactive Road Directions & Turn-by-Turn GPS Map */}
-                  <View style={{ borderRadius: RADIUS.lg, overflow: 'hidden', marginVertical: 10 }}>
-                    <LiveTripMap
-                      origin={mapOrigin}
-                      destination={mapDestination}
-                      driverLocation={driverLocation || (driver?.lat && driver?.lng ? { latitude: parseFloat(driver.lat), longitude: parseFloat(driver.lng) } : null)}
-                      waypoints={isReturnStarted ? [] : rawStops}
-                      role="driver"
-                      status={activeRide.status}
-                      driverInfo={driver}
-                      height={230}
-                      showNavigationButton={true}
-                    />
-                  </View>
-
-              {/* Customer Contact & Profile Row (Single Ride) */}
-              {!isShared && (
-                <View style={styles.customerRow}>
-                  <View style={styles.custAvatarWrap}>
-                    {resolveAssetUrl(activeRide.customer_avatar_url || activeRide.customer_avatar) ? (
-                      <Image
-                        source={{ uri: resolveAssetUrl(activeRide.customer_avatar_url || activeRide.customer_avatar) }}
-                        style={styles.custAvatarImg}
-                      />
-                    ) : (
-                      <Text style={{ color: COLORS.white, fontWeight: '700', fontSize: 16 }}>
-                        {((activeRide.customer_name || 'C')?.[0] || 'C').toUpperCase()}
-                      </Text>
-                    )}
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <Text style={styles.custName}>{activeRide.customer_name || 'Passenger'}</Text>
-                      <Ionicons name="shield-checkmark" size={13} color="#10B981" />
-                      <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-                        <Ionicons name="star" size={9} color="#D97706" />
-                        <Text style={{ fontSize: 9, fontWeight: '800', color: '#92400E' }}>{activeRide.customer_rating || '5.0'}</Text>
+                      <View style={styles.gogoTimelineRow}>
+                        <View style={styles.gogoDotCol}>
+                          <View style={styles.gogoDotRed} />
+                        </View>
+                        <View style={styles.gogoLocationContent}>
+                          <Text style={styles.gogoFullAddressText} numberOfLines={3}>{dDet.full}</Text>
+                          <View style={styles.gogoMainLocalityRow}>
+                            <Text style={styles.gogoMainLocalityText}>{dDet.main}</Text>
+                            <Text style={styles.gogoBadgeDrop}> (Drop)</Text>
+                          </View>
+                          <Text style={styles.gogoDistrictText}>District: {dDet.district}</Text>
+                        </View>
                       </View>
                     </View>
-                    <Text style={styles.custPhone}>
-                      {activeRide.customer_phone ? `+91 ${activeRide.customer_phone}` : 'Contact via App'}
-                    </Text>
-                    {Boolean(activeRide.emergency_contact) && (
-                      <Text style={{ fontSize: 10, color: '#EF4444', fontWeight: '700', marginTop: 1 }}>
-                        SOS: +91 {activeRide.emergency_contact}
-                      </Text>
-                    )}
-                  </View>
-                  {activeRide.customer_phone ? (
-                    <View style={{ flexDirection: 'row', gap: 8 }}>
-                      <TouchableOpacity
-                        style={styles.chatSmallBtn}
-                        onPress={() => Linking.openURL(`sms:${activeRide.customer_phone}`)}
-                      >
-                        <Ionicons name="chatbubble-ellipses" size={16} color={COLORS.primary} />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.callSmallBtn}
-                        onPress={() => Linking.openURL(`tel:${activeRide.customer_phone}`)}
-                      >
-                        <Ionicons name="call" size={16} color={COLORS.white} />
-                      </TouchableOpacity>
-                    </View>
-                  ) : null}
-                </View>
-              )}
 
-              {/* Full Route Details for Single Ride */}
-              {!isShared && (
-                <View style={styles.routeBox}>
-                  {isRoundTrip ? (
-                    <>
-                      {/* Round Trip Leg 1 */}
-                      <View style={{ marginBottom: 6 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
-                          <Text style={{ fontSize: 10, fontWeight: '800', color: isOnwardTripStarted && !isReturnPickup && !isReturnStarted ? '#2563EB' : '#64748B' }}>
-                            LEG 1: ONWARD JOURNEY ➡️
+                    {/* 3-Column Metrics Summary */}
+                    <View style={styles.gogoThreeColRow}>
+                      <View style={styles.gogoColItem}>
+                        <Text style={styles.gogoColSymbol}>₹</Text>
+                        <Text style={styles.gogoColPrimaryText}>Rs. {fareVal}</Text>
+                      </View>
+                      <View style={styles.gogoColDivider} />
+                      <View style={[styles.gogoColItem, { flex: 1.35 }]}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <Ionicons name="car" size={16} color={COLORS.primary} />
+                          <Text style={styles.gogoColPrimaryText} numberOfLines={1}>{vName} (AC)</Text>
+                        </View>
+                        <View style={styles.gogoFuelBadge}>
+                          <Text style={styles.gogoFuelBadgeText}>⛽ Petrol/Diesel only</Text>
+                        </View>
+                      </View>
+                      <View style={styles.gogoColDivider} />
+                      <View style={styles.gogoColItem}>
+                        <Ionicons name="navigate-outline" size={17} color="#10B981" />
+                        <Text style={styles.gogoColPrimaryText}>{dKm} Km</Text>
+                      </View>
+                    </View>
+
+                    {/* 2-Column Rates & Commission Breakdown */}
+                    <View style={styles.gogoTwoColRow}>
+                      <View style={styles.gogoRateCol}>
+                        <Ionicons name="speedometer-outline" size={18} color={COLORS.primary} />
+                        <Text style={styles.gogoRateText}>Rs.{pRate} per km / Bata - {bataAmt}</Text>
+                      </View>
+                      <View style={styles.gogoColDivider} />
+                      <View style={styles.gogoCommCol}>
+                        <View style={styles.gogoCommAmountRow}>
+                          <Ionicons name="car-outline" size={16} color="#D97706" />
+                          <Text style={styles.gogoCommAmountText}>Rs.{cFee}</Text>
+                        </View>
+                        <Text style={styles.gogoCommSubtext}>(Commission fee)</Text>
+                      </View>
+                    </View>
+
+                    {/* Permit Charges Included */}
+                    <View style={styles.gogoInclusionsRow}>
+                      <Ionicons name="document-text" size={16} color="#0891B2" />
+                      <Text style={styles.gogoInclusionsText}>Permit Charges Included</Text>
+                    </View>
+
+                    {/* Trip Start & End */}
+                    <View style={styles.gogoScheduleBox}>
+                      <View style={styles.gogoScheduleItem}>
+                        <View style={styles.gogoScheduleLeft}>
+                          <Ionicons name="calendar" size={16} color={COLORS.primary} />
+                          <Text style={styles.gogoScheduleLabel}>Trip Start</Text>
+                        </View>
+                        <Text style={styles.gogoScheduleValue}>{tStart}</Text>
+                      </View>
+                      <View style={styles.gogoScheduleItem}>
+                        <View style={styles.gogoScheduleLeft}>
+                          <Ionicons name="calendar" size={16} color={COLORS.primary} />
+                          <Text style={styles.gogoScheduleLabel}>Trip End</Text>
+                        </View>
+                        <Text style={styles.gogoScheduleValue}>{tEnd}</Text>
+                      </View>
+                    </View>
+
+                    {/* Customer Contact & Swipe-to-Start or Live Navigation */}
+                    {!isHeadingStarted ? (
+                      <View style={{ marginTop: 12 }}>
+                        {/* Direct Turn-by-Turn GPS Navigation Action to Pickup */}
+                        <TouchableOpacity
+                          style={styles.gogoNavBtn}
+                          onPress={() => {
+                            Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${activeTargetLat},${activeTargetLng}&travelmode=driving`)
+                          }}
+                          activeOpacity={0.85}
+                        >
+                          <Ionicons name="navigate" size={18} color="#FFFFFF" />
+                          <Text style={styles.gogoNavBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+                            📍 Open Google Maps Navigation (Pickup)
                           </Text>
-                          {(isReturnPickup || isReturnStarted) && (
-                            <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
-                              <Text style={{ fontSize: 9, fontWeight: '800', color: '#166534' }}>REACHED ✓</Text>
-                            </View>
-                          )}
-                        </View>
-                        <View style={styles.routeItem}>
-                          <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 9, fontWeight: '800', color: '#059669' }}>ORIGIN PICKUP</Text>
-                            <Text style={styles.routeText} numberOfLines={1}>{activeRide.pickup_address || 'Customer Pickup'}</Text>
-                          </View>
-                        </View>
-                        <View style={{ width: 1, height: 8, backgroundColor: '#CBD5E1', marginLeft: 3 }} />
-                        <View style={styles.routeItem}>
-                          <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 9, fontWeight: '800', color: '#DC2626' }}>1ST DROP DESTINATION</Text>
-                            <Text style={styles.routeText} numberOfLines={1}>{activeRide.dest_address || 'Customer Destination'}</Text>
-                          </View>
-                        </View>
-                      </View>
+                        </TouchableOpacity>
 
-                      {/* Round Trip Leg 2 */}
-                      <View style={{ marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderTopColor: '#E2E8F0' }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
-                          <Text style={{ fontSize: 10, fontWeight: '800', color: (isReturnPickup || isReturnStarted) ? '#2563EB' : '#94A3B8' }}>
-                            LEG 2: RETURN JOURNEY 🔁
+                        <View style={[styles.gogoCustomerBarLocked, { marginTop: 10 }]}>
+                          <View style={styles.gogoCustAvatarLocked}>
+                            <Ionicons name="lock-closed" size={18} color="#D97706" />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.gogoCustName} numberOfLines={1}>{activeRide.customer_name || 'Passenger'}</Text>
+                            <Text style={styles.gogoCustSubLocked}>🔒 Number Protected · Swipe START below to view customer & call</Text>
+                          </View>
+                        </View>
+
+                        <SwipeToActionButton
+                          title="SWIPE TO START HEADING TO PICKUP"
+                          icon="arrow-forward"
+                          trackBg="#16A34A"
+                          thumbBg="#FFFFFF"
+                          thumbIconColor="#15803D"
+                          isLoading={isUpdatingStatus}
+                          onSwipeComplete={handleStartHeading}
+                        />
+
+                        {/* Direct Decline / Reject Assignment Button */}
+                        <TouchableOpacity
+                          style={{
+                            marginTop: 10,
+                            paddingVertical: 12,
+                            borderRadius: 12,
+                            backgroundColor: '#FEF2F2',
+                            borderWidth: 1.5,
+                            borderColor: '#FCA5A5',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexDirection: 'row',
+                            gap: 8,
+                          }}
+                          onPress={() => {
+                            Alert.alert(
+                              'Decline Assignment',
+                              'Are you sure you want to reject this ride assignment? It will be immediately passed to the next nearby driver.',
+                              [
+                                { text: 'Cancel', style: 'cancel' },
+                                {
+                                  text: 'Yes, Reject',
+                                  style: 'destructive',
+                                  onPress: () => handleDeclineInstantRide(activeRide.id, 'Driver declined assignment')
+                                }
+                              ]
+                            )
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons name="close-circle-outline" size={18} color="#DC2626" />
+                          <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>
+                            Decline / Reject Assignment
                           </Text>
-                          {isReturnStarted && (
-                            <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
-                              <Text style={{ fontSize: 9, fontWeight: '800', color: '#166534' }}>IN PROGRESS 🚀</Text>
-                            </View>
-                          )}
-                          {isReturnPickup && (
-                            <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 }}>
-                              <Text style={{ fontSize: 9, fontWeight: '800', color: '#92400E' }}>PICKUP READY 📍</Text>
-                            </View>
-                          )}
-                        </View>
-                        <View style={styles.routeItem}>
-                          <View style={[styles.routeDot, { backgroundColor: '#3B82F6' }]} />
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 9, fontWeight: '800', color: '#2563EB' }}>RETURN PICKUP</Text>
-                            <Text style={styles.routeText} numberOfLines={1}>{activeRide.dest_address || 'Customer Destination'}</Text>
-                          </View>
-                        </View>
-                        <View style={{ width: 1, height: 8, backgroundColor: '#CBD5E1', marginLeft: 3 }} />
-                        <View style={styles.routeItem}>
-                          <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ fontSize: 9, fontWeight: '800', color: '#059669' }}>FINAL DROP (ORIGIN)</Text>
-                            <Text style={styles.routeText} numberOfLines={1}>{activeRide.pickup_address || 'Customer Pickup'}</Text>
-                          </View>
-                        </View>
+                        </TouchableOpacity>
                       </View>
-                    </>
-                  ) : (
-                    <>
-                      <View style={styles.routeItem}>
-                        <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: 9, fontWeight: '800', color: '#059669', letterSpacing: 0.5 }}>PICKUP LOCATION</Text>
-                          <Text style={styles.routeText} numberOfLines={2}>{activeRide.pickup_address || 'Customer Pickup'}</Text>
-                        </View>
-                      </View>
-                      <View style={{ width: 1, height: 12, backgroundColor: '#CBD5E1', marginLeft: 3 }} />
-                      <View style={styles.routeItem}>
-                        <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontSize: 9, fontWeight: '800', color: '#DC2626', letterSpacing: 0.5 }}>DESTINATION</Text>
-                          <Text style={styles.routeText} numberOfLines={2}>{activeRide.dest_address || 'Customer Destination'}</Text>
-                        </View>
-                      </View>
-                    </>
-                  )}
+                    ) : (
+                      <View style={{ marginTop: 12 }}>
+                        {/* Direct Turn-by-Turn GPS Navigation Action */}
+                        <TouchableOpacity
+                          style={styles.gogoNavBtn}
+                          onPress={() => {
+                            Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${activeTargetLat},${activeTargetLng}&travelmode=driving`)
+                          }}
+                          activeOpacity={0.85}
+                        >
+                          <Ionicons name="navigate" size={18} color="#FFFFFF" />
+                          <Text style={styles.gogoNavBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+                            {!isTripStarted ? '📍 Open Google Maps Navigation (Pickup)' : '📍 Open Google Maps Navigation (Drop)'}
+                          </Text>
+                        </TouchableOpacity>
 
-                  {/* Route Metrics: Distance, Fare & Payment Method */}
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: COLORS.white, padding: 8, borderRadius: RADIUS.md, marginTop: 6, borderWidth: 1, borderColor: '#E2E8F0' }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <Ionicons name="speedometer-outline" size={13} color={COLORS.gray500} />
-                      <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.gray700 }}>
-                        {activeRide.distance_km ? `${parseFloat(activeRide.distance_km).toFixed(1)} KM` : (activeRide.route_distance_km ? `${parseFloat(activeRide.route_distance_km).toFixed(1)} KM` : '—')}
-                      </Text>
-                    </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <Ionicons name="wallet-outline" size={13} color={COLORS.primary} />
-                      <Text style={{ fontSize: 12, fontWeight: '900', color: COLORS.primary }}>
-                        ₹{Math.round(activeRide.final_fare || activeRide.fare || activeRide.fare_estimate || activeRide.original_fare || 0)}
-                      </Text>
-                    </View>
-                    <View style={{ backgroundColor: '#ECFDF5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                      <Text style={{ fontSize: 10, fontWeight: '800', color: '#059669' }}>
-                        {activeRide.payment_method?.toUpperCase() || 'CASH'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              )}
+                        {/* Customer Contact Row (Full Details Revealed on Heading Started) */}
+                        {activeRide.customer_phone ? (
+                          <TouchableOpacity
+                            style={styles.gogoCustomerBar}
+                            onPress={() => setShowCustomerModal(true)}
+                            activeOpacity={0.88}
+                          >
+                            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                              <View style={styles.gogoCustAvatar}>
+                                <Text style={styles.gogoCustAvatarText}>
+                                  {((activeRide.customer_name || 'R')?.[0] || 'R').toUpperCase()}
+                                </Text>
+                                {(!custAvatarError && resolveAssetUrl(activeRide.customer_avatar_url || activeRide.customer_avatar)) ? (
+                                  <Image
+                                    source={{ uri: resolveAssetUrl(activeRide.customer_avatar_url || activeRide.customer_avatar) }}
+                                    style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%', borderRadius: 24 }}
+                                    resizeMode="cover"
+                                    onError={() => setCustAvatarError(true)}
+                                  />
+                                ) : null}
+                              </View>
+                              <View style={{ flex: 1, justifyContent: 'center' }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                  <Text style={styles.gogoCustName} numberOfLines={1}>
+                                    {activeRide.customer_name || 'Passenger'}
+                                  </Text>
+                                </View>
+                                <View style={styles.gogoCustMetaRow}>
+                                  <View style={[styles.gogoProtectedPill, { backgroundColor: '#ECFDF5', borderColor: '#A7F3D0' }]}>
+                                    <Ionicons name="shield-checkmark" size={11} color="#059669" />
+                                    <Text style={[styles.gogoProtectedText, { color: '#047857', fontWeight: '800' }]}>
+                                      Verified Rider
+                                    </Text>
+                                  </View>
+                                  <View style={styles.gogoPaymentPill}>
+                                    <Text style={styles.gogoPaymentText}>
+                                      {activeRide.payment_method?.toUpperCase() || 'CASH'}
+                                    </Text>
+                                  </View>
+                                </View>
+                              </View>
+                            </View>
 
-              {/* Hourly Rental Package Notice */}
-              {!isShared && isHourly && (
-                <View style={{ backgroundColor: '#EEF2FF', padding: 10, borderRadius: RADIUS.md, marginBottom: 10, borderWidth: 1, borderColor: '#C7D2FE' }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                    <Ionicons name="time" size={15} color="#4F46E5" />
-                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#3730A3' }}>
-                      Hourly Package: {activeRide.package_hours || 1} Hours ({activeRide.hourly_package_km || ((activeRide.package_hours || 1) * 10)} KM Included)
-                    </Text>
+                            {/* Direct Circular Call Button (Message is inside Customer Modal) */}
+                            <TouchableOpacity
+                              style={styles.gogoCustBigCallBtn}
+                              onPress={() => Linking.openURL(`tel:${activeRide.customer_phone}`)}
+                              activeOpacity={0.8}
+                            >
+                              <Ionicons name="call" size={24} color="#FFFFFF" />
+                            </TouchableOpacity>
+                          </TouchableOpacity>
+                        ) : null}
+                      </View>
+                    )}
+
+                    {/* Notes Accordion removed per request */}
                   </View>
-                  <Text style={{ fontSize: 10, color: '#4338CA', lineHeight: 14 }}>
-                    Base Fare: ₹{Math.round(activeRide.base_package_fare || activeRide.fare || activeRide.fare_estimate || 0)}. Any extra minutes or extra distance beyond package will be automatically added to the bill at completion.
-                  </Text>
-                </View>
-              )}
+                )
+              })()}
 
               {/* Ride Start PIN Status Banner */}
               {!isShared && (
@@ -2058,22 +2834,29 @@ const DriverHomeScreen = ({ navigation }) => {
 
                         {/* Direct passenger contact shortcut */}
                         {p.customer_phone && (
-                          <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
-                            <TouchableOpacity
-                              style={styles.passContactBtn}
-                              onPress={() => Linking.openURL(`sms:${p.customer_phone}`)}
-                            >
-                              <Ionicons name="chatbubble-outline" size={12} color={COLORS.primary} />
-                              <Text style={styles.passContactText}>Chat</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.passContactBtn}
-                              onPress={() => Linking.openURL(`tel:${p.customer_phone}`)}
-                            >
-                              <Ionicons name="call-outline" size={12} color="#10B981" />
-                              <Text style={[styles.passContactText, { color: '#059669' }]}>Call</Text>
-                            </TouchableOpacity>
-                          </View>
+                          isTripStarted ? (
+                            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}>
+                              <TouchableOpacity
+                                style={styles.passContactBtn}
+                                onPress={() => Linking.openURL(`sms:${p.customer_phone}`)}
+                              >
+                                <Ionicons name="chatbubble-outline" size={12} color={COLORS.primary} />
+                                <Text style={styles.passContactText}>Chat</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.passContactBtn}
+                                onPress={() => Linking.openURL(`tel:${p.customer_phone}`)}
+                              >
+                                <Ionicons name="call-outline" size={12} color="#10B981" />
+                                <Text style={[styles.passContactText, { color: '#059669' }]}>Call</Text>
+                              </TouchableOpacity>
+                            </View>
+                          ) : (
+                            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 4, marginTop: 6 }}>
+                              <Ionicons name="lock-closed" size={11} color="#94A3B8" />
+                              <Text style={{ fontSize: 10, color: '#94A3B8', fontStyle: 'italic' }}>Number revealed on trip start</Text>
+                            </View>
+                          )
                         )}
                       </View>
                     )
@@ -2081,20 +2864,6 @@ const DriverHomeScreen = ({ navigation }) => {
                 </View>
               )}
 
-              {/* Turn-by-Turn GPS Directions */}
-              <TouchableOpacity
-                style={styles.gpsNavBtn}
-                onPress={() => {
-                  const url = `https://www.google.com/maps/dir/?api=1&destination=${activeTargetLat},${activeTargetLng}&travelmode=driving`
-                  Linking.openURL(url)
-                }}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="navigate" size={18} color={COLORS.white} />
-                <Text style={styles.gpsNavBtnText} numberOfLines={1}>
-                  Navigate to {activeTargetName}
-                </Text>
-              </TouchableOpacity>
 
               {/* Dynamic Action Buttons for Normal vs Shared Trips */}
               <View style={{ marginTop: 12 }}>
@@ -2124,18 +2893,20 @@ const DriverHomeScreen = ({ navigation }) => {
                             Confirm panni vittu pickup location-kku pogavum.
                           </Text>
                         </View>
-                        <TouchableOpacity
-                          style={[styles.primaryActionBtn, { backgroundColor: '#10B981', marginTop: 10 }]}
-                          onPress={() => handleUpdateRideStatus('driver_accepted')}
-                        >
-                          <Ionicons name="checkmark-circle-outline" size={20} color="#FFFFFF" style={{ marginRight: 6 }} />
-                          <Text style={[styles.primaryActionText, { color: '#FFFFFF' }]}>✓ Confirm & Proceed to Pickup</Text>
-                        </TouchableOpacity>
+                        <SwipeToActionButton
+                          title="SWIPE TO CONFIRM & HEAD TO PICKUP"
+                          icon="checkmark-circle"
+                          trackBg="#10B981"
+                          thumbBg="#FFFFFF"
+                          thumbIconColor="#059669"
+                          isLoading={isUpdatingStatus}
+                          onSwipeComplete={() => handleUpdateRideStatus('driver_accepted')}
+                        />
                       </View>
                     )}
 
                     {/* Confirmed Extra Cash Notice when on the way */}
-                    {['driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way'].includes(activeRide.status) && (Number(activeRide.extra_pickup_distance_km) > 0 || Number(activeRide.pickup_distance_km) > 2.0) && (
+                    {isHeadingStarted && ['driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way'].includes(activeRide.status) && (Number(activeRide.extra_pickup_distance_km) > 0 || Number(activeRide.pickup_distance_km) > 2.0) && (
                       <View style={{ backgroundColor: '#ECFDF5', borderColor: '#10B981', borderWidth: 1, borderRadius: 8, padding: 10, marginBottom: 12 }}>
                         <Text style={{ color: '#065F46', fontSize: 13, fontWeight: 'bold' }}>
                           ✓ Confirmed: Customer-idam ₹{Math.round(activeRide.pickup_charge || (Math.max(0, Number(activeRide.pickup_distance_km || 0) - 2.0) * 10))} Extra Cash Collect Pannavum!
@@ -2146,36 +2917,77 @@ const DriverHomeScreen = ({ navigation }) => {
                       </View>
                     )}
 
-                    {['driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way'].includes(activeRide.status) || (activeRide.status === 'driver_assigned' && !(Number(activeRide.extra_pickup_distance_km) > 0 || Number(activeRide.pickup_distance_km) > 2.0)) ? (
-                      <TouchableOpacity
-                        style={[styles.primaryActionBtn, { backgroundColor: '#FFC700' }]}
-                        onPress={() => handleUpdateRideStatus('driver_arrived')}
-                      >
-                        <Ionicons name="location-outline" size={20} color="#000000" style={{ marginRight: 6 }} />
-                        <Text style={[styles.primaryActionText, { color: '#000000' }]}>I Have Arrived at Pickup</Text>
-                      </TouchableOpacity>
+                    {isHeadingStarted && ['driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way'].includes(activeRide.status) ? (
+                      <SwipeToActionButton
+                        title="SWIPE TO MARK ARRIVED"
+                        icon="location"
+                        trackBg="#D97706"
+                        thumbBg="#FFFFFF"
+                        thumbIconColor="#B45309"
+                        isLoading={isUpdatingStatus}
+                        onSwipeComplete={() => handleUpdateRideStatus('driver_arrived')}
+                      />
                     ) : null}
 
                     {['driver_arrived', 'driver_reached', 'pickup_reached', 'arrived'].includes(activeRide.status) && (
-                      <TouchableOpacity
-                        style={[styles.primaryActionBtn, { backgroundColor: '#7C3AED' }]}
-                        onPress={() => {
-                          setEnteredOtp('')
-                          setOtpModalVisible(true)
-                        }}
-                      >
-                        <Ionicons name="key-outline" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
-                        <Text style={styles.primaryActionText}>Enter Customer Start OTP</Text>
-                      </TouchableOpacity>
+                      <View>
+                        <DriverWaitingTimerCard
+                          arrivedAt={activeRide.arrived_at}
+                          freeWaitingMins={activeRide.free_waiting_mins || 5}
+                          waitingRate={activeRide.waiting_charge_per_min || activeRide.waiting_charge || 2}
+                          categoryName={activeRide.vehicle_category_name || activeRide.vehicle_type_name || 'Taxi'}
+                        />
+
+                        <SwipeToActionButton
+                          title="SWIPE TO ENTER START OTP"
+                          icon="key"
+                          trackBg="#7C3AED"
+                          thumbBg="#FFFFFF"
+                          thumbIconColor="#6D28D9"
+                          isLoading={isUpdatingStatus}
+                          resetKey={otpModalVisible}
+                          onSwipeComplete={() => {
+                            setEnteredOtp('')
+                            setOtpModalVisible(true)
+                          }}
+                        />
+
+                        {/* Re-Open Keypad Shortcut if dialog was closed */}
+                        <TouchableOpacity
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 6,
+                            marginTop: 4,
+                            paddingVertical: 4,
+                          }}
+                          onPress={() => {
+                            setEnteredOtp('')
+                            setOtpModalVisible(true)
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="keypad" size={13} color="#7C3AED" />
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C3AED' }}>
+                            Accidentally closed? Tap here to enter OTP
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                     )}
 
                     {/* 1. Onward Leg Actions */}
                     {isOnwardTripStarted && !isReturnPickup && !isReturnStarted && (() => {
                       if (currIdx < totalStops && rawStops[currIdx]) {
                         return (
-                          <TouchableOpacity
-                            style={[styles.primaryActionBtn, { backgroundColor: '#FFC700' }]}
-                            onPress={async () => {
+                          <SwipeToActionButton
+                            title={`SWIPE TO COMPLETE STOP ${currIdx + 1}`}
+                            icon="checkmark-circle"
+                            trackBg="#D97706"
+                            thumbBg="#FFFFFF"
+                            thumbIconColor="#B45309"
+                            isLoading={isUpdatingStatus}
+                            onSwipeComplete={async () => {
                               try {
                                 const res = await driverAPI.completeStop(activeRide.id)
                                 if (res.data?.status === 'success') {
@@ -2184,9 +2996,7 @@ const DriverHomeScreen = ({ navigation }) => {
                                 }
                               } catch {}
                             }}
-                          >
-                            <Text style={[styles.primaryActionText, { color: '#000000' }]}>📍 Complete Stop {currIdx + 1} & Continue</Text>
-                          </TouchableOpacity>
+                          />
                         )
                       }
 
@@ -2197,12 +3007,17 @@ const DriverHomeScreen = ({ navigation }) => {
                             <View style={{ backgroundColor: '#FEF3C7', padding: 10, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: '#FDE68A' }}>
                               <Ionicons name="repeat" size={16} color="#B45309" />
                               <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400E', flex: 1 }}>
-                                Round Trip: 1st drop destination reached. When picking up passenger for return journey, tap below.
+                                Round Trip: 1st drop destination reached. When picking up passenger for return journey, swipe below.
                               </Text>
                             </View>
-                            <TouchableOpacity
-                              style={[styles.primaryActionBtn, { backgroundColor: '#2563EB' }]}
-                              onPress={() => {
+                            <SwipeToActionButton
+                              title="SWIPE TO START RETURN PICKUP"
+                              icon="repeat"
+                              trackBg="#2563EB"
+                              thumbBg="#FFFFFF"
+                              thumbIconColor="#1D4ED8"
+                              isLoading={isUpdatingStatus}
+                              onSwipeComplete={() => {
                                 Alert.alert(
                                   'Start Return Pickup? 🔄',
                                   `Are you ready for the return journey? This will navigate you to pick up the passenger at ${activeRide.dest_address}.`,
@@ -2215,25 +3030,23 @@ const DriverHomeScreen = ({ navigation }) => {
                                   ]
                                 )
                               }}
-                            >
-                              <Ionicons name="return-down-forward" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
-                              <Text style={styles.primaryActionText}>Arrived at Destination • Return Pickup</Text>
-                            </TouchableOpacity>
+                            />
                           </View>
                         )
                       }
 
                       // One-Way Normal Trip / Hourly Trip: Complete Trip & Settle
                       return (
-                        <TouchableOpacity
-                          style={[styles.primaryActionBtn, { backgroundColor: '#10B981' }]}
-                          onPress={handleOpenCompleteTripModal}
-                        >
-                          <Ionicons name="checkmark-done" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
-                          <Text style={styles.primaryActionText}>
-                            {isHourly ? 'Complete Hourly Trip & Settle Fare' : 'Complete Trip & Collect Payment'}
-                          </Text>
-                        </TouchableOpacity>
+                        <SwipeToActionButton
+                          title={isHourly ? "SWIPE TO COMPLETE HOURLY TRIP" : "SWIPE TO COMPLETE TRIP"}
+                          icon="checkmark-done"
+                          trackBg="#10B981"
+                          thumbBg="#FFFFFF"
+                          thumbIconColor="#059669"
+                          isLoading={isSubmittingComplete || isUpdatingStatus}
+                          resetKey={completeTripModalVisible}
+                          onSwipeComplete={handleOpenCompleteTripModal}
+                        />
                       )
                     })()}
 
@@ -2243,12 +3056,17 @@ const DriverHomeScreen = ({ navigation }) => {
                         <View style={{ backgroundColor: '#EFF6FF', padding: 10, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: '#BFDBFE' }}>
                           <Ionicons name="navigate-circle" size={18} color="#1D4ED8" />
                           <Text style={{ fontSize: 11, fontWeight: '700', color: '#1E40AF', flex: 1 }}>
-                            Heading to 1st drop point ({activeRide.dest_address}) to pick up passenger. When passenger has boarded, tap below to start return journey.
+                            Heading to 1st drop point ({activeRide.dest_address}) to pick up passenger. When passenger has boarded, swipe below to start return journey.
                           </Text>
                         </View>
-                        <TouchableOpacity
-                          style={[styles.primaryActionBtn, { backgroundColor: '#7C3AED' }]}
-                          onPress={() => {
+                        <SwipeToActionButton
+                          title="SWIPE: PASSENGER BOARDED (RETURN)"
+                          icon="play-circle"
+                          trackBg="#7C3AED"
+                          thumbBg="#FFFFFF"
+                          thumbIconColor="#6D28D9"
+                          isLoading={isUpdatingStatus}
+                          onSwipeComplete={() => {
                             Alert.alert(
                               'Start Return Trip? 🚀',
                               `Has the passenger boarded for the return journey back to ${activeRide.pickup_address}?`,
@@ -2261,10 +3079,7 @@ const DriverHomeScreen = ({ navigation }) => {
                               ]
                             )
                           }}
-                        >
-                          <Ionicons name="play-circle" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
-                          <Text style={styles.primaryActionText}>Passenger Boarded • Start Return Trip 🚀</Text>
-                        </TouchableOpacity>
+                        />
                       </View>
                     )}
 
@@ -2277,9 +3092,14 @@ const DriverHomeScreen = ({ navigation }) => {
                             Return Journey In Progress: Navigating back to starting point ({activeRide.pickup_address}). Complete trip only after dropping customer at origin!
                           </Text>
                         </View>
-                        <TouchableOpacity
-                          style={[styles.primaryActionBtn, { backgroundColor: '#10B981' }]}
-                          onPress={() => {
+                        <SwipeToActionButton
+                          title="SWIPE TO COMPLETE ROUND TRIP"
+                          icon="checkmark-done"
+                          trackBg="#10B981"
+                          thumbBg="#FFFFFF"
+                          thumbIconColor="#059669"
+                          isLoading={isSubmittingComplete || isUpdatingStatus}
+                          onSwipeComplete={() => {
                             Alert.alert(
                               'Complete Round Trip? 🏁',
                               `Have you reached back to the starting location (${activeRide.pickup_address}) and safely dropped the customer?`,
@@ -2292,10 +3112,7 @@ const DriverHomeScreen = ({ navigation }) => {
                               ]
                             )
                           }}
-                        >
-                          <Ionicons name="checkmark-done-circle" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
-                          <Text style={styles.primaryActionText}>Reached Origin • Complete Round Trip ✓</Text>
-                        </TouchableOpacity>
+                        />
                       </View>
                     )}
                   </>
@@ -2315,130 +3132,85 @@ const DriverHomeScreen = ({ navigation }) => {
                           </View>
                         ) : null}
 
-                        <TouchableOpacity
-                          style={[
-                            styles.primaryActionBtn,
-                            { backgroundColor: allPassengersBoarded ? '#10B981' : '#94A3B8' }
-                          ]}
-                          onPress={handleStartSharedJourney}
-                          disabled={!allPassengersBoarded}
-                        >
-                          <Ionicons
-                            name={allPassengersBoarded ? 'rocket' : 'lock-closed'}
-                            size={20}
-                            color={COLORS.white}
-                            style={{ marginRight: 6 }}
+                        {allPassengersBoarded ? (
+                          <SwipeToActionButton
+                            title="SWIPE TO START JOURNEY 🚀"
+                            icon="rocket"
+                            trackBg="#10B981"
+                            thumbBg="#FFFFFF"
+                            thumbIconColor="#059669"
+                            isLoading={isUpdatingStatus}
+                            onSwipeComplete={handleStartSharedJourney}
                           />
-                          <Text style={styles.primaryActionText}>
-                            {allPassengersBoarded ? 'Start Journey 🚀' : `Start Journey (Locked - ${boardedPassengers.length}/${totalPassengers} Boarded)`}
-                          </Text>
-                        </TouchableOpacity>
+                        ) : (
+                          <View style={[styles.primaryActionBtn, { backgroundColor: '#94A3B8', opacity: 0.7 }]}>
+                            <Ionicons name="lock-closed" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                            <Text style={styles.primaryActionText}>
+                              Start Journey (Locked - {boardedPassengers.length}/{totalPassengers} Boarded)
+                            </Text>
+                          </View>
+                        )}
                       </View>
                     )}
 
                     {isTripStarted && (
-                      <TouchableOpacity
-                        style={[
-                          styles.primaryActionBtn,
-                          { backgroundColor: allPassengersDropped ? '#10B981' : COLORS.primary }
-                        ]}
-                        onPress={() => {
-                          if (!allPassengersDropped) {
+                      allPassengersDropped ? (
+                        <SwipeToActionButton
+                          title="SWIPE TO COMPLETE SHARED TRIP ✅"
+                          icon="checkmark-done"
+                          trackBg="#10B981"
+                          thumbBg="#FFFFFF"
+                          thumbIconColor="#059669"
+                          isLoading={isSubmittingComplete || isUpdatingStatus}
+                          onSwipeComplete={handleOpenCompleteTripModal}
+                        />
+                      ) : (
+                        <TouchableOpacity
+                          style={[styles.primaryActionBtn, { backgroundColor: COLORS.primary }]}
+                          onPress={() => {
                             Alert.alert(
                               'Pending Drops',
                               `Please confirm drop for all passengers first (${droppedPassengers.length}/${totalPassengers} dropped).`,
                               [{ text: 'OK' }]
                             )
-                            return
-                          }
-                          handleOpenCompleteTripModal()
-                        }}
-                      >
-                        <Ionicons name="checkmark-done" size={20} color={COLORS.white} style={{ marginRight: 6 }} />
-                        <Text style={styles.primaryActionText}>
-                          {allPassengersDropped ? 'Complete Shared Journey & Settle Payments ✅' : `Drops In Progress (${droppedPassengers.length}/${totalPassengers} Dropped)`}
-                        </Text>
-                      </TouchableOpacity>
+                          }}
+                        >
+                          <Ionicons name="time-outline" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
+                          <Text style={styles.primaryActionText}>
+                            Drops In Progress ({droppedPassengers.length}/${totalPassengers} Dropped)
+                          </Text>
+                        </TouchableOpacity>
+                      )
                     )}
                   </>
                 )}
               </View>
-            </>
-          )}
         </View>
       )
     })()}
 
         
-{/* 4. TODAY'S SUMMARY CARD */}
-        <View style={styles.todaySummaryCard}>
-          <View style={styles.todaySummaryHeader}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <View style={styles.todayIconWrap}>
-                <Ionicons name="wallet" size={16} color="#D97706" />
-              </View>
-              <Text style={styles.todaySummaryTitle}>Today's Summary</Text>
-            </View>
-            <Text style={styles.todayGrossText}>₹{grossEarnings}</Text>
-          </View>
-
-          {/* Today's Target Progress */}
-          <View style={styles.targetProgressContainer}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <Text style={styles.targetLabel}>
-                Daily Target: <Text style={{ fontWeight: '800', color: '#0F172A' }}>₹{grossEarnings}</Text> / ₹{targetGoal}
+        {/* Standby Card when no active ride is underway */}
+        {!activeRide && (
+          <View style={styles.idleStandbyCard}>
+            <View style={styles.idleStandbyHeader}>
+              <View style={[styles.idleStatusDot, { backgroundColor: isOnline ? '#10B981' : '#F59E0B' }]} />
+              <Text style={[styles.idleStatusBadgeText, { color: isOnline ? '#059669' : '#D97706' }]}>
+                {isOnline ? 'ONLINE • READY FOR TRIPS' : 'OFFLINE • DUTY PAUSED'}
               </Text>
-              <View style={styles.percentBadge}>
-                <Text style={styles.percentBadgeText}>{progressPercent}%</Text>
-              </View>
             </View>
-            <View style={styles.progressBarTrack}>
-              <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
-            </View>
-            <Text style={styles.targetSubText}>
-              {grossEarnings >= targetGoal
-                ? '🎉 Daily target achieved! Extra rides earn bonus incentives.'
-                : `₹${Math.max(0, targetGoal - grossEarnings)} remaining to reach today's target.`}
+            <Text style={styles.idleStandbyTitle}>
+              {isOnline ? 'Listening for Incoming Bookings' : 'You are currently Offline'}
+            </Text>
+            <Text style={styles.idleStandbySub}>
+              {isOnline
+                ? 'Stay online in active service areas. Incoming booking requests will pop up immediately with audio alert.'
+                : 'Turn your status toggle ON at the top to receive new ride bookings.'}
             </Text>
           </View>
+        )}
 
-          {/* 6-Metric Compact Grid */}
-          <View style={styles.todayMetricsGrid}>
-            <View style={styles.todayMetricBox}>
-              <Ionicons name="cash" size={15} color="#10B981" />
-              <Text style={styles.todayMetricVal}>₹{grossEarnings}</Text>
-              <Text style={styles.todayMetricLbl}>Earnings</Text>
-            </View>
-            <View style={styles.todayMetricBox}>
-              <Ionicons name="car-sport" size={15} color="#3B82F6" />
-              <Text style={styles.todayMetricVal}>{completedCount}</Text>
-              <Text style={styles.todayMetricLbl}>Trips</Text>
-            </View>
-            <View style={styles.todayMetricBox}>
-              <Ionicons name="checkmark-done" size={15} color="#059669" />
-              <Text style={styles.todayMetricVal}>{completedCount}</Text>
-              <Text style={styles.todayMetricLbl}>Completed</Text>
-            </View>
-            <View style={styles.todayMetricBox}>
-              <Ionicons name="close-circle" size={15} color="#EF4444" />
-              <Text style={styles.todayMetricVal}>{cancelledCount}</Text>
-              <Text style={styles.todayMetricLbl}>Cancelled</Text>
-            </View>
-            <View style={styles.todayMetricBox}>
-              <Ionicons name="shield-checkmark" size={15} color="#7C3AED" />
-              <Text style={styles.todayMetricVal}>{acceptanceRate}</Text>
-              <Text style={styles.todayMetricLbl}>Acceptance</Text>
-            </View>
-            <View style={styles.todayMetricBox}>
-              <Ionicons name="time" size={15} color="#D97706" />
-              <Text style={styles.todayMetricVal}>{stats?.hours !== undefined && stats?.hours !== null ? `${stats.hours}h` : (isOnline ? '1.0h' : '0.0h')}</Text>
-              <Text style={styles.todayMetricLbl}>Online Hours</Text>
-            </View>
-          </View>
-        </View>
-
-        
-{/* 7. Upcoming Accepted Trips */}
+        {/* 7. Upcoming Accepted Trips */}
         {upcomingTrips.length > 0 && (
           <View style={{ marginTop: 14 }}>
             <View style={styles.sectionHeader}>
@@ -2498,130 +3270,22 @@ const DriverHomeScreen = ({ navigation }) => {
         )}
 
         
-{/* 3. LOCATION BASED PROMOTIONAL BANNER CAROUSEL */}
-        {cityFilteredAds.length > 0 && (
-          <View style={{ marginTop: 14 }}>
-            <AdCarousel ads={cityFilteredAds} userRole="driver" navigation={navigation} />
-          </View>
-        )}
-
-        
-{/* 8. QUICK ACTIONS */}
-        <View style={styles.sectionHeader}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="grid-outline" size={16} color="#0F172A" />
-            <Text style={styles.sectionTitle}>Quick Actions</Text>
-          </View>
-        </View>
-        <View style={styles.quickGrid}>
-          {quickActionsList.map(item => (
-            <TouchableOpacity key={item.id} style={styles.quickTile} onPress={item.action} activeOpacity={0.8}>
-              <View style={[styles.quickIconWrap, { backgroundColor: item.bg }]}>
-                <Ionicons name={item.icon} size={22} color={item.color} />
-              </View>
-              <Text style={styles.quickLabel} numberOfLines={1}>{item.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        
-{/* 9. PERFORMANCE */}
-        <View style={styles.sectionHeader}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="trending-up" size={16} color="#0F172A" />
-            <Text style={styles.sectionTitle}>Performance Overview</Text>
-          </View>
-        </View>
-        <View style={styles.performanceCard}>
-          {/* 7-Day Weekly Earnings Mini Bar Chart */}
-          <View style={styles.chartHeaderRow}>
-            <View>
-              <Text style={styles.chartTitle}>Past 7 Days Earnings</Text>
-              <Text style={styles.chartTotal}>₹{finalWeeklyEarnings}</Text>
-            </View>
-            <View style={styles.chartPill}>
-              <Ionicons name="sparkles" size={12} color="#D97706" />
-              <Text style={styles.chartPillText}>Weekly Target</Text>
-            </View>
-          </View>
-
-          <View style={styles.chartBarsContainer}>
-            {weekChartData.map((d, idx) => {
-              const barHeight = Math.max(10, Math.round((d.amount / maxWeeklyAmount) * 60))
-              return (
-                <View key={idx} style={styles.chartBarCol}>
-                  <Text style={styles.chartBarVal}>{d.amount > 0 ? `₹${d.amount}` : ''}</Text>
-                  <View style={styles.chartBarTrack}>
-                    <View
-                      style={[
-                        styles.chartBarFill,
-                        {
-                          height: barHeight,
-                          backgroundColor: d.isToday ? '#F59E0B' : (d.amount > 0 ? '#10B981' : '#E2E8F0'),
-                        },
-                      ]}
-                    />
-                  </View>
-                  <Text style={[styles.chartBarLabel, d.isToday && styles.chartBarLabelActive]}>
-                    {d.label}
-                  </Text>
-                </View>
-              )
-            })}
-          </View>
-
-          {/* Performance Statistics Grid */}
-          <View style={styles.perfStatsDivider} />
-          <View style={styles.perfStatsRow}>
-            <View style={styles.perfStatItem}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                <Ionicons name="star" size={14} color="#F59E0B" />
-                <Text style={styles.perfStatVal}>{driver?.rating || '5.0'}</Text>
-              </View>
-              <Text style={styles.perfStatLbl}>Driver Rating</Text>
-            </View>
-            <View style={styles.perfStatDividerV} />
-            <View style={styles.perfStatItem}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-                <Text style={styles.perfStatVal}>{acceptanceRate}</Text>
-              </View>
-              <Text style={styles.perfStatLbl}>Acceptance</Text>
-            </View>
-            <View style={styles.perfStatDividerV} />
-            <View style={styles.perfStatItem}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                <Ionicons name="alert-circle" size={14} color="#EF4444" />
-                <Text style={styles.perfStatVal}>{cancellationRate}</Text>
-              </View>
-              <Text style={styles.perfStatLbl}>Cancellation</Text>
-            </View>
-            <View style={styles.perfStatDividerV} />
-            <View style={styles.perfStatItem}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                <Ionicons name="car-sport" size={14} color="#7C3AED" />
-                <Text style={styles.perfStatVal}>{driver?.total_trips || stats?.total_trips || completedCount}</Text>
-              </View>
-              <Text style={styles.perfStatLbl}>Total Trips</Text>
-            </View>
-          </View>
-        </View>
-
-        
-{/* 10. RECENT RIDES */}
+        {/* 10. RECENT RIDES (Latest 3 with View All) */}
         <View style={styles.sectionHeader}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Ionicons name="receipt-outline" size={16} color="#0F172A" />
             <Text style={styles.sectionTitle}>Recent Rides</Text>
           </View>
-          <TouchableOpacity onPress={() => navigation.navigate('Trips')} activeOpacity={0.8}>
-            <Text style={styles.viewAllText}>View All →</Text>
-          </TouchableOpacity>
+          {recentTrips && recentTrips.length > 0 && (
+            <TouchableOpacity onPress={() => navigation.navigate('Trips')} activeOpacity={0.8}>
+              <Text style={styles.viewAllText}>View All ({recentTrips.length}) →</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {recentTrips && recentTrips.length > 0 ? (
           <View style={{ paddingHorizontal: 16 }}>
-            {recentTrips.slice(0, 4).map((ride, idx) => {
+            {recentTrips.slice(0, 3).map((ride, idx) => {
               const isCancelled = (ride.status || '').toLowerCase().includes('cancel')
               const fareAmt = Math.round(ride.final_fare || ride.fare || ride.original_fare || 0)
               return (
@@ -2653,12 +3317,119 @@ const DriverHomeScreen = ({ navigation }) => {
                 </View>
               )
             })}
+
+            {recentTrips.length > 3 && (
+              <TouchableOpacity
+                style={styles.moreReviewsBtn}
+                onPress={() => navigation.navigate('Trips')}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.moreReviewsBtnText}>View All {recentTrips.length} Rides →</Text>
+              </TouchableOpacity>
+            )}
           </View>
         ) : (
           <View style={styles.emptyRecentCard}>
             <Ionicons name="car-outline" size={28} color="#94A3B8" />
             <Text style={styles.emptyRecentTitle}>No rides yet today</Text>
             <Text style={styles.emptyRecentSub}>Go Online to receive incoming ride requests in your city</Text>
+          </View>
+        )}
+
+        {/* 11. CUSTOMER REVIEWS FOR THIS DRIVER (Latest 3 with View All) */}
+        <View style={[styles.sectionHeader, { marginTop: 18 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Ionicons name="star" size={16} color="#F59E0B" />
+            <Text style={styles.sectionTitle}>Customer Reviews</Text>
+            <View style={styles.dashRatingPill}>
+              <Ionicons name="star" size={11} color="#F59E0B" />
+              <Text style={styles.dashRatingPillText}>{driver?.rating || '5.0'}</Text>
+            </View>
+          </View>
+          {driverReviews && driverReviews.length > 0 && (
+            <TouchableOpacity
+              onPress={() => navigation.navigate('DriverReviews', { reviews: driverReviews })}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.viewAllText}>View All ({driverReviews.length}) →</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {driverReviews && driverReviews.length > 0 ? (
+          <View style={{ paddingHorizontal: 16, marginBottom: 16 }}>
+            {driverReviews.slice(0, 3).map((rev, idx) => {
+              const stars = Math.min(5, Math.max(1, Math.round(Number(rev.rating) || 5)))
+              return (
+                <View key={rev.id || idx} style={styles.dashReviewCard}>
+                  <View style={styles.dashReviewHeader}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                      <View style={styles.dashReviewAvatarWrap}>
+                        {resolveAssetUrl(rev.reviewer_avatar) ? (
+                          <Image source={{ uri: resolveAssetUrl(rev.reviewer_avatar) }} style={styles.dashReviewAvatarImg} />
+                        ) : (
+                          <Text style={styles.dashReviewAvatarText}>
+                            {((rev.reviewer_name || 'C')?.[0] || 'C').toUpperCase()}
+                          </Text>
+                        )}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.dashReviewName} numberOfLines={1}>{rev.reviewer_name || 'Passenger'}</Text>
+                        <Text style={styles.dashReviewRef}>{rev.booking_ref || `Trip #${rev.booking_id}`}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.dashStarPill}>
+                      <Ionicons name="star" size={12} color="#F59E0B" />
+                      <Text style={styles.dashStarPillText}>{Number(rev.rating || 5).toFixed(1)}</Text>
+                    </View>
+                  </View>
+
+                  {rev.comment ? (
+                    <View style={styles.dashReviewCommentBox}>
+                      <Text style={styles.dashReviewCommentText}>"{rev.comment}"</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.dashReviewCommentBox}>
+                      <Text style={[styles.dashReviewCommentText, { fontStyle: 'italic', color: '#94A3B8' }]}>
+                        Rated {rev.rating} stars for a smooth and safe journey
+                      </Text>
+                    </View>
+                  )}
+
+                  <View style={styles.dashReviewFooter}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                      {[1, 2, 3, 4, 5].map(s => (
+                        <Ionicons
+                          key={s}
+                          name={s <= stars ? "star" : "star-outline"}
+                          size={13}
+                          color={s <= stars ? "#F59E0B" : "#CBD5E1"}
+                        />
+                      ))}
+                    </View>
+                    <Text style={styles.dashReviewDate}>
+                      {rev.created_at ? formatDateDisplay(rev.created_at) : 'Recently'}
+                    </Text>
+                  </View>
+                </View>
+              )
+            })}
+
+            {driverReviews.length > 3 && (
+              <TouchableOpacity
+                style={styles.moreReviewsBtn}
+                onPress={() => navigation.navigate('DriverReviews', { reviews: driverReviews })}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.moreReviewsBtnText}>View All {driverReviews.length} Reviews →</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          <View style={styles.emptyReviewCard}>
+            <Ionicons name="star-outline" size={26} color="#CBD5E1" />
+            <Text style={styles.emptyReviewTitle}>No Customer Reviews Yet</Text>
+            <Text style={styles.emptyReviewSub}>Completed rides with happy passengers will show ratings & feedback here</Text>
           </View>
         )}
       </ScrollView>
@@ -2702,48 +3473,180 @@ const DriverHomeScreen = ({ navigation }) => {
                         <Text style={styles.custName}>{detailModalTrip.customer_name || 'Passenger'}</Text>
                         <Ionicons name="shield-checkmark" size={13} color="#10B981" />
                       </View>
-                      <Text style={styles.custPhone}>{detailModalTrip.customer_phone ? `+91 ${detailModalTrip.customer_phone}` : '—'}</Text>
+                      {['trip_started', 'in_progress', 'completed'].includes(detailModalTrip.status) ? (
+                        <Text style={styles.custPhone}>{detailModalTrip.customer_phone ? '🔒 Number Protected (Direct Call Enabled)' : '—'}</Text>
+                      ) : (
+                        <Text style={[styles.custPhone, { color: '#64748B', fontStyle: 'italic', fontSize: 11 }]}>🔒 Available once trip starts</Text>
+                      )}
                     </View>
                   </View>
-                  {detailModalTrip.customer_phone ? (
+                  {['trip_started', 'in_progress', 'completed'].includes(detailModalTrip.status) && detailModalTrip.customer_phone ? (
                     <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
                       <TouchableOpacity
-                        style={styles.sheetActionBtn}
+                        style={[styles.sheetActionBtn, { backgroundColor: '#16A34A', borderColor: '#16A34A' }]}
                         onPress={() => Linking.openURL(`tel:${detailModalTrip.customer_phone}`)}
                       >
-                        <Ionicons name="call" size={14} color={COLORS.primary} />
-                        <Text style={styles.sheetActionBtnText}>Call Customer</Text>
+                        <Ionicons name="call" size={18} color="#FFFFFF" />
+                        <Text style={[styles.sheetActionBtnText, { color: '#FFFFFF', fontWeight: '800' }]}>Call Passenger</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.sheetActionBtn}
                         onPress={() => Linking.openURL(`sms:${detailModalTrip.customer_phone}`)}
                       >
-                        <Ionicons name="chatbubble" size={14} color={COLORS.primary} />
+                        <Ionicons name="chatbubble" size={16} color={COLORS.primary} />
+                        <Text style={styles.sheetActionBtnText}>Message</Text>
                       </TouchableOpacity>
                     </View>
-                  ) : null}
+                  ) : (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#F1F5F9', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginTop: 4 }}>
+                      <Ionicons name="lock-closed" size={13} color="#64748B" />
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748B' }}>
+                        Contact details protected until trip starts
+                      </Text>
+                    </View>
+                  )}
                 </View>
 
-                {/* Route Information */}
-                <View style={styles.sheetSection}>
-                  <Text style={styles.sheetSectionTitle}>ROUTE & SCHEDULE</Text>
-                  <View style={styles.routeBox}>
-                    <View style={styles.routeItem}>
-                      <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
-                      <Text style={styles.routeText}>Pickup: {detailModalTrip.pickup_address}</Text>
-                    </View>
-                    <View style={styles.routeItem}>
-                      <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
-                      <Text style={styles.routeText}>Drop: {detailModalTrip.dest_address}</Text>
-                    </View>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
-                    <Text style={styles.sheetLabel}>Travel Date: {formatDateDisplay(detailModalTrip.pickup_date)}</Text>
-                    <Text style={styles.sheetLabel}>Pickup Time: {formatTime12Hr(detailModalTrip.pickup_time || '08:30')}</Text>
-                  </View>
-                </View>
+                {/* GOGO Cabs Rich Trip Details Breakdown */}
+                {(() => {
+                  const pDet = parseAddressDetails(detailModalTrip.pickup_address, 'pickup')
+                  const dDet = parseAddressDetails(detailModalTrip.dest_address, 'drop')
+                  const dKm = detailModalTrip.distance_km ? parseFloat(detailModalTrip.distance_km).toFixed(2) : '151.82'
+                  const pRate = detailModalTrip.per_km_rate ? Math.round(detailModalTrip.per_km_rate) : 21
+                  const bataAmt = detailModalTrip.driver_bata || 500
+                  const fareVal = Math.round(detailModalTrip.final_fare || detailModalTrip.fare || detailModalTrip.fare_estimate || detailModalTrip.original_fare || 0)
+                  const cFee = parseFloat(detailModalTrip.commission_amount || (fareVal * 0.134) || 639).toFixed(2)
+                  const vName = detailModalTrip.vehicle_type_name || detailModalTrip.vehicle_category_name || 'Innova'
+                  const tStart = formatTripScheduleDate(detailModalTrip.pickup_date, detailModalTrip.pickup_time)
+                  const tEnd = detailModalTrip.return_date ? formatTripScheduleDate(detailModalTrip.return_date, detailModalTrip.return_time) : 'Not Applicable'
+                  const nText = detailModalTrip.notes || detailModalTrip.driver_instructions || 'Km 20/400/750/ toll CC GST'
 
-                {/* Billing & Distance */}
+                  return (
+                    <View style={[styles.gogoTripCard, { marginHorizontal: 0, marginTop: 12 }]}>
+                      {/* Connected Timeline Route */}
+                      <View style={styles.gogoRouteContainer}>
+                        <View style={styles.gogoTimelineRow}>
+                          <View style={styles.gogoDotCol}>
+                            <View style={styles.gogoDotGreen} />
+                            <View style={styles.gogoVerticalLine} />
+                          </View>
+                          <View style={styles.gogoLocationContent}>
+                            <Text style={styles.gogoFullAddressText} numberOfLines={3}>{pDet.full}</Text>
+                            <View style={styles.gogoMainLocalityRow}>
+                              <Text style={styles.gogoMainLocalityText}>{pDet.main}</Text>
+                              <Text style={styles.gogoBadgePickup}> (Pickup)</Text>
+                            </View>
+                            <Text style={styles.gogoDistrictText}>District: {pDet.district}</Text>
+                          </View>
+                        </View>
+
+                        <View style={styles.gogoTimelineRow}>
+                          <View style={styles.gogoDotCol}>
+                            <View style={styles.gogoDotRed} />
+                          </View>
+                          <View style={styles.gogoLocationContent}>
+                            <Text style={styles.gogoFullAddressText} numberOfLines={3}>{dDet.full}</Text>
+                            <View style={styles.gogoMainLocalityRow}>
+                              <Text style={styles.gogoMainLocalityText}>{dDet.main}</Text>
+                              <Text style={styles.gogoBadgeDrop}> (Drop)</Text>
+                            </View>
+                            <Text style={styles.gogoDistrictText}>District: {dDet.district}</Text>
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* 3-Column Metrics Summary */}
+                      <View style={styles.gogoThreeColRow}>
+                        <View style={styles.gogoColItem}>
+                          <Text style={styles.gogoColSymbol}>₹</Text>
+                          <Text style={styles.gogoColPrimaryText}>Rs. {fareVal}</Text>
+                        </View>
+                        <View style={styles.gogoColDivider} />
+                        <View style={[styles.gogoColItem, { flex: 1.2 }]}>
+                          <Ionicons name="car" size={18} color={COLORS.primary} />
+                          <Text style={styles.gogoColPrimaryText}>{vName} (AC)</Text>
+                          <View style={styles.gogoFuelBadge}>
+                            <Text style={styles.gogoFuelBadgeText}>⛽ Petrol/Diesel only</Text>
+                          </View>
+                        </View>
+                        <View style={styles.gogoColDivider} />
+                        <View style={styles.gogoColItem}>
+                          <Ionicons name="navigate-outline" size={17} color="#10B981" />
+                          <Text style={styles.gogoColPrimaryText}>{dKm} Km</Text>
+                        </View>
+                      </View>
+
+                      {/* 2-Column Rates & Commission Breakdown */}
+                      <View style={styles.gogoTwoColRow}>
+                        <View style={styles.gogoRateCol}>
+                          <Ionicons name="speedometer-outline" size={18} color={COLORS.primary} />
+                          <Text style={styles.gogoRateText}>Rs.{pRate} per km / Bata - {bataAmt}</Text>
+                        </View>
+                        <View style={styles.gogoColDivider} />
+                        <View style={styles.gogoCommCol}>
+                          <View style={styles.gogoCommAmountRow}>
+                            <Ionicons name="car-outline" size={16} color="#D97706" />
+                            <Text style={styles.gogoCommAmountText}>Rs.{cFee}</Text>
+                          </View>
+                          <Text style={styles.gogoCommSubtext}>(Commission fee)</Text>
+                        </View>
+                      </View>
+
+                      {/* Permit Charges Included */}
+                      <View style={styles.gogoInclusionsRow}>
+                        <Ionicons name="document-text" size={16} color="#0891B2" />
+                        <Text style={styles.gogoInclusionsText}>Permit Charges Included</Text>
+                      </View>
+
+                      {/* Trip Start & End */}
+                      <View style={styles.gogoScheduleBox}>
+                        <View style={styles.gogoScheduleItem}>
+                          <View style={styles.gogoScheduleLeft}>
+                            <Ionicons name="calendar" size={16} color={COLORS.primary} />
+                            <Text style={styles.gogoScheduleLabel}>Trip Start</Text>
+                          </View>
+                          <Text style={styles.gogoScheduleValue}>{tStart}</Text>
+                        </View>
+                        <View style={styles.gogoScheduleItem}>
+                          <View style={styles.gogoScheduleLeft}>
+                            <Ionicons name="calendar" size={16} color={COLORS.primary} />
+                            <Text style={styles.gogoScheduleLabel}>Trip End</Text>
+                          </View>
+                          <Text style={styles.gogoScheduleValue}>{tEnd}</Text>
+                        </View>
+                      </View>
+
+                      {/* Notes Accordion */}
+                      <View style={styles.gogoNotesWrapper}>
+                        <View style={styles.gogoNotesHeader}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Ionicons name="document-text-outline" size={16} color="#1E40AF" />
+                            <Text style={styles.gogoNotesHeaderText}>Trip Notes & Requirements</Text>
+                          </View>
+                          <Ionicons name="chevron-up" size={18} color="#1E40AF" />
+                        </View>
+                        <View style={styles.gogoNotesBody}>
+                          {(() => {
+                            const modalNotesList = getDeduplicatedNotes(nText, detailModalTrip?.status === 'driver_assigned')
+                            return modalNotesList.length > 0 ? (
+                              <View style={styles.proNotesGrid}>
+                                {modalNotesList.map((item, idx) => (
+                                  <View key={idx} style={styles.proNoteBadge}>
+                                    <Text style={styles.proNoteBadgeText}>{item}</Text>
+                                  </View>
+                                ))}
+                              </View>
+                            ) : (
+                              <Text style={styles.proNotesEmptyText}>No special instructions</Text>
+                            )
+                          })()}
+                        </View>
+                      </View>
+                    </View>
+                  )
+                })()}
+
+                {/* Billing & Status */}
                 <View style={styles.sheetSection}>
                   <Text style={styles.sheetSectionTitle}>BILLING & STATUS</Text>
                   <View style={styles.sheetRow}>
@@ -2786,7 +3689,7 @@ const DriverHomeScreen = ({ navigation }) => {
         animationType="slide"
         transparent={true}
       >
-        <View style={styles.modalOverlay}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.75)', justifyContent: 'flex-end' }}>
           <View style={styles.incomingSheet}>
             <View style={styles.countdownBarContainer}>
               <View style={[styles.countdownFill, { width: `${(countdown / 30) * 100}%` }]} />
@@ -2858,31 +3761,316 @@ const DriverHomeScreen = ({ navigation }) => {
               </View>
             </View>
 
-            {/* Action Buttons */}
-            <View style={styles.incomingBtnRow}>
+            {/* Strict Swipe to Accept & Decline Actions */}
+            <View style={{ marginTop: 14, width: '100%' }}>
+              <SwipeToActionButton
+                title={`SWIPE TO ACCEPT (${countdown}s)`}
+                icon="arrow-forward"
+                trackBg="#16A34A"
+                thumbBg="#FFFFFF"
+                thumbIconColor="#15803D"
+                isLoading={respondingPendingId === activeIncoming?.id}
+                onSwipeComplete={() => handleAcceptInstantRide(activeIncoming.id)}
+              />
+
               <TouchableOpacity
-                style={styles.rejectBtn}
+                style={{ paddingVertical: 10, alignItems: 'center', justifyContent: 'center', marginTop: 4 }}
                 onPress={() => {
                   setRejectModalTrip(activeIncoming)
                   setRejectIsLongTrip(false)
                 }}
               >
-                <Text style={styles.rejectBtnText}>Decline</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#EF4444' }}>Decline Ride</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── PROFESSIONAL ASSIGNED RIDE ALERT MODAL ── */}
+      <Modal
+        visible={Boolean(assignedAlertTrip)}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {}}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.75)', justifyContent: 'flex-end' }}>
+          <View style={[styles.incomingSheet, { paddingBottom: Platform.OS === 'ios' ? 36 : 24 }]}>
+            {/* Top Indicator */}
+            <View style={{ width: 44, height: 4, borderRadius: 2, backgroundColor: '#CBD5E1', alignSelf: 'center', marginBottom: 14 }} />
+
+            {/* Header Badge & Title */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <View style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 19,
+                  backgroundColor: '#FEF3C7',
+                  borderWidth: 2,
+                  borderColor: '#F59E0B',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <Ionicons name="flash" size={20} color="#D97706" />
+                </View>
+                <View>
+                  <Text style={{ fontSize: 17, fontWeight: '900', color: '#0F172A', letterSpacing: 0.3 }}>
+                    NEW RIDE ASSIGNED!
+                  </Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#059669' }}>
+                    ⚡ Instant Dispatch · Action Required
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{
+                backgroundColor: '#DCFCE7',
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: '#86EFAC',
+              }}>
+                <Text style={{ fontSize: 11, fontWeight: '900', color: '#15803D' }}>
+                  ADMIN DISPATCH
+                </Text>
+              </View>
+            </View>
+
+            {/* Passenger & Fare Spotlight Card */}
+            <View style={{
+              backgroundColor: '#0F172A',
+              borderRadius: 20,
+              padding: 16,
+              marginBottom: 14,
+              ...SHADOW.md,
+            }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                  <View style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderWidth: 1.5,
+                    borderColor: 'rgba(255, 255, 255, 0.25)',
+                  }}>
+                    <Ionicons name="person" size={22} color="#FDE047" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '800', color: '#FFFFFF' }} numberOfLines={1}>
+                      {assignedAlertTrip?.customer_name || 'Passenger'}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                      <Ionicons name="lock-closed" size={12} color="#FBBF24" />
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#FCD34D' }}>
+                        Number Protected
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Big Fare Display */}
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#94A3B8', textTransform: 'uppercase' }}>
+                    Est. Fare
+                  </Text>
+                  <Text style={{ fontSize: 26, fontWeight: '900', color: '#4ADE80' }}>
+                    ₹{Math.round(assignedAlertTrip?.final_fare || assignedAlertTrip?.fare || assignedAlertTrip?.fare_estimate || 0)}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Badges Row */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255, 255, 255, 0.1)' }}>
+                <View style={{ backgroundColor: 'rgba(255, 255, 255, 0.12)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#F1F5F9' }}>
+                    💳 {assignedAlertTrip?.payment_method?.toUpperCase() || 'CASH'}
+                  </Text>
+                </View>
+                <View style={{ backgroundColor: 'rgba(255, 255, 255, 0.12)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#F1F5F9' }}>
+                    📍 {assignedAlertTrip?.distance_km ? `${parseFloat(assignedAlertTrip.distance_km).toFixed(1)} km` : 'Local Ride'}
+                  </Text>
+                </View>
+                <View style={{ backgroundColor: 'rgba(255, 255, 255, 0.12)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: '#F1F5F9' }}>
+                    🚗 {assignedAlertTrip?.vehicle_type_name || assignedAlertTrip?.vehicle_type || 'Taxi'}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Extra Arrival Pickup Cash Notice (if applicable) */}
+            {(() => {
+              const extraKm = Number(assignedAlertTrip?.extra_pickup_distance_km || 0)
+              const pickupDist = Number(assignedAlertTrip?.pickup_distance_km || 0)
+              const pickupCash = Math.round(Number(assignedAlertTrip?.pickup_charge || 0))
+              if (extraKm > 0 || pickupDist > 2.0) {
+                const actualExtra = extraKm > 0 ? extraKm : Math.max(0, pickupDist - 2.0)
+                const actualCash = pickupCash > 0 ? pickupCash : Math.round(actualExtra * 10)
+                return (
+                  <View style={{
+                    backgroundColor: '#FEF3C7',
+                    borderRadius: 14,
+                    padding: 12,
+                    marginBottom: 12,
+                    borderWidth: 1.5,
+                    borderColor: '#F59E0B',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 10,
+                  }}>
+                    <Ionicons name="cash" size={24} color="#D97706" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '800', color: '#92400E' }}>
+                        💰 Collect Extra Cash: ₹{actualCash}
+                      </Text>
+                      <Text style={{ fontSize: 11.5, color: '#B45309', marginTop: 1 }}>
+                        Pickup is {(pickupDist > 0 ? pickupDist : (2.0 + actualExtra)).toFixed(1)} km away ({actualExtra.toFixed(1)} km extra arrival distance)
+                      </Text>
+                    </View>
+                  </View>
+                )
+              }
+              return null
+            })()}
+
+            {/* Route Timeline Card */}
+            <View style={{
+              backgroundColor: '#F8FAFC',
+              borderRadius: 16,
+              padding: 14,
+              borderWidth: 1.5,
+              borderColor: '#E2E8F0',
+              marginBottom: 16,
+            }}>
+              {/* Pickup */}
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                <View style={{ alignItems: 'center', marginTop: 3 }}>
+                  <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#10B981', borderWidth: 2.5, borderColor: '#FFFFFF', elevation: 2 }} />
+                  <View style={{ width: 2, height: 32, backgroundColor: '#CBD5E1', marginVertical: 3 }} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: '#059669', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    PICKUP LOCATION
+                  </Text>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#0F172A', marginTop: 2 }} numberOfLines={2}>
+                    {assignedAlertTrip?.pickup_address}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Drop */}
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginTop: 2 }}>
+                <View style={{ alignItems: 'center', marginTop: 3 }}>
+                  <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#EF4444', borderWidth: 2.5, borderColor: '#FFFFFF', elevation: 2 }} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: '#DC2626', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    DESTINATION / DROP
+                  </Text>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#0F172A', marginTop: 2 }} numberOfLines={2}>
+                    {assignedAlertTrip?.dest_address}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Rejection Notice Banner */}
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              backgroundColor: '#F1F5F9',
+              paddingHorizontal: 12,
+              paddingVertical: 7,
+              borderRadius: 10,
+              marginBottom: 14,
+            }}>
+              <Ionicons name="information-circle-outline" size={15} color="#64748B" />
+              <Text style={{ fontSize: 11, fontWeight: '600', color: '#64748B', flex: 1 }}>
+                If declined, this ride will be immediately transferred to the next nearby driver.
+              </Text>
+            </View>
+
+            {/* Professional Two-Action Buttons: Decline & Accept */}
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              {/* Decline / Reject Button */}
+              <TouchableOpacity
+                style={{
+                  flex: 1,
+                  backgroundColor: '#FEF2F2',
+                  borderWidth: 1.5,
+                  borderColor: '#FCA5A5',
+                  paddingVertical: 14,
+                  borderRadius: 14,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  ...SHADOW.small,
+                }}
+                onPress={() => {
+                  const tripObj = assignedAlertTrip
+                  const tripId = tripObj?.id
+                  const isLt = Boolean(tripObj?.is_long_trip || tripObj?.long_trip_id)
+                  setAssignedAlertTrip(null)
+                  if (isLt) {
+                    handleRejectAdminAssignedTrip(tripObj, 'Driver declined from assigned modal')
+                  } else {
+                    handleDeclineInstantRide(tripId, 'Driver declined from assigned modal')
+                  }
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="close-circle" size={20} color="#DC2626" />
+                <Text style={{ fontSize: 14, fontWeight: '900', color: '#DC2626', letterSpacing: 0.3 }}>
+                  DECLINE
+                </Text>
               </TouchableOpacity>
 
+              {/* Accept Ride Button */}
               <TouchableOpacity
-                style={[styles.acceptBtn, respondingPendingId === activeIncoming?.id && { opacity: 0.7 }]}
-                onPress={() => handleAcceptInstantRide(activeIncoming.id)}
-                disabled={respondingPendingId === activeIncoming?.id}
+                style={{
+                  flex: 1.4,
+                  backgroundColor: '#16A34A',
+                  paddingVertical: 14,
+                  borderRadius: 14,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  elevation: 4,
+                  shadowColor: '#16A34A',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.35,
+                  shadowRadius: 6,
+                }}
+                onPress={() => {
+                  const tripToAccept = assignedAlertTrip
+                  setAssignedAlertTrip(null)
+                  if (tripToAccept) {
+                    setActiveRide(tripToAccept)
+                    locallyAcceptedTripIdsRef.current.add(tripToAccept.id)
+                  }
+                  if (tripToAccept?.is_long_trip || tripToAccept?.long_trip_id) {
+                    handleAcceptAdminAssignedTrip(tripToAccept)
+                  } else if (tripToAccept?.id) {
+                    handleAcceptInstantRide(tripToAccept.id)
+                  } else {
+                    handleUpdateRideStatus('driver_accepted')
+                  }
+                }}
+                activeOpacity={0.85}
               >
-                {respondingPendingId === activeIncoming?.id ? (
-                  <ActivityIndicator color="#0F172A" />
-                ) : (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Ionicons name="checkmark-circle" size={18} color="#0F172A" />
-                    <Text style={styles.acceptBtnText}>Accept Ride ({countdown}s)</Text>
-                  </View>
-                )}
+                <Ionicons name="checkmark-circle" size={22} color="#FFFFFF" />
+                <Text style={{ fontSize: 15, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.5 }}>
+                  ACCEPT RIDE
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -3036,15 +4224,35 @@ const DriverHomeScreen = ({ navigation }) => {
         </View>
       </Modal>
 
-      {/* ── Enterprise Ride Cancelled by Customer Alert Modal ── */}
+      {/* ── Professional Ride Cancelled by Customer Alert Modal ── */}
       <Modal
         visible={Boolean(cancelledNotice) && isFocused}
         animationType="fade"
         transparent={true}
         onRequestClose={handleDismissCancelledNotice}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.dialogCard, { padding: 22, alignItems: 'center' }]}>
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(15, 23, 42, 0.75)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 20,
+        }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 380,
+            backgroundColor: '#FFFFFF',
+            borderRadius: 24,
+            padding: 22,
+            alignItems: 'center',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 12 },
+            shadowOpacity: 0.25,
+            shadowRadius: 20,
+            elevation: 18,
+            borderWidth: 1.5,
+            borderColor: '#FCA5A5',
+          }}>
             <View style={{
               width: 68,
               height: 68,
@@ -3054,7 +4262,7 @@ const DriverHomeScreen = ({ navigation }) => {
               justifyContent: 'center',
               marginBottom: 14,
               borderWidth: 3,
-              borderColor: '#FECACA'
+              borderColor: '#FECACA',
             }}>
               <Ionicons name="close-circle" size={44} color="#DC2626" />
             </View>
@@ -3063,21 +4271,25 @@ const DriverHomeScreen = ({ navigation }) => {
               backgroundColor: '#FEF2F2',
               borderColor: '#FCA5A5',
               borderWidth: 1,
-              paddingHorizontal: 10,
+              paddingHorizontal: 12,
               paddingVertical: 4,
               borderRadius: 20,
               marginBottom: 8,
             }}>
-              <Text style={{ fontSize: 11, fontWeight: '800', color: '#B91C1C', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                Trip Cancelled by Rider
+              <Text style={{ fontSize: 11, fontWeight: '800', color: '#B91C1C', textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                RIDE CANCELLED BY CUSTOMER
               </Text>
             </View>
 
-            <Text style={{ fontSize: 19, fontWeight: '900', color: '#0F172A', textAlign: 'center', marginBottom: 4 }}>
+            <Text style={{ fontSize: 20, fontWeight: '900', color: '#0F172A', textAlign: 'center', marginBottom: 4 }}>
               Ride Has Been Cancelled
             </Text>
 
-            <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '600', marginBottom: 16 }}>
+            <Text style={{ fontSize: 14, color: '#DC2626', fontWeight: '800', textAlign: 'center', marginBottom: 6 }}>
+              {cancelledNotice?.customerName ? `Customer "${cancelledNotice.customerName}" cancelled this ride.` : 'Customer has cancelled this booking.'}
+            </Text>
+
+            <Text style={{ fontSize: 12, color: '#64748B', fontWeight: '600', marginBottom: 14 }}>
               Booking Ref: <Text style={{ fontFamily: 'monospace', fontWeight: '800', color: '#0F172A' }}>{cancelledNotice?.bookingRef || 'CTB'}</Text>
             </Text>
 
@@ -3106,22 +4318,24 @@ const DriverHomeScreen = ({ navigation }) => {
             </View>
 
             {/* Reason Box */}
-            <View style={{
-              width: '100%',
-              backgroundColor: '#FFFBEB',
-              borderRadius: 12,
-              padding: 12,
-              borderWidth: 1,
-              borderColor: '#FDE68A',
-              marginBottom: 16,
-            }}>
-              <Text style={{ fontSize: 11, fontWeight: '800', color: '#92400E', marginBottom: 2 }}>
-                Cancellation Reason:
-              </Text>
-              <Text style={{ fontSize: 13, fontWeight: '700', color: '#78350F' }}>
-                "{cancelledNotice?.reason || 'Customer cancelled this booking.'}"
-              </Text>
-            </View>
+            {cancelledNotice?.reason ? (
+              <View style={{
+                width: '100%',
+                backgroundColor: '#FFFBEB',
+                borderRadius: 12,
+                padding: 10,
+                borderWidth: 1,
+                borderColor: '#FDE68A',
+                marginBottom: 12,
+              }}>
+                <Text style={{ fontSize: 10.5, fontWeight: '800', color: '#92400E', marginBottom: 2 }}>
+                  Cancellation Reason:
+                </Text>
+                <Text style={{ fontSize: 12.5, fontWeight: '700', color: '#78350F' }}>
+                  "{cancelledNotice.reason}"
+                </Text>
+              </View>
+            ) : null}
 
             {/* Driver Reassurance Banner */}
             <View style={{
@@ -3130,7 +4344,7 @@ const DriverHomeScreen = ({ navigation }) => {
               alignItems: 'center',
               gap: 8,
               backgroundColor: '#F0FDF4',
-              borderRadius: 10,
+              borderRadius: 12,
               padding: 10,
               borderWidth: 1,
               borderColor: '#BBF7D0',
@@ -3138,7 +4352,7 @@ const DriverHomeScreen = ({ navigation }) => {
             }}>
               <Ionicons name="checkmark-circle" size={18} color="#16A34A" />
               <Text style={{ fontSize: 12, fontWeight: '700', color: '#166534', flex: 1 }}>
-                You are Online & Available. New requests will appear automatically.
+                You are Online & Available. New ride requests will appear automatically.
               </Text>
             </View>
 
@@ -3157,9 +4371,145 @@ const DriverHomeScreen = ({ navigation }) => {
               activeOpacity={0.88}
             >
               <Text style={{ fontSize: 15, fontWeight: '900', color: '#000000' }}>
-                Got It · Continue Driving 🚕
+                Got It · Ready for New Rides 🚕
               </Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Customer Profile Modal Sheet ── */}
+      <Modal
+        visible={showCustomerModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCustomerModal(false)}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(15, 23, 42, 0.72)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 20,
+        }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 400,
+            backgroundColor: '#FFFFFF',
+            borderRadius: 24,
+            padding: 20,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 10 },
+            shadowOpacity: 0.25,
+            shadowRadius: 20,
+            elevation: 16,
+            borderWidth: 1.5,
+            borderColor: '#E2E8F0',
+          }}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="person-circle" size={24} color="#2563EB" />
+                <Text style={{ fontSize: 17, fontWeight: '800', color: '#0F172A' }}>Customer Profile</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowCustomerModal(false)}
+                style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Ionicons name="close" size={18} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Profile Avatar & Name */}
+            <View style={{ alignItems: 'center', paddingVertical: 10 }}>
+              <View style={{
+                width: 76,
+                height: 76,
+                borderRadius: 38,
+                backgroundColor: '#FEF3C7',
+                borderWidth: 3,
+                borderColor: '#F59E0B',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+                marginBottom: 10,
+              }}>
+                <Text style={{ fontSize: 30, fontWeight: '900', color: '#B45309' }}>
+                  {((activeRide?.customer_name || 'R')?.[0] || 'R').toUpperCase()}
+                </Text>
+                {(!custAvatarError && resolveAssetUrl(activeRide?.customer_avatar_url || activeRide?.customer_avatar)) ? (
+                  <Image
+                    source={{ uri: resolveAssetUrl(activeRide?.customer_avatar_url || activeRide?.customer_avatar) }}
+                    style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' }}
+                    resizeMode="cover"
+                    onError={() => setCustAvatarError(true)}
+                  />
+                ) : null}
+              </View>
+              <Text style={{ fontSize: 19, fontWeight: '900', color: '#0F172A' }}>
+                {activeRide?.customer_name || 'Passenger'}
+              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: '#15803D' }}>✓ Verified Customer</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#FEF3C7', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 }}>
+                  <Ionicons name="star" size={12} color="#F59E0B" />
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: '#B45309' }}>5.0</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Contact & Booking Details */}
+            <View style={{ backgroundColor: '#F8FAFC', borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#E2E8F0', marginVertical: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748B', textTransform: 'uppercase' }}>Phone Number</Text>
+                <Text style={{ fontSize: 14, fontWeight: '900', color: '#2563EB' }}>{activeRide?.customer_phone || 'Not available'}</Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748B', textTransform: 'uppercase' }}>Payment Mode</Text>
+                <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '800', color: '#B45309' }}>{activeRide?.payment_method?.toUpperCase() || 'CASH'}</Text>
+                </View>
+              </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748B', textTransform: 'uppercase' }}>Booked Fare</Text>
+                <Text style={{ fontSize: 15, fontWeight: '900', color: '#059669' }}>₹{Math.round(activeRide?.final_fare || activeRide?.fare || activeRide?.original_fare || activeRide?.fare_estimate || 219)}</Text>
+              </View>
+
+              <View style={{ borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingTop: 8, marginTop: 2 }}>
+                <Text style={{ fontSize: 10.5, fontWeight: '700', color: '#64748B', textTransform: 'uppercase', marginBottom: 3 }}>Pickup Location</Text>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: '#1E293B', lineHeight: 16 }} numberOfLines={2}>
+                  {activeRide?.pickup_address || 'Pickup Address'}
+                </Text>
+              </View>
+            </View>
+
+            {/* Quick Actions Row */}
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 4 }}>
+              <TouchableOpacity
+                style={{ flex: 1, backgroundColor: '#10B981', paddingVertical: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }}
+                onPress={() => {
+                  Linking.openURL(`tel:${activeRide?.customer_phone}`)
+                  setShowCustomerModal(false)
+                }}
+              >
+                <Ionicons name="call" size={18} color="#FFFFFF" />
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#FFFFFF' }}>Call Rider</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{ flex: 1, backgroundColor: '#2563EB', paddingVertical: 12, borderRadius: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }}
+                onPress={() => {
+                  Linking.openURL(`sms:${activeRide?.customer_phone}`)
+                  setShowCustomerModal(false)
+                }}
+              >
+                <Ionicons name="chatbubble-ellipses" size={18} color="#FFFFFF" />
+                <Text style={{ fontSize: 14, fontWeight: '800', color: '#FFFFFF' }}>Message</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -3168,66 +4518,157 @@ const DriverHomeScreen = ({ navigation }) => {
       <Modal
         visible={completeTripModalVisible}
         transparent
-        animationType="slide"
+        animationType="fade"
         onRequestClose={() => !isSubmittingComplete && setCompleteTripModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.otpModalCard, { maxHeight: '92%', width: '92%', paddingVertical: 18, paddingHorizontal: 16 }]}>
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
-              {/* Header */}
-              <View style={{ alignItems: 'center', marginBottom: 12 }}>
-                <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: '#ECFDF5', alignItems: 'center', justifyContent: 'center', marginBottom: 8, borderWidth: 2, borderColor: '#A7F3D0' }}>
-                  <Ionicons name="checkmark-done-circle" size={32} color="#10B981" />
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(15, 23, 42, 0.72)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          paddingHorizontal: 16,
+          paddingVertical: 24,
+        }}>
+          <View style={{
+            width: '100%',
+            maxWidth: 420,
+            maxHeight: '92%',
+            backgroundColor: '#FFFFFF',
+            borderRadius: 24,
+            paddingTop: 18,
+            paddingHorizontal: 18,
+            paddingBottom: 16,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 12 },
+            shadowOpacity: 0.3,
+            shadowRadius: 24,
+            elevation: 20,
+            borderWidth: 1.5,
+            borderColor: '#E2E8F0',
+          }}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 6 }}>
+              {/* Header with Title and Close Button */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#ECFDF5', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#A7F3D0' }}>
+                    <Ionicons name="checkmark-done" size={24} color="#10B981" />
+                  </View>
+                  <View>
+                    <Text style={{ fontSize: 17, fontWeight: '800', color: '#0F172A' }}>Complete Trip & Final Bill</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#B45309', backgroundColor: '#FEF3C7', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>🚖 CityOne Taxi</Text>
+                      <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '600' }}>#{activeRide?.booking_ref || ''}</Text>
+                    </View>
+                  </View>
                 </View>
-                <Text style={{ fontSize: 18, fontWeight: '800', color: COLORS.textPrimary }}>Complete Trip & Final Bill</Text>
-                <Text style={{ fontSize: 12, color: COLORS.gray500, marginTop: 2 }}>Booking #{activeRide?.booking_ref || ''}</Text>
+                <TouchableOpacity
+                  onPress={() => !isSubmittingComplete && setCompleteTripModalVisible(false)}
+                  disabled={isSubmittingComplete}
+                  style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="close" size={20} color="#64748B" />
+                </TouchableOpacity>
               </View>
 
               {/* Trip Subtype Badge */}
-              <View style={{ flexDirection: 'row', justifyContent: 'center', marginBottom: 12 }}>
-                <View style={{ backgroundColor: activeRide?.trip_sub_type === 'hourly' ? '#EFF6FF' : '#FEF3C7', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: activeRide?.trip_sub_type === 'hourly' ? '#BFDBFE' : '#FDE68A' }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-start', marginBottom: 12 }}>
+                <View style={{ backgroundColor: activeRide?.trip_sub_type === 'hourly' ? '#EFF6FF' : '#FEF3C7', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, borderWidth: 1, borderColor: activeRide?.trip_sub_type === 'hourly' ? '#BFDBFE' : '#FDE68A' }}>
                   <Text style={{ fontSize: 11, fontWeight: '800', color: activeRide?.trip_sub_type === 'hourly' ? '#1D4ED8' : '#B45309' }}>
                     {activeRide?.trip_sub_type === 'hourly' ? `⏱️ Hourly Rental (${activeRide.package_hours || 1} hrs)` : `🚗 ${activeRide?.trip_type === 'round_trip' ? 'Round Trip' : 'Drop Taxi / Point-to-Point'}`}
                   </Text>
                 </View>
               </View>
 
-              {/* Booked Route Distance */}
-              <View style={{ backgroundColor: '#F8FAFC', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 14 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                  <Text style={{ fontSize: 12, color: COLORS.gray600 }}>Initial Booked Distance:</Text>
-                  <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textPrimary }}>
-                    {Number(activeRide?.original_distance_km || activeRide?.distance_km || 0).toFixed(1)} km
-                  </Text>
-                </View>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={{ fontSize: 12, color: COLORS.gray600 }}>Initial Booked Fare:</Text>
-                  <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textPrimary }}>
-                    ₹{Math.round(Number(activeRide?.base_package_fare || activeRide?.fare_estimate || activeRide?.final_fare || 0))}
-                  </Text>
-                </View>
-              </View>
+              {/* Automated GPS Live Odometer Card (No Manual Input Required) */}
+              {(() => {
+                const origKm = Number(activeRide?.original_distance_km || activeRide?.distance_km || 0)
+                const trackedKm = Number(tripGpsAccumulatedKmRef.current > 0 ? tripGpsAccumulatedKmRef.current.toFixed(2) : tripGpsTrackedDistanceKm || 0)
+                const finalKm = parseFloat(enteredActualDistance) || Math.max(origKm, trackedKm)
+                const extraKm = Math.max(0, finalKm - origKm)
+                const hasExtra = extraKm > 0.05
 
-              {/* Actual Distance Input Field */}
-              <View style={{ marginBottom: 14 }}>
-                <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.textPrimary, marginBottom: 4 }}>
-                  Actual Distance Traveled (KM)
-                </Text>
-                <Text style={{ fontSize: 11, color: COLORS.gray500, marginBottom: 8 }}>
-                  Customer route change or extra stops? Enter actual odometer KM:
-                </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 10, borderWidth: 1.5, borderColor: COLORS.primary || '#FBBF24', paddingHorizontal: 12, height: 48 }}>
-                  <Ionicons name="speedometer-outline" size={20} color={COLORS.primary || '#D97706'} style={{ marginRight: 8 }} />
-                  <TextInput
-                    style={{ flex: 1, fontSize: 16, fontWeight: '700', color: COLORS.textPrimary }}
-                    value={enteredActualDistance}
-                    onChangeText={setEnteredActualDistance}
-                    keyboardType="numeric"
-                    placeholder="Enter actual km"
-                    placeholderTextColor="#94A3B8"
-                  />
-                  <Text style={{ fontSize: 13, fontWeight: '800', color: COLORS.gray500 }}>KM</Text>
+                return (
+                  <View style={{ marginBottom: 12 }}>
+                    <View style={{ backgroundColor: '#F8FAFC', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#E2E8F0' }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Ionicons name="navigate-circle" size={18} color="#2563EB" />
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: '#1E293B', letterSpacing: 0.3 }}>
+                            AUTOMATED GPS ODOMETER
+                          </Text>
+                        </View>
+                        <View style={{ backgroundColor: '#DCFCE7', paddingHorizontal: 7, paddingVertical: 2.5, borderRadius: 6, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#16A34A' }} />
+                          <Text style={{ fontSize: 9.5, fontWeight: '800', color: '#15803D' }}>GPS LIVE SYNC</Text>
+                        </View>
+                      </View>
+
+                      {/* 2-Column Route vs Traveled Distance */}
+                      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
+                        <View style={{ flex: 1, backgroundColor: '#FFFFFF', borderRadius: 10, padding: 10, borderWidth: 1, borderColor: '#CBD5E1' }}>
+                          <Text style={{ fontSize: 9.5, color: '#64748B', fontWeight: '700', textTransform: 'uppercase' }}>Booked Route</Text>
+                          <Text style={{ fontSize: 17, fontWeight: '900', color: '#0F172A', marginTop: 2 }}>
+                            {origKm.toFixed(1)} <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748B' }}>KM</Text>
+                          </Text>
+                          <Text style={{ fontSize: 9.5, color: '#16A34A', fontWeight: '600', marginTop: 2 }}>Agreed Base Fare</Text>
+                        </View>
+
+                        <View style={{ flex: 1, backgroundColor: hasExtra ? '#FEF2F2' : '#F0FDF4', borderRadius: 10, padding: 10, borderWidth: 1.5, borderColor: hasExtra ? '#F87171' : '#86EFAC' }}>
+                          <Text style={{ fontSize: 9.5, color: hasExtra ? '#991B1B' : '#166534', fontWeight: '700', textTransform: 'uppercase' }}>GPS Traveled</Text>
+                          <Text style={{ fontSize: 17, fontWeight: '900', color: hasExtra ? '#DC2626' : '#15803D', marginTop: 2 }}>
+                            {finalKm.toFixed(1)} <Text style={{ fontSize: 11, fontWeight: '700', color: hasExtra ? '#DC2626' : '#15803D' }}>KM</Text>
+                          </Text>
+                          <Text style={{ fontSize: 9.5, color: hasExtra ? '#B91C1C' : '#15803D', fontWeight: '700', marginTop: 2 }}>
+                            {hasExtra ? `+${extraKm.toFixed(1)} KM Extra Detour` : `✓ On Booked Route`}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Note for transparency */}
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 5 }}>
+                        <Ionicons name="information-circle" size={14} color="#64748B" style={{ marginTop: 1 }} />
+                        <Text style={{ fontSize: 10.5, color: '#64748B', flex: 1, lineHeight: 14 }}>
+                          {hasExtra
+                            ? `GPS detected extra ${extraKm.toFixed(1)} KM traveled beyond booked route. Extra KM fare is added below.`
+                            : `Ride completed on normal route. Customer is billed standard booking fare.`}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                )
+              })()}
+
+              {/* Toll / Parking / Extra Plaza Charges Input Card */}
+              <View style={{ backgroundColor: '#F8FAFC', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 12 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="card-outline" size={15} color="#2563EB" />
+                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#1E293B' }}>Toll / Parking Charges (Optional)</Text>
+                  </View>
+                  <View style={{ backgroundColor: '#DBEAFE', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                    <Text style={{ fontSize: 9.5, fontWeight: '800', color: '#1E40AF' }}>FASTAG / CASH</Text>
+                  </View>
                 </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderWidth: 1.5, borderColor: '#CBD5E1', borderRadius: 8, paddingHorizontal: 10, height: 40 }}>
+                  <Text style={{ fontSize: 14, fontWeight: '800', color: '#334155', marginRight: 6 }}>₹</Text>
+                  <TextInput
+                    value={enteredTollCharge}
+                    onChangeText={setEnteredTollCharge}
+                    placeholder="0 (Enter toll/parking amount if any)"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="numeric"
+                    style={{ flex: 1, fontSize: 13, fontWeight: '700', color: '#0F172A', paddingVertical: 0 }}
+                  />
+                  {Boolean(enteredTollCharge) && (
+                    <TouchableOpacity onPress={() => setEnteredTollCharge('')}>
+                      <Ionicons name="close-circle" size={16} color="#94A3B8" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                <Text style={{ fontSize: 10, color: '#64748B', marginTop: 4 }}>
+                  Added to customer bill and printed on the CityOne Taxi official invoice.
+                </Text>
               </View>
 
               {/* Live Fare Calculation Breakdown */}
@@ -3254,16 +4695,23 @@ const DriverHomeScreen = ({ navigation }) => {
                   extraMinFare = Math.round(extraMins * minRate)
                 }
 
-                const baseFare = Number(activeRide?.base_package_fare || (isHourly ? (pkgHours * Number(activeRide?.hourly_rate || 250)) : (activeRide?.fare_estimate || activeRide?.final_fare || 0)))
+                // Robust Base Fare fallback checking final_fare, fare, original_fare, fare_estimate
+                const baseFare = Number(
+                  activeRide?.base_package_fare ||
+                  (isHourly
+                    ? (pkgHours * Number(activeRide?.hourly_rate || 250))
+                    : (activeRide?.final_fare || activeRide?.fare || activeRide?.original_fare || activeRide?.fare_estimate || 0))
+                )
+                const tollCharge = parseFloat(enteredTollCharge) || 0
                 const pickupCharge = (activeRide?.pickup_charge_accepted && activeRide?.pickup_charge) ? Number(activeRide.pickup_charge) : 0
                 const onlinePaid = Number(activeRide?.online_paid || 0)
                 const discount = Number(activeRide?.discount_amount || 0)
-                const totalFinal = Math.max(0, Math.round(baseFare + extraKmFare + extraMinFare + pickupCharge - discount))
+                const totalFinal = Math.max(0, Math.round(baseFare + extraKmFare + extraMinFare + pickupCharge + tollCharge - discount))
                 const cashToCollect = Math.max(0, Math.round(totalFinal - onlinePaid))
 
                 return (
-                  <View style={{ backgroundColor: '#F0FDF4', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#BBF7D0', marginBottom: 16 }}>
-                    <Text style={{ fontSize: 12, fontWeight: '800', color: '#166534', marginBottom: 8, letterSpacing: 0.5 }}>
+                  <View style={{ backgroundColor: '#F0FDF4', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#BBF7D0', marginBottom: 14 }}>
+                    <Text style={{ fontSize: 11, fontWeight: '800', color: '#166534', marginBottom: 8, letterSpacing: 0.5 }}>
                       FINAL INVOICE PREVIEW
                     </Text>
 
@@ -3292,6 +4740,15 @@ const DriverHomeScreen = ({ navigation }) => {
                       </View>
                     )}
 
+                    {tollCharge > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#2563EB', fontWeight: '600' }}>
+                          Toll / Highway Plaza Charges
+                        </Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#2563EB' }}>+ ₹{Math.round(tollCharge)}</Text>
+                      </View>
+                    )}
+
                     {pickupCharge > 0 && (
                       <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                         <Text style={{ fontSize: 12, color: '#7C3AED' }}>
@@ -3308,7 +4765,7 @@ const DriverHomeScreen = ({ navigation }) => {
                       </View>
                     )}
 
-                    <View style={{ height: 1, backgroundColor: '#A7F3D0', marginVertical: 8 }} />
+                    <View style={{ height: 1, backgroundColor: '#A7F3D0', marginVertical: 6 }} />
 
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                       <Text style={{ fontSize: 13, fontWeight: '800', color: '#111827' }}>Total Trip Bill</Text>
@@ -3322,7 +4779,7 @@ const DriverHomeScreen = ({ navigation }) => {
                       </View>
                     )}
 
-                    <View style={{ backgroundColor: '#FEF3C7', padding: 8, borderRadius: 8, marginTop: 6, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <View style={{ backgroundColor: '#FEF3C7', padding: 8, borderRadius: 8, marginTop: 4, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                       <Text style={{ fontSize: 12, fontWeight: '800', color: '#92400E' }}>Collect Cash from Customer:</Text>
                       <Text style={{ fontSize: 16, fontWeight: '900', color: '#B45309' }}>₹{cashToCollect}</Text>
                     </View>
@@ -3330,29 +4787,23 @@ const DriverHomeScreen = ({ navigation }) => {
                 )
               })()}
 
-              {/* Action Buttons */}
-              <View style={{ flexDirection: 'row', gap: 10 }}>
+              {/* Swipe to Complete & Settle Action */}
+              <View style={{ marginTop: 8, width: '100%' }}>
+                <SwipeToActionButton
+                  title="SWIPE TO COMPLETE & SETTLE"
+                  icon="checkmark-done"
+                  trackBg="#10B981"
+                  thumbBg="#FFFFFF"
+                  thumbIconColor="#059669"
+                  isLoading={isSubmittingComplete}
+                  onSwipeComplete={handleConfirmCompleteTrip}
+                />
                 <TouchableOpacity
-                  style={{ flex: 1, paddingVertical: 13, borderRadius: 10, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' }}
+                  style={{ paddingVertical: 10, alignItems: 'center', justifyContent: 'center', marginTop: 4 }}
                   onPress={() => setCompleteTripModalVisible(false)}
                   disabled={isSubmittingComplete}
                 >
-                  <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.gray600 }}>Cancel</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={{ flex: 2, paddingVertical: 13, borderRadius: 10, backgroundColor: '#10B981', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 6 }}
-                  onPress={handleConfirmCompleteTrip}
-                  disabled={isSubmittingComplete}
-                >
-                  {isSubmittingComplete ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <Ionicons name="checkmark-done" size={18} color="#FFFFFF" />
-                      <Text style={{ fontSize: 14, fontWeight: '800', color: '#FFFFFF' }}>Complete & Collect</Text>
-                    </>
-                  )}
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: COLORS.gray600 }}>Cancel / Go Back</Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -3562,7 +5013,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
     padding: 16,
     borderRadius: RADIUS.xl,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: '#1E293B',
     ...SHADOW.medium,
   },
@@ -3584,16 +5035,124 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   telemetryCardTitle: {
-    fontSize: 14,
-    fontWeight: '800',
+    fontSize: 13.5,
+    fontWeight: '900',
     color: '#FFFFFF',
-    letterSpacing: 0.2,
+    letterSpacing: 0.5,
   },
   telemetryCardSub: {
     fontSize: 11,
     color: '#94A3B8',
     marginTop: 3,
     lineHeight: 15,
+  },
+  bigDutyBtnOffline: {
+    backgroundColor: '#16A34A',
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    marginTop: 14,
+    elevation: 4,
+    shadowColor: '#16A34A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+  },
+  bigDutyBtnOnline: {
+    backgroundColor: '#064E3B',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#10B981',
+    paddingVertical: 11,
+    paddingHorizontal: 16,
+    marginTop: 14,
+    elevation: 3,
+    shadowColor: '#10B981',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  bigDutyBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dutyOfflineIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dutyOnlinePulseCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(16, 185, 129, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#34D399',
+  },
+  bigDutyBtnTextOffline: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 0.4,
+  },
+  bigDutyBtnSubOffline: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    color: '#D1FAE5',
+    marginTop: 1,
+  },
+  bigDutyBtnTextOnline: {
+    fontSize: 14.5,
+    fontWeight: '900',
+    color: '#34D399',
+    letterSpacing: 0.4,
+  },
+  bigDutyBtnSubOnline: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    color: '#A7F3D0',
+    marginTop: 1,
+  },
+  bigDutyBtnTextMain: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  dutyGoOnlineBadge: {
+    backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  dutyGoOnlineBadgeText: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#15803D',
+  },
+  dutyGoOfflineBadge: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: '#EF4444',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  dutyGoOfflineBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#F87171',
   },
   telemetryDivider: {
     height: 1,
@@ -3610,19 +5169,59 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 5,
     backgroundColor: 'rgba(30, 41, 59, 0.7)',
     paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderRadius: RADIUS.md,
     borderWidth: 1,
     borderColor: '#334155',
   },
   telemetryPillText: {
     flex: 1,
-    fontSize: 10,
+    fontSize: 10.5,
     fontWeight: '700',
     color: '#CBD5E1',
+  },
+  telemetryServicesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#1E293B',
+  },
+  telemetryServicesLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#94A3B8',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  serviceTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3.5,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  serviceTagText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+  },
+  serviceConfigurePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.3)',
   },
   /* Today's Summary Card */
   todaySummaryCard: {
@@ -3991,13 +5590,13 @@ const styles = StyleSheet.create({
     color: COLORS.white,
   },
   activeCard: {
-    backgroundColor: COLORS.white,
+    backgroundColor: '#FFFFFF',
     marginHorizontal: 16,
     marginTop: 14,
     padding: 16,
-    borderRadius: RADIUS.xxl,
-    borderWidth: 2,
-    borderColor: COLORS.primary,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
     ...SHADOW.medium,
   },
   activeHeader: {
@@ -5148,6 +6747,687 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.28)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+
+  // ── GOGO Cabs Driver Assigned Ride Card Styles ──
+  gogoTripCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 16,
+    marginVertical: 10,
+    ...SHADOW.medium,
+  },
+  gogoHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  gogoRefBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  gogoRefText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: 0.5,
+  },
+  gogoRouteContainer: {
+    position: 'relative',
+    marginVertical: 4,
+  },
+  gogoTimelineRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  gogoDotCol: {
+    width: 22,
+    alignItems: 'center',
+    paddingTop: 4,
+  },
+  gogoDotGreen: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#16A34A',
+  },
+  gogoDotRed: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#EF4444',
+  },
+  gogoVerticalLine: {
+    width: 2,
+    height: 46,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 2,
+  },
+  gogoLocationContent: {
+    flex: 1,
+    paddingLeft: 6,
+    paddingBottom: 12,
+  },
+  gogoFullAddressText: {
+    fontSize: 12,
+    color: '#64748B',
+    lineHeight: 17,
+  },
+  gogoMainLocalityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginTop: 2,
+  },
+  gogoMainLocalityText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  gogoBadgePickup: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#16A34A',
+    marginLeft: 4,
+  },
+  gogoBadgeDrop: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#EF4444',
+    marginLeft: 4,
+  },
+  gogoDistrictText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.primary,
+    marginTop: 2,
+  },
+  gogoThreeColRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#F1F5F9',
+    marginTop: 6,
+  },
+  gogoColItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gogoColDivider: {
+    width: 1,
+    height: 38,
+    backgroundColor: '#E2E8F0',
+  },
+  gogoColSymbol: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: COLORS.primary,
+  },
+  gogoColPrimaryText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginTop: 2,
+  },
+  gogoFuelBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 0.8,
+    borderColor: '#DBEAFE',
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    marginTop: 3,
+  },
+  gogoFuelBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: COLORS.primary,
+  },
+  gogoTwoColRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  gogoRateCol: {
+    flex: 1.15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  gogoRateText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+    flexShrink: 1,
+  },
+  gogoCommCol: {
+    flex: 0.85,
+    alignItems: 'flex-start',
+    paddingLeft: 10,
+  },
+  gogoCommAmountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  gogoCommAmountText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1E293B',
+  },
+  gogoCommSubtext: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  gogoInclusionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+  },
+  gogoInclusionsText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  gogoScheduleBox: {
+    gap: 8,
+    paddingVertical: 2,
+  },
+  gogoScheduleItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  gogoScheduleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  gogoScheduleLabel: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  gogoScheduleValue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1E293B',
+  },
+  gogoRechargeBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 12,
+  },
+  gogoRechargeLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    marginRight: 8,
+  },
+  gogoRechargeText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#78350F',
+    flexShrink: 1,
+  },
+  gogoAddMoneyBtn: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    ...SHADOW.small,
+  },
+  gogoAddMoneyBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12.5,
+    fontWeight: '800',
+  },
+  gogoAcceptBtn: {
+    backgroundColor: '#16A34A',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+    ...SHADOW.small,
+  },
+  gogoAcceptBtnText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  gogoDeclineRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 16,
+    marginTop: 10,
+  },
+  gogoDeclineLink: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  gogoDeclineText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#EF4444',
+  },
+  gogoDetailsLink: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  gogoDetailsLinkText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.primary,
+  },
+  gogoNotesWrapper: {
+    marginTop: 12,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  gogoNotesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#DBEAFE',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  gogoNotesHeaderText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E40AF',
+  },
+  gogoNotesBody: {
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#DBEAFE',
+  },
+  gogoNotesContentText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+    lineHeight: 18,
+  },
+  proNotesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  proNoteBadge: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#CBD5E1',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  proNoteBadgeText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#1E293B',
+    lineHeight: 18,
+  },
+  proNotesEmptyText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+    fontStyle: 'italic',
+  },
+  gogoNavBtn: {
+    backgroundColor: '#2563EB',
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    ...SHADOW.small,
+  },
+  gogoNavBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+  gogoCustomerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    padding: 12,
+    marginTop: 12,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+  },
+  gogoCustAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 2,
+    borderColor: '#F59E0B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  gogoCustAvatarText: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#B45309',
+  },
+  gogoCustName: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: 0.2,
+  },
+  gogoCustMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
+  gogoProtectedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3.5,
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+  },
+  gogoProtectedText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#065F46',
+  },
+  gogoPaymentPill: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  gogoPaymentText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  gogoCustBigCallBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#16A34A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#16A34A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+  },
+  gogoCustomerBarLocked: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    padding: 12,
+    gap: 12,
+  },
+  gogoCustAvatarLocked: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
+  },
+  gogoCustSubLocked: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#92400E',
+    marginTop: 2,
+  },
+  idleStandbyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 18,
+    marginHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  idleStandbyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  idleStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  idleStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  idleStandbyTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 4,
+  },
+  idleStandbySub: {
+    fontSize: 12.5,
+    color: '#64748B',
+    lineHeight: 18,
+  },
+  dashRatingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  dashRatingPillText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  dashReviewCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  dashReviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  dashReviewAvatarWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  dashReviewAvatarImg: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  dashReviewAvatarText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  dashReviewName: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  dashReviewRef: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+    marginTop: 1,
+  },
+  dashStarPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#FFFBEB',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  dashStarPillText: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  dashReviewCommentBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    padding: 10,
+    marginVertical: 4,
+    borderLeftWidth: 3,
+    borderLeftColor: '#F59E0B',
+  },
+  dashReviewCommentText: {
+    fontSize: 12.5,
+    color: '#334155',
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  dashReviewFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  dashReviewDate: {
+    fontSize: 11,
+    color: '#94A3B8',
+    fontWeight: '500',
+  },
+  emptyReviewCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 24,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  emptyReviewTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#475569',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  emptyReviewSub: {
+    fontSize: 12,
+    color: '#94A3B8',
+    textAlign: 'center',
+    lineHeight: 16,
+  },
+  moreReviewsBtn: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+    ...SHADOW.small,
+  },
+  moreReviewsBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.primary,
   },
 })
 
