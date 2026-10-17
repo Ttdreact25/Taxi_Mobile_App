@@ -977,7 +977,9 @@ const DriverHomeScreen = ({ navigation }) => {
 
   // Toggle Online with Mandatory Live Selfie Verification
   const handleToggleOnline = async (val) => {
-    if (val) {
+    const targetOnline = typeof val === 'boolean' ? val : !isOnline
+
+    if (targetOnline) {
       const isAccountApproved = (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
                                 (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'verified' ||
                                 (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved' ||
@@ -1035,25 +1037,28 @@ const DriverHomeScreen = ({ navigation }) => {
       }
     }
 
-    if (!val) {
+    if (!targetOnline) {
       // Switching Offline
       setToggling(true)
       try {
         let locData = { lat: 12.9716, lng: 77.5946 }
         try {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-          locData = { lat: loc.coords.latitude, lng: loc.coords.longitude }
+          if (loc?.coords) {
+            locData = { lat: loc.coords.latitude, lng: loc.coords.longitude }
+          }
         } catch {}
 
-        const res = await driverAPI.toggleOnline({ is_online: 0, ...locData })
+        const res = await driverAPI.toggleOnline({ is_online: 0, status: 'offline', ...locData })
         if (res.data?.status === 'success') {
           setIsOnline(false)
           Alert.alert('You are Offline 🔴', 'You will not receive new dispatch requests.')
+          loadDashboardData(true)
         } else {
           Alert.alert('Status Error', res.data?.message || 'Could not update status.')
         }
-      } catch {
-        Alert.alert('Error', 'Unable to toggle offline status.')
+      } catch (err) {
+        Alert.alert('Error', err.response?.data?.message || err.message || 'Unable to toggle offline status.')
       } finally {
         setToggling(false)
       }
@@ -1668,10 +1673,14 @@ const DriverHomeScreen = ({ navigation }) => {
               <Ionicons name="car-sport" size={13} color="#FFC700" />
               <Text style={styles.taxiBadgeText}>CityOneTaxi</Text>
             </View>
-            <View style={styles.driverTagPill}>
+            <TouchableOpacity
+              style={styles.driverTagPill}
+              onPress={() => handleToggleOnline(!isOnline)}
+              activeOpacity={0.7}
+            >
               <View style={[styles.liveDot, { backgroundColor: isOnline ? '#10B981' : '#94A3B8' }]} />
               <Text style={styles.driverTagText}>{isOnline ? 'ONLINE' : 'OFFLINE'}</Text>
-            </View>
+            </TouchableOpacity>
           </View>
 
           <View style={styles.heroRightActions}>
@@ -1872,7 +1881,7 @@ const DriverHomeScreen = ({ navigation }) => {
                   isOnline ? styles.bigDutyBtnOnline : styles.bigDutyBtnOffline,
                   (!isKycApproved || toggling) && { opacity: 0.65 }
                 ]}
-                onPress={handleToggleOnline}
+                onPress={() => handleToggleOnline(!isOnline)}
                 disabled={!isKycApproved || toggling}
                 activeOpacity={0.85}
               >
