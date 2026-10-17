@@ -17,6 +17,8 @@ import {
   Animated,
   LayoutAnimation,
   UIManager,
+  Switch,
+  Share,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -24,7 +26,7 @@ import * as Location from 'expo-location'
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, UrlTile } from 'react-native-maps'
 import Constants from 'expo-constants'
 import { vehicleTypesAPI, bookingsAPI, customerAPI, paymentAPI, couponsAPI, resolveAssetUrl } from '../../api/api'
-import { searchPlacesService, reverseGeocodeService, getPopularDestinations } from '../../services/locationSearchService'
+import { searchPlacesService, reverseGeocodeService, getPopularDestinations, TAMIL_NADU_HUBS } from '../../services/locationSearchService'
 import { fetchRouteDirections, calculateDistanceKm } from '../../services/directionService'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import { useAuth } from '../../context/AuthContext'
@@ -132,10 +134,13 @@ export default function BookingScreen({ navigation, route }) {
   const [tripTypeCategory, setTripTypeCategory] = useState(
     initTripMode === 'local' ? 'local' : 'outstation'
   )
-  const [isSharedTrip, setIsSharedTrip] = useState(initTripMode === 'shared')
+  const [isSharedTrip, setIsSharedTrip] = useState(false)
   const [isRoundTrip, setIsRoundTrip] = useState(Boolean(initIsRoundTrip))
+  const [outstationTripSubType, setOutstationTripSubType] = useState(
+    initIsRoundTrip ? 'round_trip' : null
+  ) // null | 'one_way' | 'round_trip' (starts unselected)
   const [rideTimingMode, setRideTimingMode] = useState('now') // 'now' | 'schedule'
-  const [localTripSubType, setLocalTripSubType] = useState('drop') // 'drop' | 'hourly'
+  const [localTripSubType, setLocalTripSubType] = useState(null) // null | 'drop' | 'hourly' (starts unselected)
   const [hourlyPackageHours, setHourlyPackageHours] = useState(2) // 1, 2, 3, 4, 6, 8, 10, 12 hours
 
   // ── Step-by-Step Progressive Disclosure State ──
@@ -148,7 +153,7 @@ export default function BookingScreen({ navigation, route }) {
   const animateStepTransition = useCallback((nextStep) => {
     try {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut)
-    } catch {}
+    } catch { }
     fadeAnim.setValue(0)
     slideAnim.setValue(18)
     if (typeof nextStep === 'number') {
@@ -171,12 +176,9 @@ export default function BookingScreen({ navigation, route }) {
 
   // Ensure trip mode remains strictly synchronized with user's navigation choice
   useEffect(() => {
-    if (initTripMode === 'outstation') {
+    if (initTripMode === 'outstation' || initTripMode === 'shared') {
       setTripTypeCategory('outstation')
       setIsSharedTrip(false)
-    } else if (initTripMode === 'shared') {
-      setTripTypeCategory('outstation')
-      setIsSharedTrip(true)
     } else if (initTripMode === 'local') {
       setTripTypeCategory('local')
       setIsSharedTrip(false)
@@ -192,12 +194,39 @@ export default function BookingScreen({ navigation, route }) {
   const isSharingEligible = isOutstationTrip && (routeDistanceKm > 240 || isSharedTrip)
 
   // Strict Distance Limit Rules:
-  // 1. Local Trip: Maximum 50 KM (if > 50 KM, auto-converted to Long Trip / Outstation)
-  // 2. Outstation Trip: Strictly > 50 KM
-  const isOutstationDistanceTooShort = isOutstationTrip && routeDistanceKm > 0 && routeDistanceKm <= 50
+  // 1. Local Trip: Within 50 KM straight-line radius (or <= 60 KM road distance to accommodate city outskirts like Chengalpattu)
+  const isWithinLocalRadius = (pickupCoords && destCoords)
+    ? (calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, destCoords.latitude, destCoords.longitude) <= 50.0 || routeDistanceKm <= 60.0)
+    : (routeDistanceKm <= 60.0)
+  const isLocalDistanceTooFar = isLocalTrip && localTripSubType !== 'hourly' && !isWithinLocalRadius && routeDistanceKm > 60
+  // 2. Outstation Trip: Strictly > 50 KM road distance AND outside local radius
+  const isOutstationDistanceTooShort = isOutstationTrip && routeDistanceKm > 0 && isWithinLocalRadius && routeDistanceKm <= 50
   // 3. Shared Trip: Strictly > 240 KM
   const isSharingDistanceTooShort = isSharedTrip && routeDistanceKm > 0 && routeDistanceKm <= 240
-  const isDistanceInvalid = isOutstationDistanceTooShort || isSharingDistanceTooShort
+  const isDistanceInvalid = isOutstationDistanceTooShort || isSharingDistanceTooShort || isLocalDistanceTooFar
+
+  // Prompt Modal when user in Local Trip sets high distance (> 50 KM)
+  const [showOutstationPromptModal, setShowOutstationPromptModal] = useState(false)
+
+  const handleSwitchToOutstationFromPrompt = () => {
+    setShowOutstationPromptModal(false)
+    setTripTypeCategory('outstation')
+    setIsSharedTrip(false)
+    setIsRoundTrip(false)
+    fetchDynamicFares(routeDistanceKm, routeDurationMins)
+  }
+
+  const handleChangeDestinationFromPrompt = () => {
+    setShowOutstationPromptModal(false)
+    setDestination('')
+    setDestCoords(null)
+    setRouteDistanceKm(0)
+    setRouteCoordinates([])
+    animateStepTransition(1)
+    setTimeout(() => {
+      handleFocusDestination()
+    }, 300)
+  }
 
   // ── Date & Time Scheduling State (Available for One Way & Round Trip) ──
   const todayStr = new Date().toISOString().split('T')[0]
@@ -219,6 +248,22 @@ export default function BookingScreen({ navigation, route }) {
   const [selectedType, setSelectedType] = useState(initTypeId || null)
   const [fareEstimates, setFareEstimates] = useState({})
   const [loadingFares, setLoadingFares] = useState(false)
+  const selectedVt = vehicleTypes.find(v => v.id === selectedType) || (vehicleTypes.length > 0 ? vehicleTypes[0] : null)
+
+  // ── SUV Identification & Rooftop Carrier Rules (RTO Regulations permit rooftop carrier ONLY on SUV cabs) ──
+  const isSUVType = (vt) => {
+    if (!vt) return false
+    const name = String(vt.name || '').toLowerCase()
+    const category = String(vt.category || vt.category_name || '').toLowerCase()
+    const cap = Number(vt.capacity || 0)
+    return (
+      name.includes('suv') ||
+      category.includes('suv') ||
+      /innova|ertiga|xylo|scorpio|tavera|marazzo|bolero|carens|safari|harrier|xuv/i.test(name) ||
+      cap >= 6
+    )
+  }
+  const isSUVSelected = Boolean(isSUVType(selectedVt))
 
   // ── Payment & Offers ──
   const [paymentMethod, setPaymentMethod] = useState('cash') // 'cash' | 'razorpay' | 'wallet'
@@ -231,75 +276,164 @@ export default function BookingScreen({ navigation, route }) {
   const [couponError, setCouponError] = useState('')
   const [bookingLoading, setBookingLoading] = useState(false)
 
+  // ── Ride Preferences & Review Screen (Matching Screenshot Alignment) ──
+  const [showReviewScreen, setShowReviewScreen] = useState(false)
+  const [passengerCount, setPassengerCount] = useState(1) // Number of persons traveling
+  const [luggageCount, setLuggageCount] = useState(2) // Number of bags stepper
+  const [rooftopCarrier, setRooftopCarrier] = useState(false) // Rooftop carrier toggle (SUV only)
+  const [hasPets, setHasPets] = useState(false) // Traveling with pets toggle
+  const [waitingHours, setWaitingHours] = useState(0) // Driver waiting hours
+
+  // Auto-clamp passengerCount to selected vehicle capacity
+  useEffect(() => {
+    const maxPax = selectedVt?.passenger_capacity || (isSUVSelected ? 7 : (selectedVt?.name?.includes('3') ? 3 : 4))
+    if (passengerCount > maxPax) {
+      setPassengerCount(Math.max(1, maxPax))
+    }
+  }, [selectedType, selectedVt, isSUVSelected])
+
+  // Strictly enforce: If a non-SUV vehicle is selected, auto-turn off rooftop carrier
+  useEffect(() => {
+    if (!isSUVSelected && rooftopCarrier) {
+      setRooftopCarrier(false)
+    }
+  }, [selectedType, isSUVSelected, rooftopCarrier])
+  const [driverInstructions, setDriverInstructions] = useState('') // Special pickup instructions
+  const [passengerName, setPassengerName] = useState(user?.name || 'Rohith Ram')
+  const [passengerPhone, setPassengerPhone] = useState(user?.phone || '+91 8838603768')
+  const [passengerEmail, setPassengerEmail] = useState(user?.email || 'rohithsandy194@gmail.com')
+  const [showEditPassengerModal, setShowEditPassengerModal] = useState(false)
+  const [tempPassengerName, setTempPassengerName] = useState(user?.name || 'Rohith Ram')
+  const [tempPassengerPhone, setTempPassengerPhone] = useState(user?.phone || '+91 8838603768')
+  const [tempPassengerEmail, setTempPassengerEmail] = useState(user?.email || 'rohithsandy194@gmail.com')
+  const [showWaitingModal, setShowWaitingModal] = useState(false)
+  const [showTimeModal, setShowTimeModal] = useState(false)
+  const [selectedHour, setSelectedHour] = useState('10')
+  const [selectedMinute, setSelectedMinute] = useState('55')
+  const [selectedPeriod, setSelectedPeriod] = useState('AM')
+  const searchTimerRef = useRef(null)
+  const searchRequestIdRef = useRef(0)
+
+  const handleOpenTimeModal = (target = 'departure') => {
+    setActiveDateTarget(target)
+    const timeStr = (target === 'return' ? returnTime : departureTime) || '10:55 AM'
+    const match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
+    if (match) {
+      setSelectedHour(String(parseInt(match[1], 10)))
+      setSelectedMinute(match[2])
+      setSelectedPeriod(match[3].toUpperCase())
+    } else {
+      setSelectedHour('10')
+      setSelectedMinute('55')
+      setSelectedPeriod('AM')
+    }
+    setShowTimeModal(true)
+  }
+  const [showFareDetailModal, setShowFareDetailModal] = useState(false)
+  const [hasIntermediateStop, setHasIntermediateStop] = useState(false)
+  const [intermediateStop, setIntermediateStop] = useState('')
+  const [intermediateStopCoords, setIntermediateStopCoords] = useState(null)
+  const [searchCardCollapsed, setSearchCardCollapsed] = useState(false)
+
+  // Clear intermediate stop if user switches to Local Drop (Local Point-to-Point)
+  useEffect(() => {
+    if (tripTypeCategory === 'local' && localTripSubType === 'drop') {
+      if (hasIntermediateStop || intermediateStop) {
+        setHasIntermediateStop(false)
+        setIntermediateStop('')
+        setIntermediateStopCoords(null)
+        if (activeInput === 'stop') setActiveInput(null)
+      }
+    }
+  }, [tripTypeCategory, localTripSubType])
+
+  const getCardDateParts = (dateString, timeString) => {
+    try {
+      const dt = dateString ? new Date(dateString + 'T00:00:00') : new Date()
+      const day = dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })
+      const weekday = dt.toLocaleDateString('en-US', { weekday: 'long' })
+      return { day, weekday, time: timeString || '10:00 AM' }
+    } catch {
+      return { day: '9 Oct 26', weekday: 'Friday', time: timeString || '10:00 AM' }
+    }
+  }
+
+  // Keep passenger details in sync with authenticated user
+  useEffect(() => {
+    if (user?.name) { setPassengerName(user.name); setTempPassengerName(user.name); }
+    if (user?.phone) { setPassengerPhone(user.phone); setTempPassengerPhone(user.phone); }
+    if (user?.email) { setPassengerEmail(user.email); setTempPassengerEmail(user.email); }
+  }, [user])
+
   // Fetch Current Location on Mount (Ultra-Fast Dual Stage: Instant Last Known + Background Fresh GPS)
   useEffect(() => {
     let mounted = true
-    ;(async () => {
-      let hadInitialLoc = false
-      try {
-        setIsLocating(true)
-        const { status } = await Location.requestForegroundPermissionsAsync()
-        if (status === 'granted') {
-          // 1. STAGE 1: Instant Cached Location (0ms immediate response)
-          const lastLoc = await Location.getLastKnownPositionAsync().catch(() => null)
-          if (lastLoc && mounted) {
-            hadInitialLoc = true
-            const coords = { latitude: lastLoc.coords.latitude, longitude: lastLoc.coords.longitude }
-            setPickupCoords(coords)
-            if (mapRef.current) {
-              mapRef.current.animateToRegion({
-                latitude: coords.latitude,
-                longitude: coords.longitude,
-                latitudeDelta: 0.035,
-                longitudeDelta: 0.035,
-              }, 300)
-            }
-            generateNearbyCabs(coords)
-            setIsLocating(false)
-            reverseGeocodeService(coords.latitude, coords.longitude).then(addr => {
-              if (mounted && addr && addr !== 'Select Location') {
-                setPickup(typeof addr === 'string' ? addr : addr?.address || 'Current Location')
+      ; (async () => {
+        let hadInitialLoc = false
+        try {
+          setIsLocating(true)
+          const { status } = await Location.requestForegroundPermissionsAsync()
+          if (status === 'granted') {
+            // 1. STAGE 1: Instant Cached Location (0ms immediate response)
+            const lastLoc = await Location.getLastKnownPositionAsync().catch(() => null)
+            if (lastLoc && mounted) {
+              hadInitialLoc = true
+              const coords = { latitude: lastLoc.coords.latitude, longitude: lastLoc.coords.longitude }
+              setPickupCoords(coords)
+              if (mapRef.current) {
+                mapRef.current.animateToRegion({
+                  latitude: coords.latitude,
+                  longitude: coords.longitude,
+                  latitudeDelta: 0.035,
+                  longitudeDelta: 0.035,
+                }, 300)
               }
-            }).catch(() => {})
-          }
-
-          // 2. STAGE 2: Fresh GPS runs in background (Never blocks UI thread!)
-          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-            .then(async (freshLoc) => {
-              if (freshLoc && mounted) {
-                const coords = { latitude: freshLoc.coords.latitude, longitude: freshLoc.coords.longitude }
-                setPickupCoords(coords)
-                if (!hadInitialLoc && mapRef.current) {
-                  mapRef.current.animateToRegion({
-                    latitude: coords.latitude,
-                    longitude: coords.longitude,
-                    latitudeDelta: 0.035,
-                    longitudeDelta: 0.035,
-                  }, 400)
+              generateNearbyCabs(coords)
+              setIsLocating(false)
+              reverseGeocodeService(coords.latitude, coords.longitude).then(addr => {
+                if (mounted && addr && addr !== 'Select Location') {
+                  setPickup(typeof addr === 'string' ? addr : addr?.address || 'Current Location')
                 }
-                generateNearbyCabs(coords)
-                if (!pickup || pickup === 'Current Location') {
-                  const rev = await reverseGeocodeService(coords.latitude, coords.longitude)
-                  const addr = typeof rev === 'string' ? rev : rev?.address
-                  if (addr && addr !== 'Select Location' && mounted) {
-                    setPickup(addr)
-                  } else if (mounted && !pickup) {
-                    setPickup('Current Location')
+              }).catch(() => { })
+            }
+
+            // 2. STAGE 2: Fresh GPS runs in background (Never blocks UI thread!)
+            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+              .then(async (freshLoc) => {
+                if (freshLoc && mounted) {
+                  const coords = { latitude: freshLoc.coords.latitude, longitude: freshLoc.coords.longitude }
+                  setPickupCoords(coords)
+                  if (!hadInitialLoc && mapRef.current) {
+                    mapRef.current.animateToRegion({
+                      latitude: coords.latitude,
+                      longitude: coords.longitude,
+                      latitudeDelta: 0.035,
+                      longitudeDelta: 0.035,
+                    }, 400)
+                  }
+                  generateNearbyCabs(coords)
+                  if (!pickup || pickup === 'Current Location') {
+                    const rev = await reverseGeocodeService(coords.latitude, coords.longitude)
+                    const addr = typeof rev === 'string' ? rev : rev?.address
+                    if (addr && addr !== 'Select Location' && mounted) {
+                      setPickup(addr)
+                    } else if (mounted && !pickup) {
+                      setPickup('Current Location')
+                    }
                   }
                 }
-              }
-            })
-            .catch(() => {})
-            .finally(() => {
-              if (mounted) setIsLocating(false)
-            })
+              })
+              .catch(() => { })
+              .finally(() => {
+                if (mounted) setIsLocating(false)
+              })
+          }
+        } catch (err) {
+          console.warn('Location detection notice:', err)
+        } finally {
+          if (mounted && hadInitialLoc) setIsLocating(false)
         }
-      } catch (err) {
-        console.warn('Location detection notice:', err)
-      } finally {
-        if (mounted && hadInitialLoc) setIsLocating(false)
-      }
-    })()
+      })()
 
     return () => { mounted = false }
   }, [])
@@ -343,7 +477,7 @@ export default function BookingScreen({ navigation, route }) {
     setSimulatedCabs(cabs)
   }
 
-  // Update Route Polyline & Fares whenever pickup and destination coordinates are selected
+  // Update Route Polyline & Fares whenever pickup, destination, or intermediate stop coordinates change
   useEffect(() => {
     if (pickupCoords?.latitude && destCoords?.latitude) {
       updateDirections()
@@ -351,14 +485,28 @@ export default function BookingScreen({ navigation, route }) {
       setFareEstimates({})
       setRouteCoordinates([])
     }
-  }, [pickupCoords, destCoords, isRoundTrip, isSharedTrip, tripTypeCategory, localTripSubType, hourlyPackageHours])
+  }, [pickupCoords, destCoords, isRoundTrip, isSharedTrip, tripTypeCategory, localTripSubType, hourlyPackageHours, hasIntermediateStop, intermediateStopCoords])
 
   const updateDirections = async () => {
     if (!pickupCoords || !destCoords) return
     setLoadingFares(true)
+    const waypoints = (hasIntermediateStop && intermediateStopCoords?.latitude && intermediateStopCoords?.longitude)
+      ? [intermediateStopCoords]
+      : []
+
     try {
-      const res = await fetchRouteDirections(pickupCoords, destCoords)
-      const distKm = Math.max(0.5, res?.distanceKm || calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, destCoords.latitude, destCoords.longitude))
+      const res = await fetchRouteDirections(pickupCoords, destCoords, waypoints)
+      let distKm = res?.distanceKm
+      if (!distKm || distKm <= 0) {
+        if (waypoints.length > 0) {
+          const d1 = calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, waypoints[0].latitude, waypoints[0].longitude)
+          const d2 = calculateDistanceKm(waypoints[0].latitude, waypoints[0].longitude, destCoords.latitude, destCoords.longitude)
+          distKm = Math.max(0.5, d1 + d2)
+        } else {
+          distKm = Math.max(0.5, calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, destCoords.latitude, destCoords.longitude))
+        }
+      }
+      distKm = Math.max(0.5, distKm)
       const durMins = Math.max(2, res?.durationMins || Math.round(distKm * 2.4))
       setRouteDistanceKm(distKm)
       setRouteDurationMins(durMins)
@@ -366,34 +514,49 @@ export default function BookingScreen({ navigation, route }) {
       if (res?.coordinates?.length > 0) {
         setRouteCoordinates(res.coordinates)
       } else {
-        setRouteCoordinates([pickupCoords, destCoords])
+        setRouteCoordinates(waypoints.length > 0 ? [pickupCoords, waypoints[0], destCoords] : [pickupCoords, destCoords])
       }
 
-      // Fit map bounds to encompass both endpoints
+      // Fit map bounds to encompass all waypoints & endpoints
       if (mapRef.current) {
-        mapRef.current.fitToCoordinates([pickupCoords, destCoords], {
+        const fitPts = waypoints.length > 0 ? [pickupCoords, waypoints[0], destCoords] : [pickupCoords, destCoords]
+        mapRef.current.fitToCoordinates(fitPts, {
           edgePadding: { top: insets.top + 160, right: 60, bottom: 320, left: 60 },
           animated: true,
         })
       }
 
-      // If route distance exceeds 50 km, automatically convert to Long Trip (Outstation)
-      if (distKm > 50 && tripTypeCategory === 'local') {
-        setTripTypeCategory('outstation')
+      // If route distance exceeds 50 km radius limit, show prompt modal asking user to book in Outstation
+      const isWithinRad = (pickupCoords && destCoords)
+        ? (calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, destCoords.latitude, destCoords.longitude) <= 50.0 || distKm <= 60.0)
+        : (distKm <= 60.0)
+      if (!isWithinRad && distKm > 60 && tripTypeCategory === 'local' && localTripSubType !== 'hourly') {
+        setShowOutstationPromptModal(true)
       }
 
       // Automatically calculate dynamic fares from backend & admin rates
       fetchDynamicFares(distKm, durMins)
     } catch (err) {
       console.warn('Direction route fallback calculation:', err)
-      const distKm = Math.max(0.5, calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, destCoords.latitude, destCoords.longitude))
+      let distKm = 0
+      if (waypoints.length > 0) {
+        const d1 = calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, waypoints[0].latitude, waypoints[0].longitude)
+        const d2 = calculateDistanceKm(waypoints[0].latitude, waypoints[0].longitude, destCoords.latitude, destCoords.longitude)
+        distKm = Math.max(0.5, d1 + d2)
+      } else {
+        distKm = Math.max(0.5, calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, destCoords.latitude, destCoords.longitude))
+      }
+      distKm = Math.max(0.5, distKm)
       const durMins = Math.max(2, Math.round(distKm * 2.4))
       setRouteDistanceKm(distKm)
       setRouteDurationMins(durMins)
-      setRouteCoordinates([pickupCoords, destCoords])
+      setRouteCoordinates(waypoints.length > 0 ? [pickupCoords, waypoints[0], destCoords] : [pickupCoords, destCoords])
 
-      if (distKm > 50 && tripTypeCategory === 'local') {
-        setTripTypeCategory('outstation')
+      const isWithinRadFallback = (pickupCoords && destCoords)
+        ? (calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, destCoords.latitude, destCoords.longitude) <= 50.0 || distKm <= 60.0)
+        : (distKm <= 60.0)
+      if (!isWithinRadFallback && distKm > 60 && tripTypeCategory === 'local' && localTripSubType !== 'hourly') {
+        setShowOutstationPromptModal(true)
       }
 
       fetchDynamicFares(distKm, durMins)
@@ -405,7 +568,7 @@ export default function BookingScreen({ navigation, route }) {
   // Calculate Dynamic Fare using Admin settings
   const fetchDynamicFares = async (distKm, durMins) => {
     try {
-      const isOutstation = (tripTypeCategory === 'outstation') || (distKm > 50 && localTripSubType !== 'hourly')
+      const isOutstation = (tripTypeCategory === 'outstation') || (!isWithinLocalRadius && distKm > 60 && localTripSubType !== 'hourly')
       const effectiveMode = isOutstation ? 'outstation' : tripTypeCategory
       const payload = {
         pickup_lat: pickupCoords?.latitude || 13.0827,
@@ -477,8 +640,8 @@ export default function BookingScreen({ navigation, route }) {
       const kmRate = isRoundTrip
         ? parseFloat(vt.round_trip_per_km || vt.price_per_km || 20)
         : isOutstation
-        ? parseFloat(vt.one_way_per_km || vt.price_per_km || 18)
-        : parseFloat(vt.price_per_km || 15)
+          ? parseFloat(vt.one_way_per_km || vt.price_per_km || 18)
+          : parseFloat(vt.price_per_km || 15)
       const minRate = isRoundTrip
         ? parseFloat(vt.round_trip_per_min || vt.price_per_min || 1.5)
         : parseFloat(vt.price_per_min || 1.5)
@@ -518,51 +681,90 @@ export default function BookingScreen({ navigation, route }) {
     }
   }
 
-  // Live Location Autocomplete Search
-  const handleSearchTextChange = async (text, target) => {
+  // Live Location Autocomplete Search with Instant 0ms Matching + 200ms Debounce & Cancellation Guard
+  const handleSearchTextChange = (text, target) => {
     if (target === 'pickup') {
       setPickup(text)
+    } else if (target === 'stop') {
+      setIntermediateStop(text)
+      setIntermediateStopCoords(null)
     } else {
       setDestination(text)
     }
 
-    if (!text || text.trim().length === 0) {
+    const clean = (text || '').trim()
+    if (!clean) {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current)
       const popular = getPopularDestinations(pickupCoords?.latitude, pickupCoords?.longitude)
       setPredictions(popular)
+      setLoadingPredictions(false)
       return
     }
 
-    if (text.trim().length === 1) {
-      const popular = getPopularDestinations(pickupCoords?.latitude, pickupCoords?.longitude)
-      const q = text.toLowerCase()
-      const filtered = popular.filter(item =>
-        item.description.toLowerCase().includes(q) ||
-        (item.structured_formatting?.main_text || '').toLowerCase().includes(q)
-      )
-      setPredictions(filtered.length > 0 ? filtered : popular)
-      return
+    // 1. STAGE 1: Instant 0ms Local Matching from TAMIL_NADU_HUBS
+    const qLower = clean.toLowerCase()
+    const instantLocalMatches = TAMIL_NADU_HUBS.filter(hub => {
+      const hName = hub.name.toLowerCase()
+      const hAddr = hub.address.toLowerCase()
+      return hName.includes(qLower) || hAddr.includes(qLower)
+    }).map(hub => {
+      const dist = calculateDistanceKm(pickupCoords?.latitude || 13.0827, pickupCoords?.longitude || 80.2707, hub.lat, hub.lng)
+      return {
+        place_id: `instant_${hub.lat}_${hub.lng}_${encodeURIComponent(hub.name)}`,
+        description: `${hub.name}, ${hub.address}`,
+        structured_formatting: {
+          main_text: hub.name,
+          secondary_text: hub.address,
+        },
+        geometry: { location: { lat: hub.lat, lng: hub.lng } },
+        latitude: hub.lat,
+        longitude: hub.lng,
+        distance_km: dist,
+        category_tag: hub.tag,
+      }
+    })
+
+    if (instantLocalMatches.length > 0) {
+      setPredictions(instantLocalMatches.slice(0, 10))
     }
+
+    // 2. STAGE 2: Debounced 200ms Live Multi-Engine Search with Cancellation Guard
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current)
+    }
+
+    const currentReqId = ++searchRequestIdRef.current
+    if (clean.length < 2) return
 
     setLoadingPredictions(true)
-    try {
-      const res = await searchPlacesService(text, pickupCoords?.latitude, pickupCoords?.longitude)
-      if (res && res.length > 0) {
-        setPredictions(res)
-      } else {
-        const popular = getPopularDestinations(pickupCoords?.latitude, pickupCoords?.longitude)
-        const q = text.toLowerCase()
-        const filtered = popular.filter(item =>
-          item.description.toLowerCase().includes(q) ||
-          (item.structured_formatting?.main_text || '').toLowerCase().includes(q)
-        )
-        setPredictions(filtered)
+    searchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await searchPlacesService(clean, pickupCoords?.latitude, pickupCoords?.longitude)
+        // Discard older out-of-order response
+        if (searchRequestIdRef.current !== currentReqId) return
+
+        if (Array.isArray(res) && res.length > 0) {
+          setPredictions(res)
+        } else if (instantLocalMatches.length > 0) {
+          setPredictions(instantLocalMatches)
+        } else {
+          const popular = getPopularDestinations(pickupCoords?.latitude, pickupCoords?.longitude)
+          const filtered = popular.filter(item =>
+            item.description.toLowerCase().includes(qLower) ||
+            (item.structured_formatting?.main_text || '').toLowerCase().includes(qLower)
+          )
+          setPredictions(filtered)
+        }
+      } catch (err) {
+        if (searchRequestIdRef.current === currentReqId && instantLocalMatches.length === 0) {
+          setPredictions(getPopularDestinations(pickupCoords?.latitude, pickupCoords?.longitude))
+        }
+      } finally {
+        if (searchRequestIdRef.current === currentReqId) {
+          setLoadingPredictions(false)
+        }
       }
-    } catch {
-      const popular = getPopularDestinations(pickupCoords?.latitude, pickupCoords?.longitude)
-      setPredictions(popular)
-    } finally {
-      setLoadingPredictions(false)
-    }
+    }, 150)
   }
 
   // Handle selecting a prediction (correctly extracting latitude and longitude numbers)
@@ -592,16 +794,28 @@ export default function BookingScreen({ navigation, route }) {
           }, 500)
         }
       }
+    } else if (target === 'stop') {
+      setIntermediateStop(displayName)
+      if (coords) {
+        setIntermediateStopCoords(coords)
+      }
     } else {
       setDestination(displayName)
       if (coords) {
         setDestCoords(coords)
       }
-      animateStepTransition(2)
+      if (tripTypeCategory === 'local' && !localTripSubType) {
+        setLocalTripSubType('drop')
+      }
+      if (tripTypeCategory === 'outstation' && !outstationTripSubType) {
+        setOutstationTripSubType('one_way')
+        setIsRoundTrip(false)
+        setIsSharedTrip(false)
+      }
     }
   }
 
-  // Handle Quick Destination Preset Chips in Step 1
+  // Handle Quick Destination Preset Chips
   const handleQuickPresetSelect = async (preset) => {
     const currentLat = pickupCoords?.latitude || 13.0827
     const currentLng = pickupCoords?.longitude || 80.2707
@@ -611,22 +825,21 @@ export default function BookingScreen({ navigation, route }) {
         handleSelectPrediction(preds[0], 'destination')
       } else {
         setDestination(preset.name)
-        animateStepTransition(2)
         handleFocusDestination()
       }
     } catch {
       setDestination(preset.name)
-      animateStepTransition(2)
       handleFocusDestination()
     }
   }
 
   // Automatically resolve text on enter / submit
   const handleLocationSubmit = async (target) => {
-    const text = target === 'pickup' ? pickup : destination
+    const text = target === 'pickup' ? pickup : (target === 'stop' ? intermediateStop : destination)
     if (!text || text.trim().length < 2) return
 
     if (target === 'pickup' && pickupCoords) return
+    if (target === 'stop' && intermediateStopCoords) return
     if (target === 'destination' && destCoords) return
 
     try {
@@ -646,6 +859,80 @@ export default function BookingScreen({ navigation, route }) {
     setPickupCoords(destCoords)
     setDestination(tempP)
     setDestCoords(tempPC)
+  }
+
+  const handleUseCurrentLocation = async () => {
+    try {
+      setIsLocating(true)
+      const { status } = await Location.requestForegroundPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('Location Permission Required', 'Please enable location permissions in device settings to detect your current pickup spot.')
+        setIsLocating(false)
+        return
+      }
+
+      // Fast response: Cached Last Known position
+      const lastLoc = await Location.getLastKnownPositionAsync().catch(() => null)
+      if (lastLoc) {
+        const coords = { latitude: lastLoc.coords.latitude, longitude: lastLoc.coords.longitude }
+        setPickupCoords(coords)
+        if (mapRef.current) {
+          mapRef.current.animateToRegion({
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            latitudeDelta: 0.02,
+            longitudeDelta: 0.02,
+          }, 350)
+        }
+        generateNearbyCabs(coords)
+        reverseGeocodeService(coords.latitude, coords.longitude).then(addr => {
+          if (addr && addr !== 'Select Location') {
+            setPickup(typeof addr === 'string' ? addr : addr?.address || 'Current Location')
+          } else {
+            setPickup('Current Location')
+          }
+        }).catch(() => {
+          setPickup('Current Location')
+        })
+      }
+
+      // Fresh GPS fix with balanced accuracy
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+        .then(async (freshLoc) => {
+          if (freshLoc) {
+            const coords = { latitude: freshLoc.coords.latitude, longitude: freshLoc.coords.longitude }
+            setPickupCoords(coords)
+            if (!lastLoc && mapRef.current) {
+              mapRef.current.animateToRegion({
+                latitude: coords.latitude,
+                longitude: coords.longitude,
+                latitudeDelta: 0.02,
+                longitudeDelta: 0.02,
+              }, 350)
+            }
+            generateNearbyCabs(coords)
+            const rev = await reverseGeocodeService(coords.latitude, coords.longitude)
+            const addr = typeof rev === 'string' ? rev : rev?.address
+            if (addr && addr !== 'Select Location') {
+              setPickup(addr)
+            } else if (!lastLoc) {
+              setPickup('Current Location')
+            }
+          }
+        })
+        .catch((err) => {
+          console.warn('GPS location fetch error:', err)
+        })
+        .finally(() => {
+          setIsLocating(false)
+          setActiveInput(null)
+          setPredictions([])
+          Keyboard.dismiss()
+        })
+    } catch (e) {
+      console.warn('handleUseCurrentLocation error:', e)
+      setIsLocating(false)
+    }
   }
 
   const handleRecenterMap = async () => {
@@ -675,7 +962,7 @@ export default function BookingScreen({ navigation, route }) {
             if (addr && addr !== 'Select Location') {
               setPickup(typeof addr === 'string' ? addr : addr?.address || 'Current Location')
             }
-          }).catch(() => {})
+          }).catch(() => { })
         }
       }
       Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
@@ -696,18 +983,19 @@ export default function BookingScreen({ navigation, route }) {
                 if (addr && addr !== 'Select Location') {
                   setPickup(typeof addr === 'string' ? addr : addr?.address || 'Current Location')
                 }
-              }).catch(() => {})
+              }).catch(() => { })
             }
           }
         })
-        .catch(() => {})
-    } catch (e) {}
+        .catch(() => { })
+    } catch (e) { }
   }
 
   // Toggle 50/50 Share Ride with Full Fare Alert Commitment
   const handleToggleSharing = () => {
     if (isSharedTrip) {
       setIsSharedTrip(false)
+      fetchDynamicFares(routeDistanceKm, routeDurationMins)
       return
     }
 
@@ -732,6 +1020,7 @@ export default function BookingScreen({ navigation, route }) {
           text: 'I Agree & Enable',
           onPress: () => {
             setIsSharedTrip(true)
+            fetchDynamicFares(routeDistanceKm, routeDurationMins)
           }
         }
       ]
@@ -759,18 +1048,18 @@ export default function BookingScreen({ navigation, route }) {
     const effectiveDestCoords = destCoords
     const effectiveDestAddress = destination.trim()
 
-    // ── 50 KM Local Max & Auto-Conversion to Long Trip / 240 KM Sharing Enforcement ──
+    // ── 50 KM Local Radius Max & Auto-Conversion to Long Trip / 240 KM Sharing Enforcement ──
     let effectiveOutstation = isOutstationTrip
     let effectiveTripTypeCategory = tripTypeCategory
-    if (routeDistanceKm > 50 && !isHourlyLocal) {
-      effectiveOutstation = true
-      effectiveTripTypeCategory = 'outstation'
-      if (tripTypeCategory !== 'outstation') {
-        setTripTypeCategory('outstation')
-      }
+    const isWithinRadOnSubmit = (pickupCoords && destCoords)
+      ? (calculateDistanceKm(pickupCoords.latitude, pickupCoords.longitude, destCoords.latitude, destCoords.longitude) <= 50.0 || routeDistanceKm <= 60.0)
+      : (routeDistanceKm <= 60.0)
+    if (tripTypeCategory === 'local' && !isWithinRadOnSubmit && routeDistanceKm > 60 && !isHourlyLocal) {
+      setShowOutstationPromptModal(true)
+      return
     }
 
-    if (effectiveOutstation && routeDistanceKm > 0 && routeDistanceKm <= 50) {
+    if (effectiveOutstation && routeDistanceKm > 0 && isWithinRadOnSubmit && routeDistanceKm <= 50) {
       Alert.alert(
         '🚫 Minimum Distance Required',
         `Outstation trips require a minimum travel distance of 50 km. Your selected route is ${routeDistanceKm.toFixed(1)} km.\n\nPlease select Local Trip mode.`,
@@ -799,17 +1088,36 @@ export default function BookingScreen({ navigation, route }) {
     const kmRate = isRoundTrip
       ? parseFloat(selectedVt.round_trip_per_km || selectedVt.price_per_km || 20)
       : effectiveOutstation
-      ? parseFloat(selectedVt.one_way_per_km || selectedVt.price_per_km || 18)
-      : parseFloat(selectedVt.price_per_km || 15)
+        ? parseFloat(selectedVt.one_way_per_km || selectedVt.price_per_km || 18)
+        : parseFloat(selectedVt.price_per_km || 15)
     const minRate = parseFloat(selectedVt.price_per_min || 1.5)
     const billableDist = isRoundTrip ? routeDistanceKm * 2 : routeDistanceKm
     const billableMins = isRoundTrip ? routeDurationMins * 2 : routeDurationMins
-    const rawFare = fareEstimates[selectedVt.id] || Math.round(baseFare + (billableDist * kmRate) + (billableMins * minRate))
+    let rawFare = fareEstimates[selectedVt.id] || Math.round(baseFare + (billableDist * kmRate) + (billableMins * minRate))
+    if (isSharedTrip) rawFare *= 0.5
+
+    const waitHourlyRate = parseFloat(selectedVt.waiting_charge_per_hour || (selectedVt.waiting_charge_per_min ? selectedVt.waiting_charge_per_min * 60 : (selectedVt.waiting_charge ? selectedVt.waiting_charge * 60 : 100)))
+    const waitingCharge = waitingHours > 0 ? Math.round(waitingHours * waitHourlyRate) : 0
+
     const discountAmount = appliedCoupon?.discount_amount || 0
-    const finalFare = Math.max(30, rawFare - discountAmount)
+    const finalFare = Math.max(30, Math.round(rawFare + waitingCharge - discountAmount))
 
     setBookingLoading(true)
     try {
+      // Build structured preferences note string to guarantee display on all Admin panels & driver sheets
+      const notesParts = []
+      if (passengerCount > 0) notesParts.push(`👥 Passengers: ${passengerCount} Person${passengerCount > 1 ? 's' : ''}`)
+      if (hasIntermediateStop && intermediateStop?.trim()) notesParts.push(`🛑 Via Stop: ${intermediateStop.trim()}`)
+      if (luggageCount > 0) notesParts.push(`🧳 Luggage: ${luggageCount} Bags`)
+      if (hasPets) notesParts.push('🐾 Traveling with Pets: Yes')
+      if (isSUVSelected && rooftopCarrier) notesParts.push('📦 Rooftop Carrier: Yes (Additional Charge)')
+      if (waitingHours > 0) notesParts.push(`⏱️ Waiting Time: ${waitingHours} hrs (₹${waitingCharge})`)
+      if (driverInstructions?.trim()) notesParts.push(`📝 Driver Note: ${driverInstructions.trim()}`)
+      if (passengerName?.trim() && passengerName !== user?.name) {
+        notesParts.push(`👤 Passenger: ${passengerName.trim()}${passengerPhone ? ` (${passengerPhone.trim()})` : ''}`)
+      }
+      const compiledNotes = notesParts.join(' | ')
+
       const payload = {
         vehicle_type_id: selectedVt.id,
         pickup_address: pickup,
@@ -847,11 +1155,58 @@ export default function BookingScreen({ navigation, route }) {
         coupon_id: appliedCoupon?.id || null,
         discount_amount: appliedCoupon?.discount_amount || 0,
         city_name: getDetectedCity() || '',
+        notes: compiledNotes || null,
+        passenger_count: passengerCount,
+        passengers_count: passengerCount,
+        passengers: passengerCount,
+        luggage_count: luggageCount,
+        bags_count: luggageCount,
+        has_pets: hasPets ? 1 : 0,
+        pets: hasPets ? 1 : 0,
+        traveling_with_pets: hasPets ? 1 : 0,
+        rooftop_carrier: (isSUVSelected && rooftopCarrier) ? 1 : 0,
+        roof_carrier: (isSUVSelected && rooftopCarrier) ? 1 : 0,
+        rooftop: (isSUVSelected && rooftopCarrier) ? 1 : 0,
+        waiting_time_hours: waitingHours,
+        waiting_hours: waitingHours,
+        waiting_charge: waitingCharge,
+        driver_instructions: driverInstructions || null,
+        passenger_name: passengerName || null,
+        passenger_phone: passengerPhone || null,
+        passenger_email: passengerEmail || null,
+        via_stop: (hasIntermediateStop && intermediateStop?.trim()) ? intermediateStop.trim() : null,
+        intermediate_stop: (hasIntermediateStop && intermediateStop?.trim()) ? intermediateStop.trim() : null,
+        intermediate_stop_lat: (hasIntermediateStop && intermediateStopCoords?.latitude) ? intermediateStopCoords.latitude : null,
+        intermediate_stop_lng: (hasIntermediateStop && intermediateStopCoords?.longitude) ? intermediateStopCoords.longitude : null,
+        stops: (hasIntermediateStop && intermediateStop?.trim()) ? [{
+          address: intermediateStop.trim(),
+          lat: intermediateStopCoords?.latitude || null,
+          lng: intermediateStopCoords?.longitude || null,
+          completed: false
+        }] : null,
       }
 
       const res = await bookingsAPI.create(payload)
       if (res.data?.status === 'success' && res.data?.booking_id) {
-        navigation.navigate('BookingTrack', { bookingId: res.data.booking_id })
+        setShowReviewScreen(false)
+        if (isSharedTrip) {
+          Alert.alert(
+            'Shared Ride Published 🎉',
+            'Your 50/50 shared outstation ride is live! Co-passengers can now discover and request to join your trip.',
+            [
+              {
+                text: 'View in Shared Rides 👥',
+                onPress: () => navigation.navigate('SharedTrips')
+              },
+              {
+                text: 'Track Booking 📍',
+                onPress: () => navigation.navigate('BookingTrack', { bookingId: res.data.booking_id })
+              }
+            ]
+          )
+        } else {
+          navigation.navigate('BookingTrack', { bookingId: res.data.booking_id })
+        }
       } else {
         Alert.alert('Booking Error', res.data?.message || 'Could not place booking. Please try again.')
       }
@@ -1019,6 +1374,7 @@ export default function BookingScreen({ navigation, route }) {
         destCoords={destCoords}
         routeCoordinates={routeCoordinates}
         simulatedCabs={simulatedCabs}
+        waypoints={hasIntermediateStop && intermediateStopCoords ? [{ ...intermediateStopCoords, address: intermediateStop }] : []}
         onMapPress={handleMapPress}
         initialRegion={{
           latitude: pickupCoords?.latitude || 13.0827,
@@ -1029,11 +1385,11 @@ export default function BookingScreen({ navigation, route }) {
         style={[StyleSheet.absoluteFillObject, { width: SCREEN_WIDTH, height: SCREEN_HEIGHT }]}
       />
 
-      {/* Floating Recenter Map Button */}
+      {/* Floating Recenter FAB */}
       <TouchableOpacity
         style={[
           styles.floatingRecenterFab,
-          { bottom: bookingStep === 1 ? 236 : Math.min(536, SCREEN_HEIGHT * 0.60 + 16) },
+          { bottom: searchCardCollapsed ? Math.min(536, SCREEN_HEIGHT * 0.60 + 16) : 90 },
         ]}
         onPress={handleRecenterMap}
         activeOpacity={0.85}
@@ -1041,493 +1397,24 @@ export default function BookingScreen({ navigation, route }) {
         <Ionicons name="locate-outline" size={22} color="#0F172A" />
       </TouchableOpacity>
 
-      {/* ── 3. Modern Draggable Bottom Sheet ── */}
-      <ModernBottomSheet
-        snapPoints={[
-          220,
-          Math.min(520, SCREEN_HEIGHT * 0.60),
-          Math.min(600, SCREEN_HEIGHT * 0.70),
-        ]}
-        initialIndex={bookingStep === 1 ? 0 : 1}
-      >
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 36 }}>
-          {/* ── Progressive Stepper Indicator ── */}
-          <View style={styles.progressiveStepperWrap}>
-            {[
-              { id: 1, label: 'Route', icon: 'location' },
-              { id: 2, label: isOutstationTrip ? 'Outstation' : 'Service', icon: 'car-sport' },
-              { id: 3, label: 'Timing', icon: 'time' },
-              { id: 4, label: 'Cabs & Fare', icon: 'pricetag' },
-            ].map((step, idx) => {
-              const isCompleted = bookingStep > step.id
-              const isCurrent = bookingStep === step.id
-              return (
-                <React.Fragment key={step.id}>
-                  {idx > 0 && (
-                    <View style={[styles.stepperLine, bookingStep > idx && styles.stepperLineCompleted]} />
-                  )}
-                  <TouchableOpacity
-                    style={[styles.stepperItem, isCurrent && styles.stepperItemCurrent]}
-                    onPress={() => {
-                      if (step.id === 1) {
-                        animateStepTransition(1)
-                        handleFocusDestination()
-                      } else if (step.id <= Math.max(bookingStep, (destination && destCoords ? 2 : 1))) {
-                        animateStepTransition(step.id)
-                      }
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <View style={[
-                      styles.stepperBadge,
-                      isCurrent && styles.stepperBadgeCurrent,
-                      isCompleted && styles.stepperBadgeCompleted,
-                    ]}>
-                      {isCompleted ? (
-                        <Ionicons name="checkmark" size={11} color="#FFFFFF" />
-                      ) : (
-                        <Text style={[styles.stepperNum, isCurrent && styles.stepperNumCurrent]}>{step.id}</Text>
-                      )}
-                    </View>
-                    <Text style={[
-                      styles.stepperText,
-                      isCurrent && styles.stepperTextCurrent,
-                      isCompleted && styles.stepperTextCompleted,
-                    ]}>
-                      {step.label}
-                    </Text>
-                  </TouchableOpacity>
-                </React.Fragment>
-              )
-            })}
-          </View>
-
-          {/* ── STEP 1: Set Drop Location ── */}
-          {bookingStep === 1 && (
+      {/* ── 3. Modern Draggable Bottom Sheet (Rendered ONLY after tapping "Search Cabs") ── */}
+      {searchCardCollapsed && (
+        <ModernBottomSheet
+          snapPoints={[
+            Math.min(460, SCREEN_HEIGHT * 0.58),
+            Math.min(580, SCREEN_HEIGHT * 0.72),
+            Math.min(720, SCREEN_HEIGHT * 0.88),
+          ]}
+          initialIndex={1}
+        >
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 36 }}>
+            {/* ── Cabs & Live Fares (Opened after Search Cabs is pressed) ── */}
             <Animated.View style={[styles.stepAnimatedWrap, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-              <View style={styles.stepHeaderRow}>
-                <View style={styles.stepIconWrap}>
-                  <Ionicons name="location" size={20} color="#D97706" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <View style={styles.stepBadgeTag}>
-                    <Text style={styles.stepBadgeTagText}>STEP 1 OF 4</Text>
-                  </View>
-                  <Text style={styles.stepMainTitle}>Where are you going?</Text>
-                  <Text style={styles.stepSubTitle}>Type your drop location or choose a popular destination</Text>
-                </View>
-              </View>
-
-              {/* Quick Popular Destination Chips */}
-              <View style={styles.quickPresetsWrap}>
-                <Text style={styles.quickPresetsHeader}>Popular Destinations in City:</Text>
-                <View style={styles.quickPresetsGrid}>
-                  {[
-                    { name: 'Airport', icon: 'airplane-outline', query: 'Airport' },
-                    { name: 'Central Railway', icon: 'train-outline', query: 'Railway Station' },
-                    { name: 'Bus Terminal', icon: 'bus-outline', query: 'Bus Stand' },
-                    { name: 'Shopping Mall', icon: 'cart-outline', query: 'Mall' },
-                    { name: 'Hospital', icon: 'medkit-outline', query: 'Hospital' },
-                  ].map((p, pIdx) => (
-                    <TouchableOpacity
-                      key={pIdx}
-                      style={styles.quickPresetPill}
-                      onPress={() => handleQuickPresetSelect(p)}
-                      activeOpacity={0.8}
-                    >
-                      <Ionicons name={p.icon} size={13} color="#B45309" />
-                      <Text style={styles.quickPresetText}>{p.name}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-
-              {/* Action Button */}
-              <TouchableOpacity
-                style={styles.stepActionBtn}
-                onPress={handleFocusDestination}
-                activeOpacity={0.88}
-              >
-                <Ionicons name="search" size={16} color="#000000" />
-                <Text style={styles.stepActionBtnText}>Type Drop Location ➔</Text>
-              </TouchableOpacity>
-            </Animated.View>
-          )}
-
-          {/* ── STEP 2: Service Selection (Local Drop vs Hourly | One Way vs Round Trip) ── */}
-          {bookingStep === 2 && (
-            <Animated.View style={[styles.stepAnimatedWrap, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-              {/* Destination Summary Bar */}
-              <View style={styles.confirmedSummaryBar}>
-                <Ionicons name="checkmark-circle" size={15} color="#10B981" />
-                <Text style={styles.confirmedSummaryText} numberOfLines={1}>
-                  Drop: <Text style={{ fontWeight: '800', color: '#0F172A' }}>{destination || 'Selected'}</Text>
-                  {routeDistanceKm > 0 ? ` (${routeDistanceKm.toFixed(1)} km)` : ''}
-                </Text>
-                <TouchableOpacity onPress={handleFocusDestination} style={styles.editStepPill}>
-                  <Text style={styles.editStepPillText}>Change</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.stepHeaderRow}>
-                <View style={[styles.stepIconWrap, { backgroundColor: isOutstationTrip ? '#F3E8FF' : '#FEF3C7' }]}>
-                  <Ionicons name={isOutstationTrip ? 'map' : 'car-sport'} size={20} color={isOutstationTrip ? '#7C3AED' : '#D97706'} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <View style={[styles.stepBadgeTag, { backgroundColor: isOutstationTrip ? '#F3E8FF' : '#FEF3C7' }]}>
-                    <Text style={[styles.stepBadgeTagText, { color: isOutstationTrip ? '#7C3AED' : '#B45309' }]}>STEP 2 OF 4</Text>
-                  </View>
-                  <Text style={styles.stepMainTitle}>{isOutstationTrip ? 'Outstation Trip Mode' : 'Local Service Type'}</Text>
-                  <Text style={styles.stepSubTitle}>
-                    {isOutstationTrip
-                      ? 'Choose One Way or Round Trip for outstation travel'
-                      : 'Choose point-to-point drop or hourly rental package'}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Service Selection Cards */}
-              <View style={styles.largeCardsGrid}>
-                {isOutstationTrip ? (
-                  <>
-                    <TouchableOpacity
-                      style={[styles.serviceSelectCard, !isRoundTrip && styles.serviceSelectCardActive]}
-                      onPress={() => {
-                        setIsRoundTrip(false)
-                        setTimeout(() => animateStepTransition(3), 160)
-                      }}
-                      activeOpacity={0.85}
-                    >
-                      <View style={styles.serviceSelectCardTop}>
-                        <View style={[styles.serviceIconBubble, !isRoundTrip && { backgroundColor: '#7C3AED' }]}>
-                          <Ionicons name="arrow-forward" size={16} color={!isRoundTrip ? '#FFFFFF' : '#64748B'} />
-                        </View>
-                        <View style={[styles.serviceRadioRing, !isRoundTrip && { borderColor: '#7C3AED' }]}>
-                          {!isRoundTrip && <View style={[styles.serviceRadioDot, { backgroundColor: '#7C3AED' }]} />}
-                        </View>
-                      </View>
-                      <Text style={[styles.serviceCardTitle, !isRoundTrip && { color: '#7C3AED' }]}>One Way Trip</Text>
-                      <Text style={styles.serviceCardSub}>Single drop to destination city. Pay only for one way.</Text>
-                      <View style={styles.serviceTagBadge}>
-                        <Text style={styles.serviceTagBadgeText}>Single City Drop</Text>
-                      </View>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.serviceSelectCard, isRoundTrip && styles.serviceSelectCardActive]}
-                      onPress={() => {
-                        setIsRoundTrip(true)
-                        setTimeout(() => animateStepTransition(3), 160)
-                      }}
-                      activeOpacity={0.85}
-                    >
-                      <View style={styles.serviceSelectCardTop}>
-                        <View style={[styles.serviceIconBubble, isRoundTrip && { backgroundColor: '#7C3AED' }]}>
-                          <Ionicons name="repeat" size={16} color={isRoundTrip ? '#FFFFFF' : '#64748B'} />
-                        </View>
-                        <View style={[styles.serviceRadioRing, isRoundTrip && { borderColor: '#7C3AED' }]}>
-                          {isRoundTrip && <View style={[styles.serviceRadioDot, { backgroundColor: '#7C3AED' }]} />}
-                        </View>
-                      </View>
-                      <Text style={[styles.serviceCardTitle, isRoundTrip && { color: '#7C3AED' }]}>Round Trip</Text>
-                      <Text style={styles.serviceCardSub}>Return back with same cab. Discounted return km fare.</Text>
-                      <View style={[styles.serviceTagBadge, { backgroundColor: '#ECFDF5' }]}>
-                        <Text style={[styles.serviceTagBadgeText, { color: '#059669' }]}>Save on Return</Text>
-                      </View>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <>
-                    <TouchableOpacity
-                      style={[styles.serviceSelectCard, localTripSubType === 'drop' && styles.serviceSelectCardActive]}
-                      onPress={() => {
-                        setLocalTripSubType('drop')
-                        setIsRoundTrip(false)
-                        setTimeout(() => animateStepTransition(3), 160)
-                      }}
-                      activeOpacity={0.85}
-                    >
-                      <View style={styles.serviceSelectCardTop}>
-                        <View style={[styles.serviceIconBubble, localTripSubType === 'drop' && { backgroundColor: '#D97706' }]}>
-                          <Ionicons name="car-sport" size={16} color={localTripSubType === 'drop' ? '#FFFFFF' : '#64748B'} />
-                        </View>
-                        <View style={[styles.serviceRadioRing, localTripSubType === 'drop' && { borderColor: '#D97706' }]}>
-                          {localTripSubType === 'drop' && <View style={[styles.serviceRadioDot, { backgroundColor: '#D97706' }]} />}
-                        </View>
-                      </View>
-                      <Text style={[styles.serviceCardTitle, localTripSubType === 'drop' && { color: '#B45309' }]}>Local Drop</Text>
-                      <Text style={styles.serviceCardSub}>Standard point-to-point drop within city limits.</Text>
-                      <View style={styles.serviceTagBadge}>
-                        <Text style={styles.serviceTagBadgeText}>Point to Point</Text>
-                      </View>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.serviceSelectCard, localTripSubType === 'hourly' && styles.serviceSelectCardActive]}
-                      onPress={() => {
-                        setLocalTripSubType('hourly')
-                        setIsRoundTrip(false)
-                      }}
-                      activeOpacity={0.85}
-                    >
-                      <View style={styles.serviceSelectCardTop}>
-                        <View style={[styles.serviceIconBubble, localTripSubType === 'hourly' && { backgroundColor: '#D97706' }]}>
-                          <Ionicons name="time" size={16} color={localTripSubType === 'hourly' ? '#FFFFFF' : '#64748B'} />
-                        </View>
-                        <View style={[styles.serviceRadioRing, localTripSubType === 'hourly' && { borderColor: '#D97706' }]}>
-                          {localTripSubType === 'hourly' && <View style={[styles.serviceRadioDot, { backgroundColor: '#D97706' }]} />}
-                        </View>
-                      </View>
-                      <Text style={[styles.serviceCardTitle, localTripSubType === 'hourly' && { color: '#B45309' }]}>Hourly Package</Text>
-                      <Text style={styles.serviceCardSub}>Keep cab for multiple stops and errands.</Text>
-                      <View style={[styles.serviceTagBadge, { backgroundColor: '#FEF3C7' }]}>
-                        <Text style={[styles.serviceTagBadgeText, { color: '#B45309' }]}>Multi-Stop Rental</Text>
-                      </View>
-                    </TouchableOpacity>
-                  </>
-                )}
-              </View>
-
-              {/* Hourly Duration Selector */}
-              {!isOutstationTrip && localTripSubType === 'hourly' && (
-                <View style={styles.hourlyPackageBox}>
-                  <Text style={styles.hourlyPackageTitle}>CHOOSE RENTAL DURATION:</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.hourlyChipsRow}>
-                    {[1, 2, 3, 4, 6, 8, 10, 12].map(hrs => {
-                      const isSel = hourlyPackageHours === hrs
-                      return (
-                        <TouchableOpacity
-                          key={hrs}
-                          style={[styles.hourlyChip, isSel && styles.hourlyChipActive]}
-                          onPress={() => setHourlyPackageHours(hrs)}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={[styles.hourlyChipHours, isSel && styles.hourlyChipHoursActive]}>
-                            {hrs} {hrs === 1 ? 'Hour' : 'Hours'}
-                          </Text>
-                        </TouchableOpacity>
-                      )
-                    })}
-                  </ScrollView>
-                  <View style={styles.hourlyInfoBanner}>
-                    <Ionicons name="information-circle" size={13} color="#D97706" />
-                    <Text style={styles.hourlyInfoText}>
-                      Unlimited local errands within {hourlyPackageHours} {hourlyPackageHours === 1 ? 'hr' : 'hrs'}. Overtime billed automatically on drop.
-                    </Text>
-                  </View>
-                </View>
-              )}
-
-              {/* Shared Trip Option (if eligible) */}
-              {isSharingEligible && (
-                <TouchableOpacity
-                  style={[styles.shareCardOption, isSharedTrip && styles.shareCardOptionActive]}
-                  onPress={handleToggleSharing}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons name="people" size={18} color={isSharedTrip ? '#059669' : '#64748B'} />
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <Text style={[styles.shareCardOptionTitle, isSharedTrip && { color: '#065F46' }]}>
-                      50/50 Ride Sharing Available
-                    </Text>
-                    <Text style={styles.shareCardOptionSub}>
-                      Split trip fare with another passenger heading the same way.
-                    </Text>
-                  </View>
-                  <View style={[styles.shareCheckPill, isSharedTrip && { backgroundColor: '#059669' }]}>
-                    <Text style={styles.shareCheckPillText}>{isSharedTrip ? '✓ Active' : 'Enable'}</Text>
-                  </View>
-                </TouchableOpacity>
-              )}
-
-              {/* Distance Warning Alert */}
-              {isOutstationDistanceTooShort && (
-                <View style={[styles.distanceRestrictionAlertBox, { backgroundColor: '#FFFBEB', borderColor: '#FCD34D', marginTop: 10 }]}>
-                  <View style={styles.restrictionAlertHeader}>
-                    <Ionicons name="alert-circle" size={18} color="#D97706" />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.restrictionAlertTitle, { color: '#B45309' }]}>
-                        Min 50 km Required for Outstation ({routeDistanceKm.toFixed(1)} km)
-                      </Text>
-                      <Text style={[styles.restrictionAlertSub, { color: '#92400E' }]}>
-                        This route is within local limits. Switch to Local Trip mode or pick a farther destination.
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              )}
-
-              {/* Next Button to Step 3 */}
-              <TouchableOpacity
-                style={styles.stepActionBtn}
-                onPress={() => animateStepTransition(3)}
-                activeOpacity={0.88}
-              >
-                <Text style={styles.stepActionBtnText}>Next: Ride Timing ➔</Text>
-              </TouchableOpacity>
-            </Animated.View>
-          )}
-
-          {/* ── STEP 3: Ride Timing (Ride Now vs Schedule) ── */}
-          {bookingStep === 3 && (
-            <Animated.View style={[styles.stepAnimatedWrap, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-              {/* Summary Pills */}
-              <View style={styles.confirmedSummaryRow}>
-                <View style={styles.confirmedSummaryBar}>
-                  <Ionicons name="checkmark-circle" size={13} color="#10B981" />
-                  <Text style={styles.confirmedSummaryText} numberOfLines={1}>
-                    {destination ? destination.slice(0, 16) : 'Destination'}
-                  </Text>
-                  <TouchableOpacity onPress={() => animateStepTransition(1)} style={styles.editStepPill}>
-                    <Text style={styles.editStepPillText}>Edit</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.confirmedSummaryBar}>
-                  <Ionicons name="checkmark-circle" size={13} color="#10B981" />
-                  <Text style={styles.confirmedSummaryText}>
-                    {isOutstationTrip ? (isRoundTrip ? 'Round Trip' : 'One Way') : (localTripSubType === 'hourly' ? `${hourlyPackageHours}h Rental` : 'Local Drop')}
-                  </Text>
-                  <TouchableOpacity onPress={() => animateStepTransition(2)} style={styles.editStepPill}>
-                    <Text style={styles.editStepPillText}>Edit</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              <View style={styles.stepHeaderRow}>
-                <View style={[styles.stepIconWrap, { backgroundColor: '#ECFDF5' }]}>
-                  <Ionicons name="time" size={20} color="#059669" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <View style={[styles.stepBadgeTag, { backgroundColor: '#ECFDF5' }]}>
-                    <Text style={[styles.stepBadgeTagText, { color: '#059669' }]}>STEP 3 OF 4</Text>
-                  </View>
-                  <Text style={styles.stepMainTitle}>When do you want to ride?</Text>
-                  <Text style={styles.stepSubTitle}>Book for immediate pickup or schedule in advance</Text>
-                </View>
-              </View>
-
-              {/* Dual Timing Cards */}
-              <View style={styles.largeCardsGrid}>
-                {/* Ride Now Card */}
-                <TouchableOpacity
-                  style={[styles.serviceSelectCard, rideTimingMode === 'now' && styles.serviceSelectCardActive]}
-                  onPress={() => {
-                    setRideTimingMode('now')
-                    setTimeout(() => animateStepTransition(4), 160)
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.serviceSelectCardTop}>
-                    <View style={[styles.serviceIconBubble, rideTimingMode === 'now' && { backgroundColor: '#D97706' }]}>
-                      <Ionicons name="flash" size={16} color={rideTimingMode === 'now' ? '#FFFFFF' : '#64748B'} />
-                    </View>
-                    <View style={[styles.serviceRadioRing, rideTimingMode === 'now' && { borderColor: '#D97706' }]}>
-                      {rideTimingMode === 'now' && <View style={[styles.serviceRadioDot, { backgroundColor: '#D97706' }]} />}
-                    </View>
-                  </View>
-                  <Text style={[styles.serviceCardTitle, rideTimingMode === 'now' && { color: '#B45309' }]}>Ride Now</Text>
-                  <Text style={styles.serviceCardSub}>Nearest verified driver arrives in 3-5 mins.</Text>
-                  <View style={[styles.serviceTagBadge, { backgroundColor: '#ECFDF5' }]}>
-                    <Text style={[styles.serviceTagBadgeText, { color: '#059669' }]}>Instant Dispatch ⚡</Text>
-                  </View>
-                </TouchableOpacity>
-
-                {/* Schedule Card */}
-                <TouchableOpacity
-                  style={[styles.serviceSelectCard, rideTimingMode === 'schedule' && styles.serviceSelectCardActive]}
-                  onPress={() => {
-                    setRideTimingMode('schedule')
-                    setActiveDateTarget('departure')
-                    setShowCalendarModal(true)
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.serviceSelectCardTop}>
-                    <View style={[styles.serviceIconBubble, rideTimingMode === 'schedule' && { backgroundColor: '#D97706' }]}>
-                      <Ionicons name="calendar" size={16} color={rideTimingMode === 'schedule' ? '#FFFFFF' : '#64748B'} />
-                    </View>
-                    <View style={[styles.serviceRadioRing, rideTimingMode === 'schedule' && { borderColor: '#D97706' }]}>
-                      {rideTimingMode === 'schedule' && <View style={[styles.serviceRadioDot, { backgroundColor: '#D97706' }]} />}
-                    </View>
-                  </View>
-                  <Text style={[styles.serviceCardTitle, rideTimingMode === 'schedule' && { color: '#B45309' }]}>Schedule Ride</Text>
-                  <Text style={styles.serviceCardSub}>Pre-book for a guaranteed pickup at chosen time.</Text>
-                  <View style={styles.serviceTagBadge}>
-                    <Text style={styles.serviceTagBadgeText}>Advance Booking 📅</Text>
-                  </View>
-                </TouchableOpacity>
-              </View>
-
-              {/* Schedule Details Bar (if schedule selected) */}
-              {rideTimingMode === 'schedule' && (
-                <View style={styles.dateTimeSelectorCard}>
-                  <TouchableOpacity
-                    style={styles.dateTimeBlock}
-                    onPress={() => {
-                      setActiveDateTarget('departure')
-                      setShowCalendarModal(true)
-                    }}
-                    activeOpacity={0.8}
-                  >
-                    <View style={styles.dateTimeIconBox}>
-                      <Ionicons name="calendar" size={16} color="#D97706" />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.dateTimeLabel}>DEPARTURE DATE & TIME</Text>
-                      <Text style={styles.dateTimeValue}>
-                        {formatDateDisplay(departureDate)} · {departureTime}
-                      </Text>
-                    </View>
-                    <View style={styles.changePill}>
-                      <Text style={styles.changePillText}>Change 📅</Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  {isRoundTrip && (
-                    <TouchableOpacity
-                      style={[styles.dateTimeBlock, { borderTopWidth: 1, borderTopColor: '#E2E8F0', marginTop: 8, paddingTop: 8 }]}
-                      onPress={() => {
-                        setActiveDateTarget('return')
-                        setShowCalendarModal(true)
-                      }}
-                      activeOpacity={0.8}
-                    >
-                      <View style={[styles.dateTimeIconBox, { backgroundColor: '#ECFDF5' }]}>
-                        <Ionicons name="swap-horizontal" size={16} color="#059669" />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.dateTimeLabel, { color: '#059669' }]}>RETURN PICKUP DATE & TIME</Text>
-                        <Text style={styles.dateTimeValue}>
-                          {formatDateDisplay(returnDate)} · {returnTime}
-                        </Text>
-                      </View>
-                      <View style={[styles.changePill, { backgroundColor: '#ECFDF5' }]}>
-                        <Text style={[styles.changePillText, { color: '#059669' }]}>Change 📅</Text>
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              )}
-
-              {/* Reveal Cabs Button */}
-              <TouchableOpacity
-                style={styles.stepActionBtn}
-                onPress={() => animateStepTransition(4)}
-                activeOpacity={0.88}
-              >
-                <Text style={styles.stepActionBtnText}>View Available Cabs & Fares 🚖 ➔</Text>
-              </TouchableOpacity>
-            </Animated.View>
-          )}
-
-          {/* ── STEP 4: Cabs & Live Fares (The Grand Opening Reveal) ── */}
-          {bookingStep === 4 && (
-            <Animated.View style={[styles.stepAnimatedWrap, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-              {/* Step 1, 2, 3 Quick Summary / Edit Bar */}
+              {/* Trip Summary / Modify Bar */}
               <View style={styles.step4SummaryBar}>
                 <TouchableOpacity
                   style={styles.step4SummaryPill}
-                  onPress={() => animateStepTransition(1)}
+                  onPress={() => setSearchCardCollapsed(false)}
                   activeOpacity={0.8}
                 >
                   <Ionicons name="location" size={11} color="#D97706" />
@@ -1539,7 +1426,7 @@ export default function BookingScreen({ navigation, route }) {
 
                 <TouchableOpacity
                   style={styles.step4SummaryPill}
-                  onPress={() => animateStepTransition(2)}
+                  onPress={() => setSearchCardCollapsed(false)}
                   activeOpacity={0.8}
                 >
                   <Ionicons name="car-sport" size={11} color="#7C3AED" />
@@ -1551,7 +1438,7 @@ export default function BookingScreen({ navigation, route }) {
 
                 <TouchableOpacity
                   style={styles.step4SummaryPill}
-                  onPress={() => animateStepTransition(3)}
+                  onPress={() => handleOpenTimeModal('departure')}
                   activeOpacity={0.8}
                 >
                   <Ionicons name={rideTimingMode === 'now' ? 'flash' : 'calendar'} size={11} color="#059669" />
@@ -1598,8 +1485,8 @@ export default function BookingScreen({ navigation, route }) {
                     const kmRate = isRoundTrip
                       ? parseFloat(vt.round_trip_per_km || vt.price_per_km || 20)
                       : isOutstationTrip
-                      ? parseFloat(vt.one_way_per_km || vt.price_per_km || 18)
-                      : parseFloat(vt.price_per_km || 15)
+                        ? parseFloat(vt.one_way_per_km || vt.price_per_km || 18)
+                        : parseFloat(vt.price_per_km || 15)
                     const minRate = parseFloat(isRoundTrip ? (vt.round_trip_per_min || 1.5) : (vt.price_per_min || 1.5))
 
                     const billableDist = isRoundTrip ? routeDistanceKm * 2 : routeDistanceKm
@@ -1674,8 +1561,8 @@ export default function BookingScreen({ navigation, route }) {
                             {isHourlyLocal
                               ? `₹${vt.hourly_rate || 250}/hr · ${hourlyPackageHours} ${hourlyPackageHours === 1 ? 'Hr' : 'Hrs'} Unlimited Rental`
                               : routeDistanceKm > 0
-                              ? `₹${kmRate}/km · ${etaMins} mins away · ~${formatDurationHours(dropMins)} drop`
-                              : `₹${kmRate}/km · ₹${minRate}/min · Fast pickup`}
+                                ? `₹${kmRate}/km · ${etaMins} mins away · ~${formatDurationHours(dropMins)} drop`
+                                : `₹${kmRate}/km · ₹${minRate}/min · Fast pickup`}
                           </Text>
                         </View>
 
@@ -1761,11 +1648,32 @@ export default function BookingScreen({ navigation, route }) {
                 </TouchableOpacity>
               </View>
 
+              {/* Tollgate & Parking Notice Banner */}
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                backgroundColor: '#FFFBEB',
+                paddingVertical: 7,
+                paddingHorizontal: 12,
+                borderRadius: 10,
+                marginBottom: 10,
+                borderWidth: 1,
+                borderColor: '#FDE68A',
+              }}>
+                <Ionicons name="information-circle" size={15} color="#D97706" />
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400E' }}>
+                  ℹ️ Tollgate &amp; parking charges extra (pay as per actual receipts)
+                </Text>
+              </View>
+
               {/* Golden CTA Button */}
               <TouchableOpacity
                 style={[
                   styles.bookRideBtn,
-                  (isDistanceInvalid || !destination?.trim() || !destCoords) && styles.bookRideBtnDisabled,
+                  ((isDistanceInvalid && !isLocalDistanceTooFar) || !destination?.trim() || !destCoords) && styles.bookRideBtnDisabled,
+                  isLocalDistanceTooFar && { backgroundColor: '#2563EB' }
                 ]}
                 onPress={() => {
                   if (!destination?.trim() || !destCoords) {
@@ -1773,6 +1681,10 @@ export default function BookingScreen({ navigation, route }) {
                       'Destination Required 📍',
                       'Please select or enter your destination address. Entha trip-kum destination illamal book seiya mudiyadhu.'
                     )
+                    return
+                  }
+                  if (isLocalDistanceTooFar) {
+                    setShowOutstationPromptModal(true)
                     return
                   }
                   if (isOutstationDistanceTooShort) {
@@ -1789,7 +1701,7 @@ export default function BookingScreen({ navigation, route }) {
                     )
                     return
                   }
-                  handleBookRide()
+                  setShowReviewScreen(true)
                 }}
                 disabled={bookingLoading}
                 activeOpacity={0.88}
@@ -1799,190 +1711,904 @@ export default function BookingScreen({ navigation, route }) {
                 ) : (
                   <Text style={[
                     styles.bookRideBtnText,
-                    (isDistanceInvalid || !destination?.trim() || !destCoords) && styles.bookRideBtnDisabledText,
+                    ((isDistanceInvalid && !isLocalDistanceTooFar) || !destination?.trim() || !destCoords) && styles.bookRideBtnDisabledText,
+                    isLocalDistanceTooFar && { color: '#FFFFFF', fontWeight: '800' }
                   ]}>
                     {!destination?.trim() || !destCoords
                       ? '📍 Enter Destination to Book'
-                      : isOutstationDistanceTooShort
-                      ? '⚠️ Min 50 km Required for Outstation'
-                      : isSharingDistanceTooShort
-                      ? '⚠️ Min 240 km for Ride Sharing'
-                      : rideTimingMode === 'now'
-                      ? (isOutstationTrip ? '⚡ Ride Now (Outstation)' : '⚡ Ride Now')
-                      : (isOutstationTrip ? '📅 Schedule Outstation Ride' : '📅 Schedule Ride')}
+                      : isLocalDistanceTooFar
+                        ? '⚠️ Route > 50 KM Radius · Book in Outstation ➔'
+                        : isOutstationDistanceTooShort
+                          ? '⚠️ Min 50 km Required for Outstation'
+                          : isSharingDistanceTooShort
+                            ? '⚠️ Min 240 km for Ride Sharing'
+                            : selectedVt?.name
+                              ? `Ride with ${selectedVt.name} ➔`
+                              : 'Select Vehicle & Continue ➔'}
                   </Text>
                 )}
               </TouchableOpacity>
             </Animated.View>
-          )}
-        </ScrollView>
-      </ModernBottomSheet>
+          </ScrollView>
+        </ModernBottomSheet>
+      )}
 
       {/* ── 2. Floating Top Header & Search Card (Rendered after Bottom Sheet with high elevation to always display dropdown over sheet) ── */}
       <SafeAreaView style={[styles.topHeaderContainer, { paddingTop: insets.top + 6 }]} pointerEvents="box-none">
-        <View style={styles.topCard}>
-          {/* Back Button & Location Title */}
-          <View style={styles.topBarRow}>
-            <TouchableOpacity
-              onPress={() => navigation.goBack()}
-              style={styles.floatingRoundBtn}
-              activeOpacity={0.8}
-            >
+        {bookingStep === 4 && searchCardCollapsed ? (
+          <View style={searchCardStyles.compactBar}>
+            <TouchableOpacity onPress={() => navigation.goBack()} style={{ marginRight: 10 }}>
               <Ionicons name="arrow-back" size={20} color="#0F172A" />
             </TouchableOpacity>
-
-            <View style={styles.tripBadgeContainer}>
-              <View style={[styles.tripTypePill, isSharedTrip ? styles.sharePill : isOutstationTrip ? styles.outstationPill : styles.localPill]}>
-                <Ionicons
-                  name={isSharedTrip ? 'people' : isOutstationTrip ? 'map' : 'car-sport'}
-                  size={12}
-                  color={isSharedTrip ? '#059669' : isOutstationTrip ? '#7C3AED' : '#D97706'}
-                />
-                <Text style={[styles.tripTypeText, { color: isSharedTrip ? '#059669' : isOutstationTrip ? '#7C3AED' : '#D97706' }]}>
-                  {isSharedTrip ? '50/50 SHARED OUTSTATION (>240 KM)' : isOutstationTrip ? 'OUTSTATION TRIP (>50 KM)' : 'LOCAL TRIP (≤50 KM)'}
-                </Text>
-              </View>
+            <View style={{ flex: 1 }}>
+              <Text style={searchCardStyles.compactBarTitle} numberOfLines={1}>
+                {pickup ? pickup.split(',')[0] : 'Pickup'} ➔ {destination ? destination.split(',')[0] : 'Drop'}
+              </Text>
+              <Text style={searchCardStyles.compactBarSub} numberOfLines={1}>
+                {isOutstationTrip ? (isRoundTrip ? 'Round Trip' : 'One Way') : (localTripSubType === 'hourly' ? `${hourlyPackageHours}h Rental` : 'Local Drop')} • {routeDistanceKm > 0 ? `${routeDistanceKm.toFixed(1)} km` : ''}
+              </Text>
             </View>
-
             <TouchableOpacity
-              onPress={handleRecenterMap}
-              style={styles.floatingRoundBtn}
+              style={searchCardStyles.modifyBtnPill}
+              onPress={() => setSearchCardCollapsed(false)}
               activeOpacity={0.8}
             >
-              <Ionicons name="locate" size={18} color="#D97706" />
+              <Text style={searchCardStyles.modifyBtnText}>Modify ✎</Text>
             </TouchableOpacity>
           </View>
+        ) : (
+          <View style={searchCardStyles.cardContainer}>
+            {/* Top Bar with Back, Title, Recenter */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <TouchableOpacity
+                onPress={() => navigation.goBack()}
+                style={styles.floatingRoundBtn}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="arrow-back" size={18} color="#0F172A" />
+              </TouchableOpacity>
 
-          {/* Location Inputs Block with Swap Button */}
-          <View style={styles.locationInputsWrap}>
-            <View style={styles.inputsColumn}>
-              {/* Pickup Input Row */}
-              <View style={styles.inputRow}>
-                <View style={styles.greenDotIndicator} />
-                <TextInput
-                  style={[styles.locationTextInput, activeInput === 'pickup' && styles.locationTextInputActive]}
-                  placeholder="Pickup Location"
-                  placeholderTextColor="#94A3B8"
-                  value={pickup}
-                  onChangeText={(t) => handleSearchTextChange(t, 'pickup')}
-                  onFocus={handleFocusPickup}
-                  onSubmitEditing={() => handleLocationSubmit('pickup')}
-                />
-              </View>
-
-              <View style={styles.locationDivider} />
-
-              {/* Destination Input Row */}
-              <View style={styles.inputRow}>
-                <View style={styles.redDotIndicator} />
-                <TextInput
-                  ref={destInputRef}
-                  style={[styles.locationTextInput, activeInput === 'destination' && styles.locationTextInputActive]}
-                  placeholder="Where to? (Enter Destination)"
-                  placeholderTextColor="#94A3B8"
-                  value={destination}
-                  onChangeText={(t) => handleSearchTextChange(t, 'destination')}
-                  onFocus={handleFocusDestination}
-                  onSubmitEditing={() => handleLocationSubmit('destination')}
-                />
-                {destination ? (
-                  <TouchableOpacity onPress={() => { setDestination(''); setDestCoords(null); setRouteDistanceKm(0); setFareEstimates({}); animateStepTransition(1); handleFocusDestination(); }} style={styles.clearBtn}>
-                    <Ionicons name="close-circle" size={16} color="#94A3B8" />
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            </View>
-
-            {/* Swap Button */}
-            <TouchableOpacity onPress={handleSwapLocations} style={styles.swapBtn} activeOpacity={0.8}>
-              <Ionicons name="swap-vertical" size={18} color="#D97706" />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Live Autocomplete Predictions Dropdown */}
-        {activeInput && predictions.length > 0 && (
-          <View style={styles.predictionsDropdown}>
-            <View style={styles.predHeaderRow}>
-              <Ionicons
-                name={activeInput === 'destination' ? 'navigate' : 'pin'}
-                size={13}
-                color="#D97706"
-              />
-              <Text style={styles.predHeaderText}>
-                {activeInput === 'destination'
-                  ? (destination.length > 0 ? 'Search Results' : '✨ Suggested Destinations Near You')
-                  : (pickup.length > 0 ? 'Search Results' : '✨ Suggested Pickup Points')}
+              <Text style={{ fontSize: 15, fontWeight: '800', color: '#0F172A' }}>
+                {isOutstationTrip ? 'Outstation Cab' : 'Local City Taxi'}
               </Text>
-              {loadingPredictions && <ActivityIndicator size="small" color="#D97706" style={{ marginLeft: 'auto' }} />}
+
+              <TouchableOpacity
+                onPress={handleRecenterMap}
+                style={styles.floatingRoundBtn}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="locate" size={17} color="#D97706" />
+              </TouchableOpacity>
             </View>
 
-            <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled={true} style={{ maxHeight: 260 }}>
-              {predictions.map((item, idx) => {
-                const isAirport = item.category_tag?.includes('Airport') || item.description?.toLowerCase().includes('airport')
-                const isStation = item.category_tag?.includes('Railway') || item.description?.toLowerCase().includes('station')
-                const isBus = item.category_tag?.includes('Bus') || item.description?.toLowerCase().includes('bus')
-                const isMall = item.category_tag?.includes('Mall') || item.category_tag?.includes('Shopping') || item.description?.toLowerCase().includes('mall')
-                const isHospital = item.category_tag?.includes('Hospital')
-                const isBeach = item.description?.toLowerCase().includes('beach')
-                const isTemple = item.category_tag?.includes('Temple')
-                const isTech = item.category_tag?.includes('IT') || item.category_tag?.includes('Company')
+            {/* 1. Radio Mode Toggle Row */}
+            <View style={searchCardStyles.modeToggleRow}>
+              {isOutstationTrip ? (
+                <>
+                  {outstationTripSubType === null ? (
+                    <>
+                      <TouchableOpacity
+                        style={searchCardStyles.modeRadioPillBig}
+                        onPress={() => {
+                          setOutstationTripSubType('one_way')
+                          setIsRoundTrip(false)
+                          setIsSharedTrip(false)
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <View style={searchCardStyles.modeRadioCircleBig} />
+                        <Text style={searchCardStyles.modeRadioTextBig}>
+                          One Way
+                        </Text>
+                      </TouchableOpacity>
 
-                const iconName = isAirport ? 'airplane' :
-                  isStation ? 'train' :
-                  isBus ? 'bus' :
-                  isMall ? 'cart' :
-                  isHospital ? 'medkit' :
-                  isBeach ? 'sunny' :
-                  isTemple ? 'business' :
-                  isTech ? 'briefcase' : 'location'
+                      <TouchableOpacity
+                        style={searchCardStyles.modeRadioPillBig}
+                        onPress={() => {
+                          setOutstationTripSubType('round_trip')
+                          setIsRoundTrip(true)
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <View style={searchCardStyles.modeRadioCircleBig} />
+                        <Text style={searchCardStyles.modeRadioTextBig}>
+                          Round Trip
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <View style={searchCardStyles.selectedOptionTopContainer}>
+                      <TouchableOpacity
+                        style={searchCardStyles.selectedOptionBigBadge}
+                        onPress={() => setOutstationTripSubType(null)}
+                        activeOpacity={0.85}
+                      >
+                        <View style={searchCardStyles.selectedRadioCircleFilled}>
+                          <View style={searchCardStyles.selectedRadioDot} />
+                        </View>
+                        <Text style={searchCardStyles.selectedOptionBigText}>
+                          {outstationTripSubType === 'round_trip' ? 'Round Trip' : 'One Way'}
+                        </Text>
+                      </TouchableOpacity>
 
-                const iconBg = isAirport ? '#EFF6FF' :
-                  isStation ? '#F5F3FF' :
-                  isBus ? '#ECFDF5' :
-                  isMall ? '#FEF2F2' :
-                  '#FFFBEB'
+                      <TouchableOpacity
+                        style={searchCardStyles.switchOptionBtn}
+                        onPress={() => setOutstationTripSubType(null)}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="swap-horizontal" size={16} color="#D97706" />
+                        <Text style={searchCardStyles.switchOptionText}>Change</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </>
+              ) : (
+                <>
+                  {localTripSubType === null ? (
+                    <>
+                      <TouchableOpacity
+                        style={searchCardStyles.modeRadioPillBig}
+                        onPress={() => {
+                          if (!isWithinLocalRadius && routeDistanceKm > 60) {
+                            setShowOutstationPromptModal(true)
+                            return
+                          }
+                          setLocalTripSubType('drop')
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <View style={searchCardStyles.modeRadioCircleBig} />
+                        <Text style={searchCardStyles.modeRadioTextBig}>
+                          Local Drop
+                        </Text>
+                      </TouchableOpacity>
 
-                const iconColor = isAirport ? '#2563EB' :
-                  isStation ? '#7C3AED' :
-                  isBus ? '#059669' :
-                  isMall ? '#DC2626' :
-                  '#D97706'
+                      <TouchableOpacity
+                        style={searchCardStyles.modeRadioPillBig}
+                        onPress={() => setLocalTripSubType('hourly')}
+                        activeOpacity={0.85}
+                      >
+                        <View style={searchCardStyles.modeRadioCircleBig} />
+                        <Text style={searchCardStyles.modeRadioTextBig}>
+                          Hourly Rental
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <View style={searchCardStyles.selectedOptionTopContainer}>
+                      <TouchableOpacity
+                        style={searchCardStyles.selectedOptionBigBadge}
+                        onPress={() => setLocalTripSubType(null)}
+                        activeOpacity={0.85}
+                      >
+                        <View style={searchCardStyles.selectedRadioCircleFilled}>
+                          <View style={searchCardStyles.selectedRadioDot} />
+                        </View>
+                        <Text style={searchCardStyles.selectedOptionBigText}>
+                          {localTripSubType === 'drop' ? 'Local Drop' : 'Hourly Rental'}
+                        </Text>
+                      </TouchableOpacity>
 
-                return (
+                      <TouchableOpacity
+                        style={searchCardStyles.switchOptionBtn}
+                        onPress={() => setLocalTripSubType(null)}
+                        activeOpacity={0.7}
+                      >
+                        <Ionicons name="swap-horizontal" size={16} color="#D97706" />
+                        <Text style={searchCardStyles.switchOptionText}>Change</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </>
+              )}
+            </View>
+
+            {/* Mode Helper Subtitle */}
+            <Text style={searchCardStyles.modeTaglineText}>
+              {isOutstationTrip
+                ? (outstationTripSubType === 'round_trip'
+                  ? 'Round trip - Keep the cab till return'
+                  : outstationTripSubType === 'one_way'
+                    ? 'One way - Direct drop to your destination'
+                    : 'Select trip type: One Way or Round Trip')
+                : (localTripSubType === 'hourly'
+                  ? 'Hourly Rental - Keep the cab with you for multiple stops'
+                  : localTripSubType === 'drop'
+                    ? 'Point to point drop - Fast & reliable city commute'
+                    : 'Select ride type: Local Drop or Hourly Rental')}
+            </Text>
+
+            {/* 2. Route Box: Pickup, Swap, Drop, Intermediate Stop */}
+            <View style={searchCardStyles.routeBox}>
+              {/* Pickup Row */}
+              <View style={searchCardStyles.routeRow}>
+                <View style={{ flex: 1, paddingRight: 8 }}>
+                  <View style={searchCardStyles.dotLabelRow}>
+                    <View style={searchCardStyles.dotIndicatorGreen} />
+                    <Text style={searchCardStyles.dotLabelText}>Pickup</Text>
+                  </View>
+                  <TextInput
+                    style={[searchCardStyles.routeInputTitle, activeInput === 'pickup' && { color: '#0F172A' }]}
+                    placeholder="Enter pickup address"
+                    placeholderTextColor="#94A3B8"
+                    value={pickup}
+                    onChangeText={(t) => handleSearchTextChange(t, 'pickup')}
+                    onFocus={handleFocusPickup}
+                    onSubmitEditing={() => handleLocationSubmit('pickup')}
+                  />
+                  <Text style={searchCardStyles.routeSubText} numberOfLines={1}>
+                    {pickup ? (pickup.length > 30 ? pickup.slice(0, 30) + '...' : pickup) : 'Current location or landmark'}
+                  </Text>
+                </View>
+                {Boolean(pickup) ? (
                   <TouchableOpacity
-                    key={`pred-${idx}`}
-                    style={styles.predictionItem}
-                    onPress={() => handleSelectPrediction(item, activeInput)}
+                    style={searchCardStyles.inlineClearBtn}
+                    onPress={() => {
+                      setPickup('')
+                      setPickupCoords(null)
+                      const popular = getPopularDestinations(null, null)
+                      setPredictions(popular)
+                      setActiveInput('pickup')
+                    }}
+                    hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+                    activeOpacity={0.6}
                   >
-                    <View style={[styles.predIconBox, { backgroundColor: iconBg }]}>
-                      <Ionicons name={iconName} size={15} color={iconColor} />
+                    <Ionicons name="close-circle" size={19} color="#94A3B8" />
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={searchCardStyles.gpsLocateInlineBtn}
+                    onPress={handleUseCurrentLocation}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                    activeOpacity={0.7}
+                  >
+                    {isLocating ? (
+                      <ActivityIndicator size="small" color="#059669" />
+                    ) : (
+                      <>
+                        <Ionicons name="locate" size={15} color="#059669" />
+                        <Text style={searchCardStyles.gpsLocateInlineText}>GPS</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              <View style={searchCardStyles.routeDividerRow}>
+                <View style={searchCardStyles.routeDividerLine} />
+                <TouchableOpacity
+                  style={searchCardStyles.floatingSwapBtn}
+                  onPress={() => {
+                    const tempP = pickup
+                    const tempPCoords = pickupCoords
+                    setPickup(destination)
+                    setPickupCoords(destCoords)
+                    setDestination(tempP)
+                    setDestCoords(tempPCoords)
+                  }}
+                  hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="swap-vertical" size={18} color="#D97706" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Drop Row */}
+              <View style={searchCardStyles.routeRow}>
+                <View style={{ flex: 1, paddingRight: 8 }}>
+                  <View style={searchCardStyles.dotLabelRow}>
+                    <View style={searchCardStyles.dotIndicatorRed} />
+                    <Text style={searchCardStyles.dotLabelText}>Drop</Text>
+                  </View>
+                  <TextInput
+                    ref={destInputRef}
+                    style={[searchCardStyles.routeInputTitle, activeInput === 'destination' && { color: '#0F172A' }]}
+                    placeholder="Enter destination city or place"
+                    placeholderTextColor="#94A3B8"
+                    value={destination}
+                    onChangeText={(t) => handleSearchTextChange(t, 'destination')}
+                    onFocus={handleFocusDestination}
+                    onSubmitEditing={() => handleLocationSubmit('destination')}
+                  />
+                  <Text style={searchCardStyles.routeSubText} numberOfLines={1}>
+                    {destination ? (destination.length > 30 ? destination.slice(0, 30) + '...' : destination) : 'Tamil Nadu & beyond'}
+                  </Text>
+                </View>
+                {Boolean(destination) && (
+                  <TouchableOpacity
+                    style={searchCardStyles.inlineClearBtn}
+                    onPress={() => {
+                      setDestination('')
+                      setDestCoords(null)
+                      setRouteDistanceKm(0)
+                      setFareEstimates({})
+                      setPredictions([])
+                      if (destInputRef.current) {
+                        destInputRef.current.focus()
+                      }
+                    }}
+                    hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+                    activeOpacity={0.6}
+                  >
+                    <Ionicons name="close-circle" size={19} color="#94A3B8" />
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {/* Intermediate Stop (Via Stop) Row if active */}
+              {hasIntermediateStop && !(tripTypeCategory === 'local' && localTripSubType === 'drop') && (
+                <>
+                  <View style={searchCardStyles.routeDividerRow}>
+                    <View style={searchCardStyles.routeDividerLine} />
+                  </View>
+                  <View style={searchCardStyles.routeRow}>
+                    <View style={{ flex: 1, paddingRight: 8 }}>
+                      <View style={searchCardStyles.dotLabelRow}>
+                        <View style={searchCardStyles.dotIndicatorAmber} />
+                        <Text style={searchCardStyles.dotLabelText}>Via Stop</Text>
+                      </View>
+                      <TextInput
+                        style={[searchCardStyles.routeInputTitle, activeInput === 'stop' && { color: '#0F172A' }]}
+                        placeholder="e.g. Trichy, Dindigul, Central..."
+                        placeholderTextColor="#94A3B8"
+                        value={intermediateStop}
+                        onChangeText={(t) => handleSearchTextChange(t, 'stop')}
+                        onFocus={() => {
+                          setActiveInput('stop')
+                          if (intermediateStop && intermediateStop.trim().length >= 2) {
+                            handleSearchTextChange(intermediateStop, 'stop')
+                          } else {
+                            const popular = getPopularDestinations(pickupCoords?.latitude, pickupCoords?.longitude)
+                            setPredictions(popular)
+                          }
+                        }}
+                        onSubmitEditing={() => handleLocationSubmit('stop')}
+                      />
+                      <Text style={searchCardStyles.routeSubText}>Intermediate halt point</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={searchCardStyles.inlineClearBtn}
+                      onPress={() => {
+                        setIntermediateStop('')
+                        setIntermediateStopCoords(null)
+                        setHasIntermediateStop(false)
+                        if (activeInput === 'stop') {
+                          setActiveInput(null)
+                          setPredictions([])
+                        }
+                      }}
+                      hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+                      activeOpacity={0.6}
+                    >
+                      <Ionicons name="close-circle" size={19} color="#94A3B8" />
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+
+            {/* ── Search Results & Suggestions rendered directly beneath Drop / Route inputs ── */}
+            {activeInput && (predictions.length > 0 || activeInput === 'pickup') && (
+              <View style={searchCardStyles.inlinePredictionsBox}>
+                <View style={searchCardStyles.predHeaderRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                    <Ionicons
+                      name={activeInput === 'destination' ? 'navigate' : 'pin'}
+                      size={14}
+                      color="#D97706"
+                    />
+                    <Text style={searchCardStyles.predHeaderText}>
+                      {activeInput === 'destination'
+                        ? (destination.length > 0 ? 'Search Results' : '✨ Suggested Destinations')
+                        : activeInput === 'stop'
+                        ? (intermediateStop.length > 0 ? 'Search Results' : '✨ Via Stop Suggestions')
+                        : (pickup.length > 0 ? 'Search Results' : '✨ Pickup Location Suggestions')}
+                    </Text>
+                  </View>
+                  {loadingPredictions && <ActivityIndicator size="small" color="#D97706" style={{ marginRight: 8 }} />}
+                  <TouchableOpacity
+                    onPress={() => { setActiveInput(null); setPredictions([]); Keyboard.dismiss(); }}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    style={{ padding: 4 }}
+                  >
+                    <Ionicons name="close" size={18} color="#64748B" />
+                  </TouchableOpacity>
+                </View>
+
+                {/* 📍 Quick One-Tap Current Location GPS Detect Action */}
+                {activeInput === 'pickup' && (
+                  <TouchableOpacity
+                    style={searchCardStyles.currentLocRow}
+                    onPress={handleUseCurrentLocation}
+                    activeOpacity={0.75}
+                  >
+                    <View style={searchCardStyles.currentLocIconBox}>
+                      <Ionicons name="navigate" size={17} color="#059669" />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.predTitle} numberOfLines={1}>
-                        {item.structured_formatting?.main_text || item.description?.split(',')[0] || item.description}
-                      </Text>
-                      <Text style={styles.predSub} numberOfLines={1}>
-                        {item.structured_formatting?.secondary_text || item.description}
+                      <Text style={searchCardStyles.currentLocTitle}>Use Current Location</Text>
+                      <Text style={searchCardStyles.currentLocSub}>Tap to detect your exact GPS pickup spot</Text>
+                    </View>
+                    {isLocating ? (
+                      <ActivityIndicator size="small" color="#059669" />
+                    ) : (
+                      <View style={searchCardStyles.currentLocBadge}>
+                        <Text style={searchCardStyles.currentLocBadgeText}>Detect GPS</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                )}
+
+                <ScrollView
+                  keyboardShouldPersistTaps="always"
+                  nestedScrollEnabled={true}
+                  style={{ maxHeight: 250 }}
+                  showsVerticalScrollIndicator={false}
+                >
+                  {predictions.map((item, idx) => {
+                    const isAirport = item.category_tag?.includes('Airport') || item.description?.toLowerCase().includes('airport')
+                    const isStation = item.category_tag?.includes('Railway') || item.description?.toLowerCase().includes('station')
+                    const isBus = item.category_tag?.includes('Bus') || item.description?.toLowerCase().includes('bus')
+                    const isMall = item.category_tag?.includes('Mall') || item.category_tag?.includes('Shopping') || item.description?.toLowerCase().includes('mall')
+
+                    const iconName = isAirport ? 'airplane' :
+                      isStation ? 'train' :
+                        isBus ? 'bus' :
+                          isMall ? 'cart' : 'location'
+
+                    const iconBg = isAirport ? '#EFF6FF' :
+                      isStation ? '#F5F3FF' :
+                        isBus ? '#ECFDF5' :
+                          isMall ? '#FEF2F2' : '#FFFBEB'
+
+                    const iconColor = isAirport ? '#2563EB' :
+                      isStation ? '#7C3AED' :
+                        isBus ? '#059669' :
+                          isMall ? '#DC2626' : '#D97706'
+
+                    return (
+                      <TouchableOpacity
+                        key={`inline-pred-${idx}`}
+                        style={styles.predictionItem}
+                        onPress={() => handleSelectPrediction(item, activeInput)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[styles.predIconBox, { backgroundColor: iconBg }]}>
+                          <Ionicons name={iconName} size={15} color={iconColor} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.predTitle} numberOfLines={1}>
+                            {item.structured_formatting?.main_text || item.description?.split(',')[0] || item.description}
+                          </Text>
+                          <Text style={styles.predSub} numberOfLines={1}>
+                            {item.structured_formatting?.secondary_text || item.description}
+                          </Text>
+                        </View>
+                        {item.distance_km ? (
+                          <View style={{ alignItems: 'flex-end', marginLeft: 6 }}>
+                            <Text style={styles.predDistText}>{item.distance_km} km</Text>
+                            {item.category_tag ? (
+                              <Text style={{ fontSize: 9, color: '#94A3B8', fontWeight: '600' }} numberOfLines={1}>
+                                {item.category_tag.split(' ')[0]}
+                              </Text>
+                            ) : null}
+                          </View>
+                        ) : null}
+                      </TouchableOpacity>
+                    )
+                  })}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* When NOT actively choosing suggestions, show Trip details, Dates & Search Cabs CTA */}
+            {(!activeInput || (predictions.length === 0 && activeInput !== 'pickup')) && (
+              <>
+                {/* 3. Add Stop Button — Hidden ONLY for Local Drop (Point-to-Point) */}
+                {!(tripTypeCategory === 'local' && localTripSubType === 'drop') && (
+                  <TouchableOpacity
+                    style={searchCardStyles.addStopBtn}
+                    onPress={() => {
+                      if (hasIntermediateStop) {
+                        setHasIntermediateStop(false)
+                        setIntermediateStop('')
+                        setIntermediateStopCoords(null)
+                        if (activeInput === 'stop') setActiveInput(null)
+                      } else {
+                        setHasIntermediateStop(true)
+                      }
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name={hasIntermediateStop ? 'remove-circle-outline' : 'add'} size={16} color="#D97706" />
+                    <Text style={searchCardStyles.addStopText}>{hasIntermediateStop ? 'Remove Via Stop' : '+ Add Stop'}</Text>
+                  </TouchableOpacity>
+                )}
+
+                {/* 4. Dates & Times Row (Matching exact side-by-side alignment across all trip modes) */}
+                {isOutstationTrip && isRoundTrip ? (
+                  <View style={{ marginBottom: 12 }}>
+                    {/* Departure Journey Row */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5 }}>
+                      <Ionicons name="arrow-forward-circle" size={14} color="#D97706" />
+                      <Text style={{ fontSize: 11, fontWeight: '800', color: '#0F172A', marginLeft: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                        Departure Journey
                       </Text>
                     </View>
-                    {item.distance_km ? (
-                      <View style={{ alignItems: 'flex-end', marginLeft: 6 }}>
-                        <Text style={styles.predDistText}>{item.distance_km} km</Text>
-                        {item.category_tag ? (
-                          <Text style={{ fontSize: 9, color: '#94A3B8', fontWeight: '600' }} numberOfLines={1}>
-                            {item.category_tag.split(' ')[0]}
+                    <View style={[searchCardStyles.datesGrid, { marginBottom: 10 }]}>
+                      <TouchableOpacity
+                        style={searchCardStyles.dateCardCol}
+                        onPress={() => { setActiveDateTarget('departure'); setShowCalendarModal(true); }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={searchCardStyles.dateCardLabel}>Departure date</Text>
+                        <View style={searchCardStyles.dateCardValueRow}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Ionicons name="calendar-outline" size={16} color="#D97706" />
+                            <Text style={searchCardStyles.dateCardValueText}>{getCardDateParts(departureDate, departureTime).day}</Text>
+                          </View>
+                          <Ionicons name="chevron-down" size={14} color="#64748B" />
+                        </View>
+                        <Text style={searchCardStyles.dateCardSubDay}>{getCardDateParts(departureDate, departureTime).weekday}</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={searchCardStyles.dateCardCol}
+                        onPress={() => handleOpenTimeModal('departure')}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={searchCardStyles.dateCardLabel}>Pickup Time</Text>
+                        <View style={searchCardStyles.dateCardValueRow}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Ionicons name="time-outline" size={16} color="#D97706" />
+                            <Text style={searchCardStyles.dateCardValueText}>{departureTime || '10:00 AM'}</Text>
+                          </View>
+                          <Ionicons name="chevron-down" size={14} color="#64748B" />
+                        </View>
+                        <Text style={searchCardStyles.dateCardSubDay}>{rideTimingMode === 'now' ? '⚡ Immediate' : '📅 Scheduled'}</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Return Journey Row */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5 }}>
+                      <Ionicons name="arrow-undo-circle" size={14} color="#7C3AED" />
+                      <Text style={{ fontSize: 11, fontWeight: '800', color: '#0F172A', marginLeft: 4, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                        Return Journey
+                      </Text>
+                    </View>
+                    <View style={[searchCardStyles.datesGrid, { marginBottom: 0 }]}>
+                      <TouchableOpacity
+                        style={searchCardStyles.dateCardCol}
+                        onPress={() => { setActiveDateTarget('return'); setShowCalendarModal(true); }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={searchCardStyles.dateCardLabel}>Return date</Text>
+                        <View style={searchCardStyles.dateCardValueRow}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Ionicons name="calendar-outline" size={16} color="#7C3AED" />
+                            <Text style={searchCardStyles.dateCardValueText}>{getCardDateParts(returnDate, returnTime).day}</Text>
+                          </View>
+                          <Ionicons name="chevron-down" size={14} color="#64748B" />
+                        </View>
+                        <Text style={searchCardStyles.dateCardSubDay}>{getCardDateParts(returnDate, returnTime).weekday}</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={searchCardStyles.dateCardCol}
+                        onPress={() => handleOpenTimeModal('return')}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={searchCardStyles.dateCardLabel}>Return Time</Text>
+                        <View style={searchCardStyles.dateCardValueRow}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Ionicons name="time-outline" size={16} color="#7C3AED" />
+                            <Text style={searchCardStyles.dateCardValueText}>{returnTime || '05:00 PM'}</Text>
+                          </View>
+                          <Ionicons name="chevron-down" size={14} color="#64748B" />
+                        </View>
+                        <Text style={searchCardStyles.dateCardSubDay}>🔄 Return Leg</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : isLocalTrip && localTripSubType === 'hourly' ? (
+                  <View style={{ marginBottom: 12 }}>
+                    <Text style={searchCardStyles.dateCardLabel}>Select Rental Duration</Text>
+                    <View style={searchCardStyles.hourlyPkgRow}>
+                      {[2, 4, 6, 8, 10].map((h) => (
+                        <TouchableOpacity
+                          key={`pkg-${h}`}
+                          style={[searchCardStyles.hourlyPkgChip, hourlyPackageHours === h && searchCardStyles.hourlyPkgChipActive]}
+                          onPress={() => setHourlyPackageHours(h)}
+                        >
+                          <Text style={[searchCardStyles.hourlyPkgText, hourlyPackageHours === h && searchCardStyles.hourlyPkgTextActive]}>
+                            {h}h/{h * 10}km
                           </Text>
-                        ) : null}
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <View style={searchCardStyles.datesGrid}>
+                      <TouchableOpacity
+                        style={searchCardStyles.dateCardCol}
+                        onPress={() => { setActiveDateTarget('departure'); setShowCalendarModal(true); }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={searchCardStyles.dateCardLabel}>Departure date</Text>
+                        <View style={searchCardStyles.dateCardValueRow}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Ionicons name="calendar-outline" size={16} color="#D97706" />
+                            <Text style={searchCardStyles.dateCardValueText}>{getCardDateParts(departureDate, departureTime).day}</Text>
+                          </View>
+                          <Ionicons name="chevron-down" size={14} color="#64748B" />
+                        </View>
+                        <Text style={searchCardStyles.dateCardSubDay}>{getCardDateParts(departureDate, departureTime).weekday}</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={searchCardStyles.dateCardCol}
+                        onPress={() => handleOpenTimeModal('departure')}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={searchCardStyles.dateCardLabel}>Pickup Time</Text>
+                        <View style={searchCardStyles.dateCardValueRow}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Ionicons name="time-outline" size={16} color="#D97706" />
+                            <Text style={searchCardStyles.dateCardValueText}>{departureTime || '10:00 AM'}</Text>
+                          </View>
+                          <Ionicons name="chevron-down" size={14} color="#64748B" />
+                        </View>
+                        <Text style={searchCardStyles.dateCardSubDay}>{rideTimingMode === 'now' ? '⚡ Immediate' : '📅 Scheduled'}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : (
+                  <View style={searchCardStyles.datesGrid}>
+                    <TouchableOpacity
+                      style={searchCardStyles.dateCardCol}
+                      onPress={() => { setActiveDateTarget('departure'); setShowCalendarModal(true); }}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={searchCardStyles.dateCardLabel}>Departure date</Text>
+                      <View style={searchCardStyles.dateCardValueRow}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Ionicons name="calendar-outline" size={16} color="#D97706" />
+                          <Text style={searchCardStyles.dateCardValueText}>{getCardDateParts(departureDate, departureTime).day}</Text>
+                        </View>
+                        <Ionicons name="chevron-down" size={14} color="#64748B" />
                       </View>
-                    ) : null}
-                  </TouchableOpacity>
-                )
-              })}
-            </ScrollView>
+                      <Text style={searchCardStyles.dateCardSubDay}>{getCardDateParts(departureDate, departureTime).weekday}</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={searchCardStyles.dateCardCol}
+                      onPress={() => handleOpenTimeModal('departure')}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={searchCardStyles.dateCardLabel}>Pickup Time</Text>
+                      <View style={searchCardStyles.dateCardValueRow}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Ionicons name="time-outline" size={16} color="#D97706" />
+                          <Text style={searchCardStyles.dateCardValueText}>{departureTime || '10:00 AM'}</Text>
+                        </View>
+                        <Ionicons name="chevron-down" size={14} color="#64748B" />
+                      </View>
+                      <Text style={searchCardStyles.dateCardSubDay}>{rideTimingMode === 'now' ? '⚡ Immediate' : '📅 Scheduled'}</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {/* 4b. 50/50 Shared Trip Opt-in Card (> 240 KM) */}
+                {(isOutstationTrip || routeDistanceKm > 240) && routeDistanceKm > 240 && (
+                  <View style={searchCardStyles.sharedTripOptInCard}>
+                    <View style={searchCardStyles.sharedTripOptInHeader}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, paddingRight: 8 }}>
+                        <View style={searchCardStyles.sharedTripOptInIconBox}>
+                          <Ionicons name="people" size={18} color="#7C3AED" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Text style={searchCardStyles.sharedTripOptInTitle}>Enable 50/50 Shared Trip</Text>
+                            <View style={searchCardStyles.sharedTripOptInBadge}>
+                              <Text style={searchCardStyles.sharedTripOptInBadgeText}>SAVE 50%</Text>
+                            </View>
+                          </View>
+                          <Text style={searchCardStyles.sharedTripOptInSub}>
+                            Route is {routeDistanceKm.toFixed(0)} km (&gt;240 km). Share with a verified co-passenger & pay half fare!
+                          </Text>
+                        </View>
+                      </View>
+                      <Switch
+                        value={isSharedTrip}
+                        onValueChange={handleToggleSharing}
+                        trackColor={{ false: '#CBD5E1', true: '#DDD6FE' }}
+                        thumbColor={isSharedTrip ? '#7C3AED' : '#FFFFFF'}
+                        ios_backgroundColor="#CBD5E1"
+                      />
+                    </View>
+                    {isSharedTrip && (
+                      <View style={searchCardStyles.sharedTripActiveNotice}>
+                        <Ionicons name="checkmark-circle" size={14} color="#059669" />
+                        <Text style={searchCardStyles.sharedTripActiveNoticeText}>
+                          Shared Trip Active: Cabs will be priced at 50% split fare & posted for passenger matching.
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                )}
+
+                {/* 5. Big Search Cabs Button (Yellow #FFC700 theme) */}
+                <TouchableOpacity
+                  style={searchCardStyles.searchBtn}
+                  onPress={() => {
+                    if (!destination?.trim() || !destCoords) {
+                      Alert.alert(
+                        'Enter Destination 📍',
+                        'Please enter or select a destination drop location to view available cabs.'
+                      )
+                      handleFocusDestination()
+                      return
+                    }
+                    if (isOutstationDistanceTooShort) {
+                      Alert.alert(
+                        'Outstation Minimum Distance',
+                        `Outstation trips require a minimum travel distance of 50 km. Your route is ${routeDistanceKm.toFixed(1)} km.\n\nPlease select Local Trip mode or choose a farther destination.`
+                      )
+                      return
+                    }
+                    if (isSharingDistanceTooShort) {
+                      Alert.alert(
+                        'Ride Sharing Distance Limit',
+                        `50/50 Ride Sharing is only available for trips greater than 240 km. Your route is ${routeDistanceKm.toFixed(1)} km.`
+                      )
+                      return
+                    }
+                    setSearchCardCollapsed(true)
+                    animateStepTransition(4)
+                  }}
+                  activeOpacity={0.88}
+                >
+                  <Text style={searchCardStyles.searchBtnText}>Search Cabs</Text>
+                  <Ionicons name="arrow-forward" size={18} color="#0F172A" />
+                </TouchableOpacity>
+
+                {/* 6. Recent Searches Chip */}
+                <TouchableOpacity
+                  style={searchCardStyles.recentTripChip}
+                  onPress={() => {
+                    if (isOutstationTrip) {
+                      setDestination('Madurai, Tamil Nadu')
+                      setDestCoords({ latitude: 9.9252, longitude: 78.1198 })
+                    } else {
+                      setDestination('Central Railway Station, Chennai')
+                      setDestCoords({ latitude: 13.0827, longitude: 80.2755 })
+                    }
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="time-outline" size={13} color="#64748B" />
+                  <Text style={searchCardStyles.recentTripText}>
+                    {pickup ? pickup.split(',')[0] : 'KK Nagar West'} ➔ {isOutstationTrip ? 'Madurai' : 'Central Station'}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={12} color="#94A3B8" />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         )}
       </SafeAreaView>
+
+
+      {/* ── Distance Exceeds Local Limit (Book in Outstation) Popup Modal ── */}
+      <Modal
+        visible={showOutstationPromptModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowOutstationPromptModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContentCard, { padding: 22, alignItems: 'center' }]}>
+            {/* Header Icon */}
+            <View style={{
+              width: 58,
+              height: 58,
+              borderRadius: 29,
+              backgroundColor: '#FEF3C7',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: 12,
+              borderWidth: 2,
+              borderColor: '#FDE68A'
+            }}>
+              <Ionicons name="car-sport" size={28} color="#D97706" />
+            </View>
+
+            {/* Title */}
+            <Text style={{ fontSize: 18, fontWeight: '800', color: '#0F172A', textAlign: 'center' }}>
+              Distance Exceeds Local Limit
+            </Text>
+
+            {/* Distance Badge Pill */}
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: '#EFF6FF',
+              paddingHorizontal: 14,
+              paddingVertical: 6,
+              borderRadius: 16,
+              marginTop: 8,
+              gap: 6
+            }}>
+              <Ionicons name="navigate-circle" size={16} color="#2563EB" />
+              <Text style={{ color: '#2563EB', fontWeight: '800', fontSize: 13.5 }}>
+                Route: {routeDistanceKm > 0 ? routeDistanceKm.toFixed(1) : '50+'} KM
+              </Text>
+            </View>
+
+            {/* Explanation Message */}
+            <Text style={{ color: '#475569', fontSize: 13.5, lineHeight: 21, textAlign: 'center', marginTop: 12 }}>
+              Local City trips are limited up to <Text style={{ fontWeight: '800', color: '#0F172A' }}>50 KM Radius</Text>.
+              {'\n'}Since your destination is <Text style={{ fontWeight: '800', color: '#DC2626' }}>{routeDistanceKm > 0 ? `${routeDistanceKm.toFixed(1)} KM` : 'over limit'}</Text>, please book under <Text style={{ fontWeight: '800', color: '#2563EB' }}>Outstation Trip</Text> to get intercity cab options and dedicated highway rates.
+            </Text>
+
+            {/* Primary Action Button */}
+            <TouchableOpacity
+              style={{
+                backgroundColor: '#2563EB',
+                borderRadius: 12,
+                paddingVertical: 14,
+                width: '100%',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginTop: 18,
+                flexDirection: 'row',
+                gap: 8,
+                ...SHADOW.small
+              }}
+              activeOpacity={0.85}
+              onPress={handleSwitchToOutstationFromPrompt}
+            >
+              <Ionicons name="arrow-forward-circle" size={19} color="#FFFFFF" />
+              <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '800' }}>
+                Book in Outstation 🚗
+              </Text>
+            </TouchableOpacity>
+
+            {/* Secondary Action: Change Destination */}
+            <TouchableOpacity
+              style={{
+                backgroundColor: '#F8FAFC',
+                borderWidth: 1,
+                borderColor: '#E2E8F0',
+                borderRadius: 12,
+                paddingVertical: 12,
+                width: '100%',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginTop: 10,
+                flexDirection: 'row',
+                gap: 6
+              }}
+              activeOpacity={0.85}
+              onPress={handleChangeDestinationFromPrompt}
+            >
+              <Ionicons name="pencil" size={15} color="#475569" />
+              <Text style={{ color: '#475569', fontSize: 13.5, fontWeight: '700' }}>
+                Change Local Destination (≤ 50 KM Radius)
+              </Text>
+            </TouchableOpacity>
+
+            {/* Close/Dismiss Link */}
+            <TouchableOpacity
+              style={{ paddingVertical: 10, marginTop: 4 }}
+              activeOpacity={0.7}
+              onPress={() => setShowOutstationPromptModal(false)}
+            >
+              <Text style={{ color: '#94A3B8', fontSize: 13, fontWeight: '600' }}>
+                Stay on Screen
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* ── 4. Interactive Month Calendar & Time Picker Modal ── */}
       <Modal visible={showCalendarModal} transparent animationType="fade" onRequestClose={() => setShowCalendarModal(false)}>
@@ -2378,6 +3004,781 @@ export default function BookingScreen({ navigation, route }) {
                 </View>
               ) : null}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── 7. Ride Confirmation & Preferences Review Screen (Matching User Screenshot Alignment) ── */}
+      <Modal visible={showReviewScreen} animationType="slide" presentationStyle="fullScreen" onRequestClose={() => setShowReviewScreen(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#F8FAFC' }}>
+          <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+
+          {/* Top Bar with Back Button & Title */}
+          <View style={reviewStyles.headerRow}>
+            <TouchableOpacity
+              onPress={() => setShowReviewScreen(false)}
+              style={reviewStyles.backCircleBtn}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="chevron-back" size={22} color="#0F172A" />
+            </TouchableOpacity>
+            <View style={{ marginLeft: 14, flex: 1 }}>
+              <Text style={reviewStyles.headerTitle}>
+                Ride with {vehicleTypes.find(v => v.id === selectedType)?.name || 'Hatch Back'}
+              </Text>
+              <Text style={reviewStyles.headerSubDate}>
+                {(() => {
+                  try {
+                    const dt = departureDate ? new Date(departureDate + 'T00:00:00') : new Date()
+                    return dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })
+                  } catch {
+                    return '9 Oct 26'
+                  }
+                })()}
+              </Text>
+            </View>
+          </View>
+
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 150 }}
+          >
+            {/* 1. Pickup Time Card */}
+            <TouchableOpacity
+              style={reviewStyles.cardWrap}
+              onPress={() => handleOpenTimeModal('departure')}
+              activeOpacity={0.88}
+            >
+              <View style={reviewStyles.timePinkBox}>
+                <Ionicons name="time" size={22} color="#D97706" />
+              </View>
+              <View style={{ marginLeft: 14, flex: 1 }}>
+                <Text style={reviewStyles.timeLabel}>{isRoundTrip ? 'Departure Pickup Time' : 'Pickup Time'}</Text>
+                <Text style={reviewStyles.timeValue}>{departureTime || '10:00 AM'}</Text>
+              </View>
+              <Ionicons name="chevron-down" size={20} color="#64748B" />
+            </TouchableOpacity>
+
+            {isRoundTrip && (
+              <TouchableOpacity
+                style={[reviewStyles.cardWrap, { marginTop: -4 }]}
+                onPress={() => handleOpenTimeModal('return')}
+                activeOpacity={0.88}
+              >
+                <View style={[reviewStyles.timePinkBox, { backgroundColor: '#F3E8FF' }]}>
+                  <Ionicons name="time" size={22} color="#7C3AED" />
+                </View>
+                <View style={{ marginLeft: 14, flex: 1 }}>
+                  <Text style={reviewStyles.timeLabel}>Return Pickup Time</Text>
+                  <Text style={reviewStyles.timeValue}>{returnTime || '05:00 PM'}</Text>
+                </View>
+                <Ionicons name="chevron-down" size={20} color="#64748B" />
+              </TouchableOpacity>
+            )}
+
+            {/* 2. Passenger Details Card */}
+            <View style={reviewStyles.cardWrapCol}>
+              <View style={reviewStyles.cardHeaderRow}>
+                <Text style={reviewStyles.cardTitle}>Passenger Details</Text>
+                <TouchableOpacity onPress={() => setShowEditPassengerModal(true)} activeOpacity={0.7}>
+                  <Text style={reviewStyles.editLink}>Edit &gt;</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={reviewStyles.passengerRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Ionicons name="person-outline" size={17} color="#64748B" />
+                  <Text style={reviewStyles.passengerLabel}>Full Name</Text>
+                </View>
+                <Text style={reviewStyles.passengerVal}>{passengerName || user?.name || 'Rohith Ram'}</Text>
+              </View>
+
+              <View style={reviewStyles.passengerRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Ionicons name="call-outline" size={17} color="#64748B" />
+                  <Text style={reviewStyles.passengerLabel}>Phone</Text>
+                </View>
+                <Text style={reviewStyles.passengerVal}>{passengerPhone || user?.phone || '+91 8838603768'}</Text>
+              </View>
+
+              <View style={[reviewStyles.passengerRow, { borderBottomWidth: 0 }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Ionicons name="mail-outline" size={17} color="#64748B" />
+                  <Text style={reviewStyles.passengerLabel}>Email</Text>
+                </View>
+                <Text style={reviewStyles.passengerValEmail}>{passengerEmail || user?.email || 'rohithsandy194@gmail.com'}</Text>
+              </View>
+            </View>
+
+            {/* 3. Optional Requests Card */}
+            <View style={reviewStyles.cardWrapCol}>
+              <View style={reviewStyles.cardHeaderRow}>
+                <View>
+                  <Text style={reviewStyles.cardTitle}>Optional Requests</Text>
+                  <Text style={reviewStyles.cardSub}>Make your ride more comfortable</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      await Share.share({
+                        message: `Cab booking for ${passengerName} on CityOneTaxi! Pickup: ${pickup || 'Pickup'}, Drop: ${destination || 'Destination'}.`,
+                      })
+                    } catch {}
+                  }}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="share-social-outline" size={16} color="#D97706" />
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#D97706' }}>Share</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Item: Total Persons / Passengers Stepper */}
+              <View style={reviewStyles.optItemRow}>
+                <Ionicons name="people-outline" size={20} color="#0F172A" style={{ marginTop: 2 }} />
+                <View style={{ flex: 1, marginHorizontal: 12 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Text style={reviewStyles.optItemTitle}>Total Persons / Passengers</Text>
+                    <View style={{
+                      paddingHorizontal: 6,
+                      paddingVertical: 2,
+                      borderRadius: 4,
+                      backgroundColor: '#EFF6FF',
+                      borderWidth: 1,
+                      borderColor: '#BFDBFE'
+                    }}>
+                      <Text style={{ fontSize: 10, fontWeight: '800', color: '#1D4ED8' }}>
+                        Max {selectedVt?.passenger_capacity || (isSUVSelected ? 7 : (selectedVt?.name?.includes('3') ? 3 : 4))} Seats
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={reviewStyles.optItemSub}>Total people traveling in this ride</Text>
+                </View>
+                <View style={reviewStyles.stepperWrap}>
+                  <TouchableOpacity
+                    onPress={() => setPassengerCount(Math.max(1, passengerCount - 1))}
+                    style={reviewStyles.stepperBtn}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="remove" size={16} color="#0F172A" />
+                  </TouchableOpacity>
+                  <Text style={reviewStyles.stepperVal}>{passengerCount} {passengerCount === 1 ? 'Person' : 'Persons'}</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      const maxPax = selectedVt?.passenger_capacity || (isSUVSelected ? 7 : (selectedVt?.name?.includes('3') ? 3 : 4))
+                      if (passengerCount >= maxPax) {
+                        Alert.alert('Vehicle Capacity Limit', `Selected vehicle (${selectedVt?.name || 'Cab'}) seats up to ${maxPax} passengers.`)
+                        return
+                      }
+                      setPassengerCount(passengerCount + 1)
+                    }}
+                    style={[reviewStyles.stepperBtn, { backgroundColor: '#FEF3C7' }]}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="add" size={16} color="#D97706" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Item: Rooftop Luggage Carrier (Restricted strictly to SUV cabs as per RTO regulations) */}
+              <View style={[reviewStyles.optItemRow, !isSUVSelected && { opacity: 0.75 }]}>
+                <Ionicons
+                  name="briefcase-outline"
+                  size={20}
+                  color={isSUVSelected ? '#0F172A' : '#94A3B8'}
+                  style={{ marginTop: 2 }}
+                />
+                <View style={{ flex: 1, marginHorizontal: 12 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Text style={[reviewStyles.optItemTitle, !isSUVSelected && { color: '#64748B' }]}>
+                      Rooftop Luggage Carrier
+                    </Text>
+                    <View style={{
+                      paddingHorizontal: 6,
+                      paddingVertical: 2,
+                      borderRadius: 4,
+                      backgroundColor: isSUVSelected ? '#FEF3C7' : '#F1F5F9',
+                      borderWidth: 1,
+                      borderColor: isSUVSelected ? '#F59E0B' : '#CBD5E1'
+                    }}>
+                      <Text style={{
+                        fontSize: 10,
+                        fontWeight: '800',
+                        color: isSUVSelected ? '#B45309' : '#64748B'
+                      }}>
+                        {isSUVSelected ? '✅ SUV ONLY' : '🔒 SUV ONLY'}
+                      </Text>
+                    </View>
+                    {isSUVSelected && (
+                      <View style={{
+                        paddingHorizontal: 6,
+                        paddingVertical: 2,
+                        borderRadius: 4,
+                        backgroundColor: '#FFF1F2',
+                        borderWidth: 1,
+                        borderColor: '#FECDD3'
+                      }}>
+                        <Text style={{ fontSize: 9, fontWeight: '800', color: '#E11D48' }}>
+                          + Additional Charge
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={reviewStyles.optItemSub}>
+                    {isSUVSelected
+                      ? 'Secure roof carrier for extra luggage (Additional carrier charges apply)'
+                      : 'Locked: RTO rules allow roof carrier only on SUV cabs'}
+                  </Text>
+                </View>
+                <Switch
+                  value={Boolean(isSUVSelected && rooftopCarrier)}
+                  onValueChange={(val) => {
+                    if (!isSUVSelected) {
+                      Alert.alert(
+                        'SUV Only Feature 🚙',
+                        'As per RTO safety regulations, rooftop luggage carriers are strictly permitted only on SUV & 7-seater vehicles (e.g. Innova / SUV). Please select an SUV vehicle to enable rooftop carrier.'
+                      )
+                      return
+                    }
+                    setRooftopCarrier(val)
+                  }}
+                  disabled={!isSUVSelected}
+                  trackColor={{ false: '#E2E8F0', true: '#FFC700' }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+
+              {/* Notice Banner: RTO Rules & Additional Charge Warning */}
+              <View style={[
+                reviewStyles.rtoWarningBox,
+                !isSUVSelected && { backgroundColor: '#F8FAFC', borderColor: '#CBD5E1' },
+                isSUVSelected && rooftopCarrier && { backgroundColor: '#FFFBEB', borderColor: '#F59E0B' }
+              ]}>
+                <Ionicons
+                  name={isSUVSelected ? (rooftopCarrier ? 'alert-circle' : 'information-circle') : 'lock-closed'}
+                  size={16}
+                  color={isSUVSelected ? (rooftopCarrier ? '#B45309' : '#D97706') : '#64748B'}
+                />
+                <Text style={[
+                  reviewStyles.rtoWarningText,
+                  !isSUVSelected && { color: '#64748B' },
+                  isSUVSelected && rooftopCarrier && { color: '#92400E', fontWeight: '700' }
+                ]}>
+                  {isSUVSelected
+                    ? (rooftopCarrier
+                        ? '⚠️ Rooftop Carrier Enabled: Carrier charge is an additional charge and will be payable extra directly to driver.'
+                        : 'SUV Selected: Rooftop luggage carrier is available. Note: Rooftop carrier charges are additional / extra.')
+                    : 'RTO regulations prohibit rooftop carrier on Mini, Sedan & Hatchbacks. Switch vehicle to SUV to enable.'}
+                </Text>
+              </View>
+
+              {/* Item: Luggage & Bags Stepper */}
+              <View style={reviewStyles.optItemRow}>
+                <Ionicons name="bag-handle-outline" size={20} color="#0F172A" style={{ marginTop: 2 }} />
+                <View style={{ flex: 1, marginHorizontal: 12 }}>
+                  <Text style={reviewStyles.optItemTitle}>Luggage &amp; Bags Count</Text>
+                  <Text style={reviewStyles.optItemSub}>Number of bags &amp; suitcases you are carrying</Text>
+                </View>
+                <View style={reviewStyles.stepperWrap}>
+                  <TouchableOpacity
+                    onPress={() => setLuggageCount(Math.max(0, luggageCount - 1))}
+                    style={reviewStyles.stepperBtn}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="remove" size={16} color="#0F172A" />
+                  </TouchableOpacity>
+                  <Text style={reviewStyles.stepperVal}>{luggageCount} Bags</Text>
+                  <TouchableOpacity
+                    onPress={() => setLuggageCount(Math.min(10, luggageCount + 1))}
+                    style={[reviewStyles.stepperBtn, { backgroundColor: '#FEF3C7' }]}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="add" size={16} color="#D97706" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Item: Traveling with Pets */}
+              <View style={reviewStyles.optItemRow}>
+                <Ionicons name="paw-outline" size={20} color="#0F172A" style={{ marginTop: 2 }} />
+                <View style={{ flex: 1, marginHorizontal: 12 }}>
+                  <Text style={reviewStyles.optItemTitle}>Traveling with Pets</Text>
+                  <Text style={reviewStyles.optItemSub}>Pet-friendly verified cab &amp; driver</Text>
+                </View>
+                <Switch
+                  value={hasPets}
+                  onValueChange={setHasPets}
+                  trackColor={{ false: '#E2E8F0', true: '#FFC700' }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+
+              {/* Item: Driver Waiting Time */}
+              <View style={reviewStyles.optItemRow}>
+                <Ionicons name="time-outline" size={20} color="#0F172A" style={{ marginTop: 2 }} />
+                <View style={{ flex: 1, marginHorizontal: 12 }}>
+                  <Text style={reviewStyles.optItemTitle}>Driver Waiting Time</Text>
+                  <Text style={reviewStyles.optItemSub}>Additional waiting hours if needed</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setShowWaitingModal(true)}
+                  style={reviewStyles.dropdownPill}
+                  activeOpacity={0.8}
+                >
+                  <Text style={reviewStyles.dropdownPillText}>{waitingHours} hrs</Text>
+                  <Ionicons name="chevron-down" size={14} color="#64748B" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Item: Driver Instructions (Optional) */}
+              <View style={{ marginTop: 14 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="document-text-outline" size={20} color="#0F172A" />
+                  <Text style={reviewStyles.optItemTitle}>Driver Instructions (Optional)</Text>
+                </View>
+                <Text style={[reviewStyles.optItemSub, { marginLeft: 28, marginTop: 2 }]}>
+                  Pickup landmarks, gate directions, or special instructions.
+                </Text>
+                <View style={reviewStyles.notesInputBox}>
+                  <TextInput
+                    style={reviewStyles.notesInput}
+                    placeholder="e.g. Near metro station gate, call before arrival..."
+                    placeholderTextColor="#94A3B8"
+                    value={driverInstructions}
+                    onChangeText={(t) => setDriverInstructions(t.slice(0, 100))}
+                    multiline
+                    maxLength={100}
+                  />
+                  <Text style={reviewStyles.notesCharCount}>{driverInstructions.length}/100</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* 4. Safe & Reliable Ride Banner */}
+            <View style={reviewStyles.safetyBanner}>
+              <View style={reviewStyles.safetyShieldCircle}>
+                <Ionicons name="shield-checkmark" size={18} color="#16A34A" />
+              </View>
+              <View style={{ marginLeft: 12, flex: 1 }}>
+                <Text style={reviewStyles.safetyTitle}>Safe &amp; Reliable Ride</Text>
+                <Text style={reviewStyles.safetySub}>
+                  Verified drivers &bull; GPS tracking &bull; 24/7 customer support
+                </Text>
+              </View>
+            </View>
+          </ScrollView>
+
+          {/* Sticky Bottom Bar */}
+          <View style={[reviewStyles.bottomStickyBar, { paddingBottom: Math.max(16, insets.bottom + 8) }]}>
+            <View style={reviewStyles.bottomActionRow}>
+              <TouchableOpacity
+                onPress={() => setShowFareDetailModal(true)}
+                style={{ flex: 1 }}
+                activeOpacity={0.8}
+              >
+                <Text style={reviewStyles.totalFareLabel}>Total Fare</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                  <Text style={reviewStyles.totalFareAmount}>
+                    ₹{(() => {
+                      const activeV = vehicleTypes.find(v => v.id === selectedType) || vehicleTypes[0]
+                      if (!activeV) return 7215
+                      const bFare = parseFloat(activeV.base_fare || 80)
+                      const kRate = isRoundTrip
+                        ? parseFloat(activeV.round_trip_per_km || activeV.price_per_km || 20)
+                        : isOutstationTrip
+                          ? parseFloat(activeV.one_way_per_km || activeV.price_per_km || 18)
+                          : parseFloat(activeV.price_per_km || 15)
+                      const mRate = parseFloat(activeV.price_per_min || 1.5)
+                      const bDist = isRoundTrip ? routeDistanceKm * 2 : routeDistanceKm
+                      const bMins = isRoundTrip ? routeDurationMins * 2 : routeDurationMins
+                      let calc = fareEstimates[activeV.id] || Math.round(bFare + (bDist * kRate) + (bMins * mRate))
+                      if (isSharedTrip) calc *= 0.5
+                      const waitHourlyRate = parseFloat(activeV.waiting_charge_per_hour || (activeV.waiting_charge_per_min ? activeV.waiting_charge_per_min * 60 : (activeV.waiting_charge ? activeV.waiting_charge * 60 : 100)))
+                      const waitingCharge = waitingHours > 0 ? Math.round(waitingHours * waitHourlyRate) : 0
+                      const disc = appliedCoupon?.discount_amount || 0
+                      return Math.max(30, Math.round(calc + waitingCharge - disc))
+                    })()}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color="#0F172A" />
+                </View>
+                <Text style={{ fontSize: 10, color: '#D97706', fontWeight: '800', marginTop: 2 }}>
+                  * Tollgate &amp; parking extra
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={reviewStyles.confirmBookingBtn}
+                onPress={handleBookRide}
+                disabled={bookingLoading}
+                activeOpacity={0.88}
+              >
+                {bookingLoading ? (
+                  <ActivityIndicator color="#0F172A" size="small" />
+                ) : (
+                  <>
+                    <Text style={reviewStyles.confirmBtnText}>Confirm Booking</Text>
+                    <Ionicons name="chevron-forward" size={16} color="#0F172A" />
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            <View style={reviewStyles.zeroAdvanceRow}>
+              <Ionicons name="checkmark-circle" size={14} color="#16A34A" />
+              <Text style={reviewStyles.zeroAdvanceText}>
+                Zero Advance &bull; Pay after ride &bull; Tollgate &amp; parking extra as per actuals
+              </Text>
+            </View>
+          </View>
+        </SafeAreaView>
+      </Modal>
+
+      {/* ── Edit Passenger Details Modal ── */}
+      <Modal visible={showEditPassengerModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContentCard, { padding: 20 }]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Edit Passenger Details</Text>
+              <TouchableOpacity onPress={() => setShowEditPassengerModal(false)}>
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={{ fontSize: 12, color: '#64748B', marginTop: 12, marginBottom: 4 }}>Full Name</Text>
+            <TextInput
+              style={reviewStyles.editInput}
+              value={tempPassengerName}
+              onChangeText={setTempPassengerName}
+              placeholder="e.g. Rohith Ram"
+            />
+
+            <Text style={{ fontSize: 12, color: '#64748B', marginTop: 12, marginBottom: 4 }}>Phone Number</Text>
+            <TextInput
+              style={reviewStyles.editInput}
+              value={tempPassengerPhone}
+              onChangeText={setTempPassengerPhone}
+              placeholder="+91 9876543210"
+              keyboardType="phone-pad"
+            />
+
+            <Text style={{ fontSize: 12, color: '#64748B', marginTop: 12, marginBottom: 4 }}>Email Address</Text>
+            <TextInput
+              style={reviewStyles.editInput}
+              value={tempPassengerEmail}
+              onChangeText={setTempPassengerEmail}
+              placeholder="name@email.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+            />
+
+            <TouchableOpacity
+              style={[reviewStyles.confirmBookingBtn, { width: '100%', marginTop: 20, justifyContent: 'center' }]}
+              onPress={() => {
+                setPassengerName(tempPassengerName.trim() || user?.name || 'Rohith Ram')
+                setPassengerPhone(tempPassengerPhone.trim() || user?.phone || '+91 8838603768')
+                setPassengerEmail(tempPassengerEmail.trim() || user?.email || 'rohithsandy194@gmail.com')
+                setShowEditPassengerModal(false)
+              }}
+            >
+              <Text style={reviewStyles.confirmBtnText}>Save Passenger Details</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Driver Waiting Hours Selector Modal ── */}
+      <Modal visible={showWaitingModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContentCard, { padding: 20 }]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Driver Waiting Time</Text>
+              <TouchableOpacity onPress={() => setShowWaitingModal(false)}>
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ marginTop: 12, gap: 8 }}>
+              {(() => {
+                const activeV = vehicleTypes.find(v => v.id === selectedType) || vehicleTypes[0]
+                const waitHourlyRate = activeV ? parseFloat(activeV.waiting_charge_per_hour || (activeV.waiting_charge_per_min ? activeV.waiting_charge_per_min * 60 : (activeV.waiting_charge ? activeV.waiting_charge * 60 : 100))) : 100
+                return [0, 1, 2, 3, 4, 5].map((hrs) => (
+                  <TouchableOpacity
+                    key={`wait-${hrs}`}
+                    style={[
+                      reviewStyles.waitOptionItem,
+                      waitingHours === hrs && { borderColor: '#FFC700', backgroundColor: '#FEF3C7' }
+                    ]}
+                    onPress={() => {
+                      setWaitingHours(hrs)
+                      setShowWaitingModal(false)
+                    }}
+                  >
+                    <Text style={[reviewStyles.waitOptionText, waitingHours === hrs && { color: '#B45309', fontWeight: '800' }]}>
+                      {hrs === 0 ? '0 hrs (Standard Pickup)' : `${hrs} Hour${hrs > 1 ? 's' : ''} Additional Waiting (+₹${Math.round(hrs * waitHourlyRate)})`}
+                    </Text>
+                    {waitingHours === hrs && <Ionicons name="checkmark-circle" size={18} color="#D97706" />}
+                  </TouchableOpacity>
+                ))
+              })()}
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Pickup Time Selector Modal (Matching User Reference Layout) ── */}
+      <Modal visible={showTimeModal} transparent animationType="slide" onRequestClose={() => setShowTimeModal(false)}>
+        <View style={timePickerStyles.modalOverlay}>
+          <TouchableOpacity
+            style={timePickerStyles.backdropTouchable}
+            activeOpacity={1}
+            onPress={() => setShowTimeModal(false)}
+          />
+          <View style={timePickerStyles.sheetContainer}>
+            {/* Top Handle Bar */}
+            <View style={timePickerStyles.handleBar} />
+
+            {/* Header with Title & Close Icon */}
+            <View style={timePickerStyles.headerRow}>
+              <Text style={timePickerStyles.headerTitle}>
+                {activeDateTarget === 'return' ? 'Select Return Time' : 'Select Pickup Time'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setShowTimeModal(false)}
+                style={timePickerStyles.closeBtn}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Top Display Box: Big Time Display + AM/PM Toggle */}
+            <View style={timePickerStyles.displayRow}>
+              <View style={timePickerStyles.timeDisplayBox}>
+                <Text style={timePickerStyles.timeDisplayText}>
+                  {String(selectedHour).padStart(2, '0')}:{selectedMinute}
+                </Text>
+              </View>
+
+              <View style={timePickerStyles.periodToggleCol}>
+                <TouchableOpacity
+                  style={[
+                    timePickerStyles.periodBtn,
+                    selectedPeriod === 'AM' && timePickerStyles.periodBtnActive
+                  ]}
+                  onPress={() => setSelectedPeriod('AM')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[
+                    timePickerStyles.periodBtnText,
+                    selectedPeriod === 'AM' && timePickerStyles.periodBtnTextActive
+                  ]}>
+                    AM
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    timePickerStyles.periodBtn,
+                    selectedPeriod === 'PM' && timePickerStyles.periodBtnActive
+                  ]}
+                  onPress={() => setSelectedPeriod('PM')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[
+                    timePickerStyles.periodBtnText,
+                    selectedPeriod === 'PM' && timePickerStyles.periodBtnTextActive
+                  ]}>
+                    PM
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* HOUR Section */}
+            <Text style={timePickerStyles.sectionLabel}>HOUR</Text>
+            <View style={timePickerStyles.gridContainer}>
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map((h) => {
+                const isSelected = String(parseInt(selectedHour, 10)) === h
+                return (
+                  <TouchableOpacity
+                    key={`hour-${h}`}
+                    style={[
+                      timePickerStyles.gridCell,
+                      isSelected && timePickerStyles.gridCellActive
+                    ]}
+                    onPress={() => setSelectedHour(h)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[
+                      timePickerStyles.gridCellText,
+                      isSelected && timePickerStyles.gridCellTextActive
+                    ]}>
+                      {h}
+                    </Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+
+            {/* MINUTE Section */}
+            <Text style={timePickerStyles.sectionLabel}>MINUTE</Text>
+            <View style={timePickerStyles.gridContainer}>
+              {['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'].map((m) => {
+                const isSelected = selectedMinute === m
+                return (
+                  <TouchableOpacity
+                    key={`min-${m}`}
+                    style={[
+                      timePickerStyles.gridCell,
+                      isSelected && timePickerStyles.gridCellActive
+                    ]}
+                    onPress={() => setSelectedMinute(m)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[
+                      timePickerStyles.gridCellText,
+                      isSelected && timePickerStyles.gridCellTextActive
+                    ]}>
+                      :{m}
+                    </Text>
+                  </TouchableOpacity>
+                )
+              })}
+            </View>
+
+            {/* Set Time CTA Button */}
+            <TouchableOpacity
+              style={timePickerStyles.submitBtn}
+              onPress={() => {
+                const formattedTime = `${String(selectedHour).padStart(2, '0')}:${selectedMinute} ${selectedPeriod}`
+                if (activeDateTarget === 'return') {
+                  setReturnTime(formattedTime)
+                } else {
+                  setDepartureTime(formattedTime)
+                }
+                setShowTimeModal(false)
+              }}
+              activeOpacity={0.88}
+            >
+              <Text style={timePickerStyles.submitBtnText}>
+                Set {String(selectedHour).padStart(2, '0')}:{selectedMinute} {selectedPeriod}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Fare Breakdown Accordion Modal ── */}
+      <Modal visible={showFareDetailModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContentCard, { padding: 20 }]}>
+            <View style={styles.modalHeaderRow}>
+              <Text style={styles.modalTitle}>Fare Breakdown</Text>
+              <TouchableOpacity onPress={() => setShowFareDetailModal(false)}>
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ marginTop: 14, gap: 10 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 13, color: '#64748B' }}>Estimated Distance</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A' }}>{routeDistanceKm.toFixed(1)} km</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 13, color: '#64748B' }}>Trip Mode</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A' }}>
+                  {isOutstationTrip ? 'Outstation Cab' : 'Local City Drop'}
+                </Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 13, color: '#64748B' }}>Total Passengers</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A' }}>
+                  {passengerCount} {passengerCount === 1 ? 'Person' : 'Persons'}
+                </Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 13, color: '#64748B' }}>Bags &amp; Luggage</Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#0F172A' }}>{luggageCount} Bags</Text>
+              </View>
+              {rooftopCarrier && (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 13, color: '#DC2626' }}>Rooftop Luggage Carrier</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>Requested 📦 (Extra Charge)</Text>
+                </View>
+              )}
+              {hasPets && (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 13, color: '#059669' }}>Pets Friendly Cab</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#059669' }}>Included 🐾</Text>
+                </View>
+              )}
+              {waitingHours > 0 && (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 13, color: '#D97706' }}>Driver Waiting ({waitingHours} hrs)</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#D97706' }}>
+                    +₹{(() => {
+                      const activeV = vehicleTypes.find(v => v.id === selectedType) || vehicleTypes[0]
+                      const waitHourlyRate = activeV ? parseFloat(activeV.waiting_charge_per_hour || (activeV.waiting_charge_per_min ? activeV.waiting_charge_per_min * 60 : (activeV.waiting_charge ? activeV.waiting_charge * 60 : 100))) : 100
+                      return Math.round(waitingHours * waitHourlyRate)
+                    })()}
+                  </Text>
+                </View>
+              )}
+              {appliedCoupon && (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ fontSize: 13, color: '#059669' }}>Coupon Discount ({appliedCoupon.code})</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#059669' }}>-₹{appliedCoupon.discount_amount}</Text>
+                </View>
+              )}
+              {/* Tollgate & Parking Charges Row */}
+              <View style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                backgroundColor: '#FFFBEB',
+                paddingVertical: 8,
+                paddingHorizontal: 10,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: '#FDE68A',
+                marginVertical: 2,
+              }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="information-circle" size={15} color="#D97706" />
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#B45309' }}>Tollgate &amp; Parking</Text>
+                </View>
+                <Text style={{ fontSize: 12, fontWeight: '800', color: '#B45309' }}>Extra (as per receipts)</Text>
+              </View>
+
+              <View style={{ height: 1, backgroundColor: '#E2E8F0', marginVertical: 4 }} />
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ fontSize: 15, fontWeight: '800', color: '#0F172A' }}>Final Payable</Text>
+                <Text style={{ fontSize: 18, fontWeight: '900', color: '#D97706' }}>
+                  ₹{(() => {
+                    const activeV = vehicleTypes.find(v => v.id === selectedType) || vehicleTypes[0]
+                    if (!activeV) return 7215
+                    const bFare = parseFloat(activeV.base_fare || 80)
+                    const kRate = isRoundTrip
+                      ? parseFloat(activeV.round_trip_per_km || activeV.price_per_km || 20)
+                      : isOutstationTrip
+                        ? parseFloat(activeV.one_way_per_km || activeV.price_per_km || 18)
+                        : parseFloat(activeV.price_per_km || 15)
+                    const mRate = parseFloat(activeV.price_per_min || 1.5)
+                    const bDist = isRoundTrip ? routeDistanceKm * 2 : routeDistanceKm
+                    const bMins = isRoundTrip ? routeDurationMins * 2 : routeDurationMins
+                    let calc = fareEstimates[activeV.id] || Math.round(bFare + (bDist * kRate) + (bMins * mRate))
+                    if (isSharedTrip) calc *= 0.5
+                    const waitHourlyRate = parseFloat(activeV.waiting_charge_per_hour || (activeV.waiting_charge_per_min ? activeV.waiting_charge_per_min * 60 : (activeV.waiting_charge ? activeV.waiting_charge * 60 : 100)))
+                    const waitingCharge = waitingHours > 0 ? Math.round(waitingHours * waitHourlyRate) : 0
+                    const disc = appliedCoupon?.discount_amount || 0
+                    return Math.max(30, Math.round(calc + waitingCharge - disc))
+                  })()}
+                </Text>
+              </View>
+              <Text style={{ fontSize: 11, color: '#64748B', textAlign: 'center', marginTop: 8, lineHeight: 16 }}>
+                * Tollgate tolls, parking permit charges{rooftopCarrier ? ' & rooftop luggage carrier charges' : ''} are extra and to be paid directly to driver as per actual receipts.
+              </Text>
+            </View>
           </View>
         </View>
       </Modal>
@@ -4032,3 +5433,1063 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 })
+
+const reviewStyles = StyleSheet.create({
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  backCircleBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  headerSubDate: {
+    fontSize: 12.5,
+    fontWeight: '600',
+    color: '#64748B',
+    marginTop: 2,
+  },
+  cardWrap: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  timePinkBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  timeValue: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginTop: 2,
+  },
+  cardWrapCol: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  cardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  cardSub: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  editLink: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#D97706',
+  },
+  passengerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F8FAFC',
+  },
+  passengerLabel: {
+    fontSize: 13,
+    color: '#64748B',
+    marginLeft: 8,
+    fontWeight: '500',
+  },
+  passengerVal: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  passengerValEmail: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0F172A',
+  },
+  optItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F8FAFC',
+  },
+  optItemTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  optItemSub: {
+    fontSize: 11.5,
+    color: '#64748B',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  rtoWarningBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  rtoWarningText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#92400E',
+    marginLeft: 6,
+    flex: 1,
+  },
+  stepperWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 20,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  stepperBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  stepperVal: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginHorizontal: 8,
+  },
+  dropdownPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#FFFFFF',
+  },
+  dropdownPillText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  notesInputBox: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 8,
+    minHeight: 68,
+  },
+  notesInput: {
+    fontSize: 12.5,
+    color: '#0F172A',
+    minHeight: 44,
+    textAlignVertical: 'top',
+    padding: 0,
+  },
+  notesCharCount: {
+    fontSize: 10.5,
+    color: '#94A3B8',
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  safetyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 20,
+  },
+  safetyShieldCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#DCFCE7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  safetyTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#15803D',
+  },
+  safetySub: {
+    fontSize: 11.5,
+    color: '#475569',
+    marginTop: 2,
+  },
+  bottomStickyBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 12,
+  },
+  bottomActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  totalFareLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  totalFareAmount: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  confirmBookingBtn: {
+    backgroundColor: '#FFC700',
+    borderRadius: 28,
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    shadowColor: '#D97706',
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  confirmBtnText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  zeroAdvanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    marginTop: 8,
+  },
+  zeroAdvanceText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  editInput: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 13,
+    color: '#0F172A',
+    marginBottom: 6,
+  },
+  waitOptionItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+  },
+  waitOptionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0F172A',
+  },
+})
+
+const searchCardStyles = StyleSheet.create({
+  cardContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  modeToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 6,
+  },
+  modeRadioPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 6,
+  },
+  modeRadioPillBig: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 24,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    gap: 8,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+  },
+  modeRadioCircleBig: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#94A3B8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeRadioTextBig: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  selectedOptionTopContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  selectedOptionBigBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+    borderRadius: 26,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
+    gap: 9,
+    shadowColor: '#D97706',
+    shadowOpacity: 0.16,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  selectedRadioCircleFilled: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#D97706',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  selectedRadioDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#D97706',
+  },
+  selectedOptionBigText: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#92400E',
+    letterSpacing: 0.2,
+  },
+  switchOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    gap: 4,
+  },
+  switchOptionText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  modeRadioPillActive: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#FCD34D',
+  },
+  modeRadioCircle: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#94A3B8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeRadioCircleActive: {
+    borderColor: '#D97706',
+  },
+  modeRadioDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#D97706',
+  },
+  modeRadioText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  modeRadioTextActive: {
+    color: '#0F172A',
+    fontWeight: '800',
+  },
+  modeTaglineText: {
+    fontSize: 11.5,
+    color: '#64748B',
+    textAlign: 'center',
+    marginBottom: 12,
+    fontWeight: '500',
+  },
+  routeBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 10,
+    position: 'relative',
+  },
+  routeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  dotLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  dotIndicatorGreen: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#10B981',
+  },
+  dotIndicatorRed: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EF4444',
+  },
+  dotIndicatorAmber: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#F59E0B',
+  },
+  dotLabelText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+    textTransform: 'uppercase',
+  },
+  routeInputTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+    padding: 0,
+  },
+  routeSubText: {
+    fontSize: 11.5,
+    color: '#94A3B8',
+    marginTop: 1,
+  },
+  routeDividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 4,
+    position: 'relative',
+  },
+  routeDividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#F1F5F9',
+  },
+  floatingSwapBtn: {
+    position: 'absolute',
+    right: 4,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 3,
+    zIndex: 10,
+  },
+  addStopBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 9,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FAFAFA',
+    marginBottom: 10,
+    gap: 6,
+  },
+  addStopText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  datesGrid: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  dateCardCol: {
+    flex: 1,
+    backgroundColor: '#FAFAFA',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 14,
+    padding: 10,
+  },
+  dateCardLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748B',
+    marginBottom: 4,
+  },
+  dateCardValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  dateCardValueText: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginLeft: 6,
+  },
+  dateCardSubDay: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '500',
+    marginTop: 4,
+  },
+  sharedTripOptInCard: {
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1.5,
+    borderColor: '#C4B5FD',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 14,
+  },
+  sharedTripOptInHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sharedTripOptInIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EDE9FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sharedTripOptInTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#5B21B6',
+  },
+  sharedTripOptInBadge: {
+    backgroundColor: '#10B981',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  sharedTripOptInBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+  sharedTripOptInSub: {
+    fontSize: 10.5,
+    color: '#6D28D9',
+    marginTop: 2,
+    lineHeight: 14,
+    fontWeight: '500',
+  },
+  sharedTripActiveNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginTop: 8,
+  },
+  sharedTripActiveNoticeText: {
+    fontSize: 10.5,
+    color: '#065F46',
+    fontWeight: '600',
+    flex: 1,
+  },
+  searchBtn: {
+    backgroundColor: '#FFC700',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    shadowColor: '#D97706',
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  searchBtnText: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  recentTripChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  recentTripText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  compactBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  compactBarTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  compactBarSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  modifyBtnPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    marginLeft: 8,
+  },
+  modifyBtnText: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#B45309',
+  },
+  hourlyPkgRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 10,
+  },
+  hourlyPkgChip: {
+    flex: 1,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+  },
+  hourlyPkgChipActive: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#FCD34D',
+  },
+  hourlyPkgText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  hourlyPkgTextActive: {
+    color: '#B45309',
+    fontWeight: '800',
+  },
+  inlineClearBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 999,
+  },
+  inlinePredictionsBox: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 10,
+    marginTop: 4,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  predHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    marginBottom: 6,
+  },
+  predHeaderText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#D97706',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  gpsLocateInlineBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    alignSelf: 'center',
+  },
+  gpsLocateInlineText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#059669',
+  },
+  currentLocRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+    gap: 10,
+  },
+  currentLocIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#DCFCE7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  currentLocTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#166534',
+  },
+  currentLocSub: {
+    fontSize: 11,
+    color: '#15803D',
+    marginTop: 1,
+  },
+  currentLocBadge: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  currentLocBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#166534',
+  },
+})
+
+const timePickerStyles = StyleSheet.create({
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    justifyContent: 'flex-end',
+  },
+  backdropTouchable: {
+    flex: 1,
+  },
+  sheetContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 28,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 18,
+    elevation: 20,
+  },
+  handleBar: {
+    width: 44,
+    height: 4.5,
+    borderRadius: 3,
+    backgroundColor: '#CBD5E1',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  displayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 18,
+  },
+  timeDisplayBox: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  timeDisplayText: {
+    fontSize: 34,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: 1.5,
+  },
+  periodToggleCol: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 14,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 2,
+  },
+  periodBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 7,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  periodBtnActive: {
+    backgroundColor: '#D97706',
+    shadowColor: '#D97706',
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  periodBtnText: {
+    fontSize: 12.5,
+    fontWeight: '800',
+    color: '#64748B',
+  },
+  periodBtnTextActive: {
+    color: '#FFFFFF',
+  },
+  sectionLabel: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    color: '#94A3B8',
+    letterSpacing: 1,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 8,
+    marginBottom: 14,
+  },
+  gridCell: {
+    width: '15.2%',
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gridCellActive: {
+    backgroundColor: '#FEF3C7',
+    borderColor: '#D97706',
+    borderWidth: 2,
+  },
+  gridCellText: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  gridCellTextActive: {
+    color: '#B45309',
+    fontWeight: '900',
+  },
+  submitBtn: {
+    backgroundColor: '#FFC700',
+    borderRadius: 24,
+    paddingVertical: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    shadowColor: '#D97706',
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  submitBtnText: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+})
+

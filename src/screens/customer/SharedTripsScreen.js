@@ -1,20 +1,24 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, Modal, Platform, Image
+  TextInput, ActivityIndicator, Alert, Modal, Platform, Image, RefreshControl
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { COLORS } from '../../constants/theme'
-import { longTripAPI } from '../../api/api'
+import { longTripAPI, resolveAssetUrl } from '../../api/api'
+import { useAuth } from '../../context/AuthContext'
 import { SkeletonList } from '../../components/common/Skeleton'
 import EmptyState from '../../components/common/EmptyState'
 import { formatTime12Hr, formatDateDisplay } from '../../utils/formatters'
 
 export default function SharedTripsScreen({ navigation }) {
+  const { user } = useAuth()
   const isSubmittingRef = useRef(false)
+  const chatScrollRef = useRef(null)
   const [trips, setTrips] = useState([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [selectedDate, setSelectedDate] = useState('')
   const [verificationStatus, setVerificationStatus] = useState(null)
   const [myRequests, setMyRequests] = useState([])
@@ -30,8 +34,14 @@ export default function SharedTripsScreen({ navigation }) {
   const [validationResult, setValidationResult] = useState(null)
   const [submittingJoin, setSubmittingJoin] = useState(false)
 
+  // Live Chat state
+  const [activeChatReq, setActiveChatReq] = useState(null)
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [loadingChat, setLoadingChat] = useState(false)
+  const [chatModalVisible, setChatModalVisible] = useState(false)
+
   const loadTrips = useCallback(async () => {
-    setLoading(true)
     try {
       const res = await longTripAPI.searchShared({
         pickup_date: selectedDate || undefined
@@ -43,6 +53,7 @@ export default function SharedTripsScreen({ navigation }) {
       // ignore
     } finally {
       setLoading(false)
+      setRefreshing(false)
     }
   }, [selectedDate])
 
@@ -50,7 +61,7 @@ export default function SharedTripsScreen({ navigation }) {
     try {
       const res = await longTripAPI.myVerification()
       if (res.data?.status === 'success') {
-        setVerificationStatus(res.data.verification?.status || 'none')
+        setVerificationStatus(res.data.data?.status || res.data.verification?.status || 'none')
       }
     } catch {}
   }
@@ -70,11 +81,74 @@ export default function SharedTripsScreen({ navigation }) {
     loadMyRequests()
   }, [loadTrips])
 
+  const onRefresh = () => {
+    setRefreshing(true)
+    loadTrips()
+    loadVerification()
+    loadMyRequests()
+  }
+
+  // Real-time Chat Polling when chat modal is open
+  useEffect(() => {
+    if (!chatModalVisible || !activeChatReq) return
+    const interval = setInterval(async () => {
+      try {
+        const res = await longTripAPI.getChats(activeChatReq.id)
+        if (res.data?.status === 'success') {
+          const msgs = res.data.messages || res.data.data?.messages || res.data.chats || []
+          setChatMessages(msgs)
+        }
+      } catch {}
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [chatModalVisible, activeChatReq])
+
+  const openChatModal = async (req) => {
+    setActiveChatReq(req)
+    setChatModalVisible(true)
+    setLoadingChat(true)
+    try {
+      const res = await longTripAPI.getChats(req.id)
+      if (res.data?.status === 'success') {
+        const msgs = res.data.messages || res.data.data?.messages || res.data.chats || []
+        setChatMessages(msgs)
+      }
+    } catch (e) {
+      console.log('Chat load failed', e)
+    } finally {
+      setLoadingChat(false)
+    }
+  }
+
+  const handleSendChatMessage = async () => {
+    if (!chatInput.trim() || !activeChatReq) return
+    const msg = chatInput.trim()
+    setChatInput('')
+    try {
+      await longTripAPI.sendChat({
+        request_id: activeChatReq.id,
+        message: msg,
+      })
+      setChatMessages(prev => [
+        ...prev,
+        {
+          id: Date.now(),
+          message: msg,
+          sender_id: user?.id,
+          sender_name: user?.name || 'You',
+          created_at: new Date().toISOString()
+        }
+      ])
+    } catch (e) {
+      Alert.alert('Error', e.response?.data?.message || 'Failed to send message.')
+    }
+  }
+
   const handleOpenJoin = (trip) => {
     if (verificationStatus !== 'verified') {
       Alert.alert(
-        'Identity Verification Required',
-        'Complete Identity Verification before joining a Shared Trip. Your Government ID proof and selfie must be verified by Admin.',
+        'Identity Verification Required 🛡️',
+        'Complete Identity Verification (Aadhaar + Selfie) before joining a Shared Trip. Your verification must be approved by Admin.',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Verify Identity', onPress: () => navigation.navigate('IdentityVerification') }
@@ -86,8 +160,8 @@ export default function SharedTripsScreen({ navigation }) {
     setSelectedTrip(trip)
     setValidationResult(null)
     setJoinForm({
-      pickup_address: trip.pickup_address,
-      dest_address: trip.dest_address,
+      pickup_address: trip.pickup_address || '',
+      dest_address: trip.dest_address || '',
     })
     setJoinModalVisible(true)
   }
@@ -120,43 +194,6 @@ export default function SharedTripsScreen({ navigation }) {
     }
   }
 
-  const [activeChatReq, setActiveChatReq] = useState(null)
-  const [chatMessages, setChatMessages] = useState([])
-  const [chatInput, setChatInput] = useState('')
-  const [loadingChat, setLoadingChat] = useState(false)
-  const [chatModalVisible, setChatModalVisible] = useState(false)
-
-  const openChatModal = async (req) => {
-    setActiveChatReq(req)
-    setChatModalVisible(true)
-    setLoadingChat(true)
-    try {
-      const res = await longTripAPI.getChats(req.id)
-      if (res.data?.status === 'success') {
-        setChatMessages(res.data.data?.chats || res.data.chats || [])
-      }
-    } catch (e) {
-      console.log('Chat load failed', e)
-    } finally {
-      setLoadingChat(false)
-    }
-  }
-
-  const handleSendChatMessage = async () => {
-    if (!chatInput.trim() || !activeChatReq) return
-    const msg = chatInput.trim()
-    setChatInput('')
-    try {
-      await longTripAPI.sendChat({
-        request_id: activeChatReq.id,
-        message: msg,
-      })
-      setChatMessages(prev => [...prev, { id: Date.now(), message: msg, sender_type: 'passenger', created_at: new Date().toISOString() }])
-    } catch (e) {
-      Alert.alert('Error', 'Failed to send message.')
-    }
-  }
-
   const handleSendJoinRequest = async () => {
     if (!selectedTrip) return
     if (!joinForm.pickup_address.trim() || !joinForm.dest_address.trim()) {
@@ -178,7 +215,7 @@ export default function SharedTripsScreen({ navigation }) {
         loadMyRequests()
         Alert.alert(
           'Join Request Submitted 🎉',
-          'Your join request has been sent to Admin for verification. Once approved, you can chat with the host to discuss pickup details.'
+          'Your request has been submitted! Once Admin approves the request, live discussion chat will open with the host rider.'
         )
       } else {
         isSubmittingRef.current = false
@@ -204,79 +241,151 @@ export default function SharedTripsScreen({ navigation }) {
           <Text style={styles.headerSub}>Split long trip fares 50/50 with verified riders</Text>
         </View>
         <TouchableOpacity
-          onPress={() => navigation.navigate('LongTrip')}
+          onPress={() => navigation.navigate('Booking', { tripMode: 'outstation' })}
           style={styles.scheduleBtn}
         >
-          <Text style={styles.scheduleBtnText}>+ Outstation</Text>
+          <Ionicons name="add" size={14} color="#7C3AED" />
+          <Text style={styles.scheduleBtnText}>Publish Ride</Text>
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
+      >
         {/* Verification Alert Banner if not verified */}
         {verificationStatus !== 'verified' && (
-          <View style={styles.verifyBanner}>
+          <TouchableOpacity
+            style={styles.verifyBanner}
+            onPress={() => navigation.navigate('IdentityVerification')}
+            activeOpacity={0.85}
+          >
             <Ionicons name="shield-checkmark" size={22} color="#D97706" />
             <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={styles.verifyBannerTitle}>Identity Verification Required</Text>
+              <Text style={styles.verifyBannerTitle}>Aadhaar KYC Verification Required 🛡️</Text>
               <Text style={styles.verifyBannerText}>
-                Complete identity verification (Govt ID + Selfie) before joining any shared ride.
+                Complete identity verification (Govt ID + Selfie) to join or publish shared trips. Tap here to submit.
               </Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={18} color="#D97706" />
+          </TouchableOpacity>
         )}
 
-        {/* Active Join Requests */}
+        {/* Active Join Requests & Discussions */}
         {myRequests.length > 0 && (
           <View style={styles.sectionCard}>
             <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitle}>My Join Requests</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="chatbubbles" size={16} color="#7C3AED" />
+                <Text style={styles.sectionTitle}>Shared Trip Requests & Chat</Text>
+              </View>
               <Text style={styles.badgeCount}>{myRequests.length} Active</Text>
             </View>
-            {myRequests.map(req => (
-              <TouchableOpacity
-                key={req.id}
-                style={styles.reqCard}
-                onPress={() => openChatModal(req)}
-                activeOpacity={0.8}
-              >
-                <View style={styles.reqHeader}>
-                  <Text style={styles.reqCode}>{req.trip_code || `REQ-#${req.id}`}</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+
+            {myRequests.map(req => {
+              const isHost = Number(req.host_customer_id) === Number(user?.id)
+              const otherName = isHost ? (req.requester_name || 'Passenger') : (req.host_name || 'Host Rider')
+              const canChat = req.admin_status === 'approved' && (Number(req.chat_enabled) === 1 || req.status === 'in_discussion')
+              const isAdminPending = !canChat && (req.admin_status === 'pending' || req.status === 'pending_admin' || !req.admin_status)
+
+              return (
+                <View key={req.id} style={styles.reqCard}>
+                  <View style={styles.reqHeader}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.reqCode}>{req.trip_code || `REQ-#${req.id}`}</Text>
+                      <View style={[styles.roleBadge, { backgroundColor: isHost ? '#FEF3C7' : '#EDE9FE' }]}>
+                        <Text style={[styles.roleBadgeText, { color: isHost ? '#B45309' : '#7C3AED' }]}>
+                          {isHost ? 'Your Ride (Host)' : 'You Requested'}
+                        </Text>
+                      </View>
+                    </View>
+
                     <Text style={[
                       styles.reqStatus,
-                      req.status === 'in_discussion' ? styles.statusGreen :
-                      req.status === 'pending_host' ? styles.statusAmber : styles.statusBlue
+                      canChat ? styles.statusGreen :
+                      isAdminPending ? styles.statusAmber : styles.statusBlue
                     ]}>
-                      {req.status === 'in_discussion' ? 'Discussion Open' :
-                       req.status === 'pending_host' ? 'Host Reviewing' : 'Admin Verifying'}
+                      {canChat ? 'Chat Active ✓' :
+                       isAdminPending ? 'Pending Admin' :
+                       req.admin_status === 'approved' ? 'Admin Approved' : req.status}
                     </Text>
-                    <Ionicons name="chatbubbles" size={14} color="#7C3AED" />
+                  </View>
+
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, marginBottom: 6, gap: 10 }}>
+                    <View style={{ width: 42, height: 42, borderRadius: 21, overflow: 'hidden', borderWidth: 1.5, borderColor: isHost ? '#FCD34D' : '#C4B5FD', backgroundColor: '#F8FAFC' }}>
+                      <Image
+                        source={{ uri: isHost ? (resolveAssetUrl(req.requester_avatar_url || req.requester_photo) || `https://ui-avatars.com/api/?name=${encodeURIComponent(otherName)}&background=7C3AED&color=fff&size=80&bold=true`) : (resolveAssetUrl(req.host_avatar_url || req.host_avatar) || `https://ui-avatars.com/api/?name=${encodeURIComponent(otherName)}&background=D97706&color=fff&size=80&bold=true`) }}
+                        style={{ width: '100%', height: '100%' }}
+                        resizeMode="cover"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.reqRoute} numberOfLines={1}>
+                        👤 {otherName}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: '#64748B' }} numberOfLines={1}>
+                        📍 {req.pickup_address || req.host_pickup} → {req.dest_address || req.host_dest}
+                      </Text>
+                      <Text style={styles.reqDate}>
+                        📅 {req.pickup_date} • Split Fare: ₹{Math.round(req.total_passenger_fare || req.shared_fare || 0)}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Chat Action Button */}
+                  <View style={{ marginTop: 10 }}>
+                    {canChat ? (
+                      <TouchableOpacity
+                        style={styles.openChatBtn}
+                        onPress={() => openChatModal(req)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="chatbubble-ellipses" size={16} color="white" />
+                        <Text style={styles.openChatBtnText}>Chat with {otherName}</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={styles.pendingAdminBox}>
+                        <Ionicons name="shield-outline" size={16} color="#D97706" />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ fontSize: 11.5, fontWeight: '800', color: '#92400E' }}>
+                            Admin Verification In Progress ⏳
+                          </Text>
+                          <Text style={styles.pendingAdminText}>
+                            Admin is currently verifying this join request. Once Admin reviews & accepts, live chat with {otherName} will unlock automatically!
+                          </Text>
+                        </View>
+                      </View>
+                    )}
                   </View>
                 </View>
-                <Text style={styles.reqRoute}>📍 {req.host_pickup} → {req.host_dest}</Text>
-                <Text style={styles.reqDate}>
-                  📅 {req.pickup_date} • Split Fare: ₹{Math.round(req.total_passenger_fare || req.shared_fare || 0)}
-                </Text>
-              </TouchableOpacity>
-            ))}
+              )
+            })}
           </View>
         )}
 
-        {/* Trips List */}
-        <Text style={[styles.sectionTitle, { marginVertical: 12 }]}>Explore Shared Corridors</Text>
+        {/* Available Shared Trips Header */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 12 }}>
+          <Text style={styles.sectionTitle}>Available Shared Rides</Text>
+          <TouchableOpacity onPress={onRefresh} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Ionicons name="refresh" size={14} color="#7C3AED" />
+            <Text style={{ fontSize: 12, color: '#7C3AED', fontWeight: '700' }}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
 
         {loading ? (
           <SkeletonList count={3} height={180} />
         ) : trips.length === 0 ? (
           <EmptyState
             icon="car-sport-outline"
-            title="No Shared Trips Available"
-            subtitle="No scheduled long trips found. Schedule an outstation ride and share it from My Trips!"
-            buttonText="Schedule Outstation Ride"
-            onPress={() => navigation.navigate('LongTrip')}
+            title="No Shared Trips Found"
+            subtitle="No other passenger has published a shared ride right now. You can book an outstation ride and enable sharing!"
+            buttonText="+ Book & Share Ride"
+            onPress={() => navigation.navigate('Booking', { tripMode: 'outstation' })}
           />
         ) : (
           trips.map(trip => {
+            const isMyOwnTrip = Number(trip.host_customer_id) === Number(user?.id)
             const splitFare = Math.round(Number(trip.final_fare || 0) / 2)
             const remainingSeats = Math.max(1, (trip.max_passengers || 4) - (trip.passenger_count || 1))
             const host = trip.host_profile || {}
@@ -286,6 +395,7 @@ export default function SharedTripsScreen({ navigation }) {
             const hostRating = trip.host_rating || host.rating || 5.0
             const completedTripsCount = trip.completed_trips ?? host.completed_trips ?? 0
             const hostGender = host.gender || trip.host_gender || 'Co-Rider'
+            const hostAvatarUri = resolveAssetUrl(hostPhoto) || `https://ui-avatars.com/api/?name=${encodeURIComponent(hostName)}&background=7C3AED&color=fff&size=128&bold=true`
 
             return (
               <View key={trip.id} style={styles.tripCard}>
@@ -293,30 +403,26 @@ export default function SharedTripsScreen({ navigation }) {
                 <View style={styles.tripTopRow}>
                   <View style={styles.sharedBadge}>
                     <Ionicons name="people" size={12} color="#7C3AED" />
-                    <Text style={styles.sharedBadgeText}>SHARED TRIP</Text>
+                    <Text style={styles.sharedBadgeText}>50/50 SHARED RIDE</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
                     <Text style={styles.splitFare}>₹{splitFare}</Text>
-                    <Text style={styles.origFare}>Orig: ₹{Math.round(trip.original_fare || trip.final_fare)}</Text>
+                    <Text style={styles.origFare}>Total: ₹{Math.round(trip.original_fare || trip.final_fare)}</Text>
                   </View>
                 </View>
 
-                {/* Safe Host Profile */}
+                {/* Host Profile */}
                 <View style={styles.hostProfileRow}>
-                  <View style={[styles.hostAvatar, { overflow: 'hidden' }]}>
-                    {hostPhoto ? (
-                      <Image
-                        source={{ uri: hostPhoto }}
-                        style={{ width: '100%', height: '100%' }}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <Text style={styles.hostAvatarText}>{(hostName[0] || 'R').toUpperCase()}</Text>
-                    )}
+                  <View style={styles.hostAvatar}>
+                    <Image
+                      source={{ uri: hostAvatarUri }}
+                      style={{ width: '100%', height: '100%', borderRadius: 23 }}
+                      resizeMode="cover"
+                    />
                   </View>
-                  <View style={{ flex: 1, marginLeft: 10 }}>
+                  <View style={{ flex: 1, marginLeft: 12 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Text style={styles.hostName}>{hostName}</Text>
+                      <Text style={styles.hostName}>{hostName} {isMyOwnTrip && '(You)'}</Text>
                       {isHostVerified && (
                         <View style={styles.verifiedTag}>
                           <Ionicons name="checkmark-circle" size={12} color="#16A34A" />
@@ -361,19 +467,27 @@ export default function SharedTripsScreen({ navigation }) {
                     <Text style={styles.specVal}>{trip.vehicle_type_name || 'Sedan'}</Text>
                   </View>
                   <View style={styles.specItem}>
-                    <Text style={styles.specLabel}>Available</Text>
-                    <Text style={[styles.specVal, { color: '#16A34A' }]}>{remainingSeats} Seat</Text>
+                    <Text style={styles.specLabel}>Seats</Text>
+                    <Text style={[styles.specVal, { color: '#16A34A' }]}>{remainingSeats} Available</Text>
                   </View>
                 </View>
 
-                {/* Action */}
-                <TouchableOpacity
-                  onPress={() => handleOpenJoin(trip)}
-                  style={styles.joinBtn}
-                >
-                  <Text style={styles.joinBtnText}>Join Trip & Split Fare</Text>
-                  <Ionicons name="arrow-forward" size={16} color="white" />
-                </TouchableOpacity>
+                {/* Action Button */}
+                {isMyOwnTrip ? (
+                  <View style={styles.ownTripBadge}>
+                    <Ionicons name="checkmark-done-circle" size={16} color="#7C3AED" />
+                    <Text style={styles.ownTripBadgeText}>Your Published Ride (Waiting for Co-Riders)</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    onPress={() => handleOpenJoin(trip)}
+                    style={styles.joinBtn}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.joinBtnText}>Join Trip & Split Fare</Text>
+                    <Ionicons name="arrow-forward" size={16} color="white" />
+                  </TouchableOpacity>
+                )}
               </View>
             )
           })
@@ -384,17 +498,23 @@ export default function SharedTripsScreen({ navigation }) {
       <Modal visible={joinModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Request to Join Shared Trip</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={styles.modalTitle}>Request to Join Shared Trip</Text>
+              <TouchableOpacity onPress={() => setJoinModalVisible(false)}>
+                <Ionicons name="close" size={22} color="#0F172A" />
+              </TouchableOpacity>
+            </View>
             <Text style={styles.modalSub}>
-              Confirm your boarding & drop points. Route must align with the primary host corridor (max 20% detour).
+              Confirm your boarding & drop points. Route must align with the primary corridor.
             </Text>
 
             <View style={{ marginVertical: 12 }}>
-              <Text style={styles.inputLabel}>Your Pickup Address</Text>
+              <Text style={styles.inputLabel}>Your Boarding Address</Text>
               <TextInput
                 style={styles.input}
                 value={joinForm.pickup_address}
                 onChangeText={t => { setJoinForm({ ...joinForm, pickup_address: t }); setValidationResult(null); }}
+                placeholder="Enter pickup point"
               />
 
               <Text style={[styles.inputLabel, { marginTop: 10 }]}>Your Drop Address</Text>
@@ -402,6 +522,7 @@ export default function SharedTripsScreen({ navigation }) {
                 style={styles.input}
                 value={joinForm.dest_address}
                 onChangeText={t => { setJoinForm({ ...joinForm, dest_address: t }); setValidationResult(null); }}
+                placeholder="Enter drop point"
               />
 
               {/* Route Validation Action */}
@@ -456,48 +577,86 @@ export default function SharedTripsScreen({ navigation }) {
       {/* In-App Live Chat Modal */}
       <Modal visible={chatModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, { maxHeight: '80%' }]}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <Text style={styles.modalTitle}>Co-Rider Discussion</Text>
-              <TouchableOpacity onPress={() => setChatModalVisible(false)}>
-                <Ionicons name="close" size={22} color="#0F172A" />
+          <View style={[styles.modalCard, { maxHeight: '85%' }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <View style={{ flex: 1, marginRight: 8 }}>
+                <Text style={styles.modalTitle} numberOfLines={1}>
+                  Chat with {Number(activeChatReq?.host_customer_id) === Number(user?.id) ? (activeChatReq?.requester_name || 'Passenger') : (activeChatReq?.host_name || 'Host Rider')}
+                </Text>
+                <Text style={styles.modalSub}>
+                  {activeChatReq?.trip_code ? `Trip Code: ${activeChatReq.trip_code}` : 'Live Co-Rider Discussion'}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setChatModalVisible(false)} style={{ padding: 4 }}>
+                <Ionicons name="close-circle" size={24} color="#64748B" />
               </TouchableOpacity>
             </View>
-            <Text style={styles.modalSub}>Discuss route pickups, luggage, and stops in real time.</Text>
 
-            <ScrollView style={{ maxHeight: 240, marginVertical: 10 }}>
+            {/* Chat Messages */}
+            <ScrollView
+              ref={chatScrollRef}
+              style={{ maxHeight: 280, minHeight: 140, marginVertical: 8, backgroundColor: '#F8FAFC', borderRadius: 12, padding: 10 }}
+              onContentSizeChange={() => chatScrollRef.current?.scrollToEnd({ animated: true })}
+            >
               {loadingChat ? (
-                <ActivityIndicator size="small" color={COLORS.primary} />
+                <ActivityIndicator size="small" color="#7C3AED" style={{ padding: 20 }} />
               ) : chatMessages.length === 0 ? (
-                <Text style={{ textAlign: 'center', color: '#94A3B8', padding: 20, fontSize: 11 }}>No messages yet. Say hello!</Text>
+                <View style={{ alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+                  <Ionicons name="chatbubbles-outline" size={28} color="#CBD5E1" />
+                  <Text style={{ textAlign: 'center', color: '#94A3B8', marginTop: 8, fontSize: 12 }}>
+                    No messages yet. Say hello to discuss pickup spot and luggage!
+                  </Text>
+                </View>
               ) : (
-                chatMessages.map((m, i) => (
-                  <View key={i} style={{
-                    alignSelf: m.sender_type === 'passenger' ? 'flex-end' : 'flex-start',
-                    backgroundColor: m.sender_type === 'passenger' ? '#EDE9FE' : '#F1F5F9',
-                    padding: 8,
-                    borderRadius: 10,
-                    marginVertical: 4,
-                    maxWidth: '80%'
-                  }}>
-                    <Text style={{ fontSize: 12, color: '#0F172A', fontWeight: '600' }}>{m.message}</Text>
-                  </View>
-                ))
+                chatMessages.map((m, i) => {
+                  const isMe = Number(m.sender_id) === Number(user?.id)
+                  return (
+                    <View
+                      key={m.id || i}
+                      style={{
+                        alignSelf: isMe ? 'flex-end' : 'flex-start',
+                        backgroundColor: isMe ? '#7C3AED' : '#FFFFFF',
+                        paddingHorizontal: 12,
+                        paddingVertical: 8,
+                        borderRadius: 14,
+                        borderBottomRightRadius: isMe ? 2 : 14,
+                        borderBottomLeftRadius: isMe ? 14 : 2,
+                        marginVertical: 4,
+                        maxWidth: '82%',
+                        borderWidth: isMe ? 0 : 1,
+                        borderColor: '#E2E8F0',
+                      }}
+                    >
+                      {!isMe && (
+                        <Text style={{ fontSize: 10, color: '#64748B', fontWeight: '700', marginBottom: 2 }}>
+                          {m.sender_name || 'Co-Rider'}
+                        </Text>
+                      )}
+                      <Text style={{ fontSize: 13, color: isMe ? '#FFFFFF' : '#0F172A', fontWeight: '500' }}>
+                        {m.message}
+                      </Text>
+                    </View>
+                  )
+                })
               )}
             </ScrollView>
 
-            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+            {/* Chat Input */}
+            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 4 }}>
               <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="Type a message..."
+                style={[styles.input, { flex: 1, paddingVertical: 10 }]}
+                placeholder="Type message to co-rider..."
+                placeholderTextColor="#94A3B8"
                 value={chatInput}
                 onChangeText={setChatInput}
+                onSubmitEditing={handleSendChatMessage}
               />
               <TouchableOpacity
                 onPress={handleSendChatMessage}
-                style={{ backgroundColor: '#7C3AED', padding: 10, borderRadius: 10 }}
+                style={{ backgroundColor: '#7C3AED', width: 42, height: 42, borderRadius: 10, alignItems: 'center', justifyContent: 'center' }}
+                activeOpacity={0.8}
               >
-                <Ionicons name="send" size={16} color="white" />
+                <Ionicons name="send" size={17} color="white" />
               </TouchableOpacity>
             </View>
           </View>
@@ -517,11 +676,12 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 16, fontWeight: '800', color: '#0F172A' },
   headerSub: { fontSize: 11, color: '#64748B' },
   scheduleBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
     backgroundColor: '#EDE9FE', paddingHorizontal: 10, paddingVertical: 6,
     borderRadius: 8, borderWidth: 1, borderColor: '#DDD6FE'
   },
   scheduleBtnText: { color: '#7C3AED', fontSize: 11, fontWeight: '800' },
-  scrollContent: { padding: 16 },
+  scrollContent: { padding: 16, paddingBottom: 40 },
   verifyBanner: {
     flexDirection: 'row', backgroundColor: '#FEF3C7', padding: 12, borderRadius: 14,
     borderWidth: 1, borderColor: '#FDE68A', marginBottom: 14, alignItems: 'center'
@@ -530,25 +690,32 @@ const styles = StyleSheet.create({
   verifyBannerText: { fontSize: 11, color: '#B45309', marginTop: 2 },
   sectionCard: {
     backgroundColor: '#FAF5FF', padding: 14, borderRadius: 16,
-    borderWidth: 1.5, borderColor: '#E9D5FF', marginBottom: 14
+    borderWidth: 1.5, borderColor: '#E9D5FF', marginBottom: 16
   },
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
-  sectionTitle: { fontSize: 13, fontWeight: '800', color: '#0F172A' },
+  sectionTitle: { fontSize: 14, fontWeight: '800', color: '#0F172A' },
   badgeCount: { fontSize: 11, fontWeight: '800', color: '#7C3AED', backgroundColor: '#EDE9FE', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
-  reqCard: { backgroundColor: 'white', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 8 },
-  reqHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  reqCard: { backgroundColor: 'white', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 10 },
+  reqHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   reqCode: { fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace', fontWeight: '800', color: '#7C3AED' },
+  roleBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  roleBadgeText: { fontSize: 10, fontWeight: '800' },
   reqStatus: { fontSize: 10, fontWeight: '800', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
   statusGreen: { backgroundColor: '#DCFCE7', color: '#16A34A' },
   statusAmber: { backgroundColor: '#FEF3C7', color: '#D97706' },
-  statusBlue: { backgroundColor: '#FEF3C7', color: '#B45309' },
+  statusBlue: { backgroundColor: '#EDE9FE', color: '#7C3AED' },
   reqRoute: { fontSize: 12, color: '#334155', fontWeight: '600' },
-  reqDate: { fontSize: 11, color: '#64748B', marginTop: 2 },
-  emptyCard: { backgroundColor: 'white', padding: 32, borderRadius: 18, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0' },
-  emptyTitle: { fontSize: 15, fontWeight: '800', color: '#0F172A', marginTop: 10 },
-  emptyText: { fontSize: 12, color: '#64748B', textAlign: 'center', marginVertical: 8, lineHeight: 18 },
-  emptyBtn: { backgroundColor: '#7C3AED', paddingHorizontal: 18, paddingVertical: 10, borderRadius: 10, marginTop: 8 },
-  emptyBtnText: { color: 'white', fontSize: 12, fontWeight: '800' },
+  reqDate: { fontSize: 11, color: '#64748B', marginTop: 3 },
+  openChatBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: '#7C3AED', paddingVertical: 9, borderRadius: 8
+  },
+  openChatBtnText: { color: 'white', fontWeight: '800', fontSize: 12 },
+  pendingAdminBox: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#FEF3C7', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#FDE68A'
+  },
+  pendingAdminText: { fontSize: 11, color: '#B45309', fontWeight: '600', flex: 1 },
   tripCard: {
     backgroundColor: 'white', padding: 16, borderRadius: 18,
     borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 14,
@@ -560,8 +727,18 @@ const styles = StyleSheet.create({
   splitFare: { fontSize: 18, fontWeight: '900', color: '#10B981' },
   origFare: { fontSize: 10, color: '#64748B', fontWeight: '600' },
   hostProfileRow: { flexDirection: 'row', alignItems: 'center', paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#F1F5F9', marginBottom: 12 },
-  hostAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#EDE9FE', alignItems: 'center', justifyContent: 'center' },
-  hostAvatarText: { color: '#7C3AED', fontWeight: '900', fontSize: 15 },
+  hostAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#EDE9FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#DDD6FE',
+    overflow: 'hidden'
+  },
+  hostAvatarText: { color: '#7C3AED', fontWeight: '900', fontSize: 16 },
   hostName: { fontSize: 13, fontWeight: '800', color: '#0F172A' },
   verifiedTag: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#DCFCE7', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 },
   verifiedTagText: { fontSize: 9, fontWeight: '800', color: '#16A34A' },
@@ -579,10 +756,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center', paddingVertical: 12, borderRadius: 12, gap: 6
   },
   joinBtnText: { color: 'white', fontWeight: '800', fontSize: 13 },
+  ownTripBadge: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    backgroundColor: '#F1F5F9', paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: '#CBD5E1'
+  },
+  ownTripBadgeText: { color: '#64748B', fontWeight: '800', fontSize: 12 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.6)', justifyContent: 'center', padding: 16 },
   modalCard: { backgroundColor: 'white', borderRadius: 20, padding: 20 },
   modalTitle: { fontSize: 16, fontWeight: '900', color: '#0F172A' },
-  modalSub: { fontSize: 11, color: '#64748B', marginVertical: 6, lineHeight: 16 },
+  modalSub: { fontSize: 11, color: '#64748B', marginVertical: 4, lineHeight: 16 },
   inputLabel: { fontSize: 11, fontWeight: '700', color: '#334155', marginBottom: 4 },
   input: { borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, fontSize: 12 },
   modalCancelBtn: { flex: 1, padding: 12, borderRadius: 10, backgroundColor: '#F1F5F9', alignItems: 'center' },

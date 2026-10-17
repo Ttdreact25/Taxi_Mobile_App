@@ -30,6 +30,7 @@ import {
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import AdCarousel from '../../components/ui/AdCarousel'
 import { Skeleton } from '../../components/common/Skeleton'
+import { playCustomerTaxiReachedAlert } from '../../services/SoundService'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 
@@ -57,6 +58,7 @@ const HomeScreen = ({ navigation }) => {
   const [kycStatus,        setKycStatus]        = useState('none')
   const [loading,          setLoading]          = useState(true)
   const cachedLocationRef = useRef({ city: '', lat: null, lng: null, timestamp: 0 })
+  const alertedArrivedTripIdRef = useRef(null)
 
   const getPlaceIcon = (name = '', type = '') => {
     const n = `${name} ${type}`.toLowerCase()
@@ -150,6 +152,10 @@ const HomeScreen = ({ navigation }) => {
         const active = trips.find(t => ['searching', 'accepted', 'arrived', 'in_progress', 'driver_assigned', 'driver_arrived', 'trip_started'].includes(t.status))
         const upcoming = trips.find(t => t.status === 'scheduled')
         setActiveBooking(active || null)
+        if (active?.status === 'driver_arrived' && alertedArrivedTripIdRef.current !== active.id) {
+          alertedArrivedTripIdRef.current = active.id
+          playCustomerTaxiReachedAlert(active.driver_name, active.plate_no || active.model).catch(() => {})
+        }
         setUpcomingBooking(upcoming || null)
         setRecentTrips(trips.filter(t => t.status === 'completed').slice(0, 4))
       }
@@ -340,14 +346,14 @@ const HomeScreen = ({ navigation }) => {
           >
             <View style={styles.categoryIconCard}>
               <View style={styles.carIllustrationBox}>
-                <Ionicons name="car-sport" size={26} color="#D97706" />
+                <Ionicons name="car-sport" size={36} color="#D97706" />
                 <View style={styles.passengersBadge}>
-                  <Ionicons name="person" size={9} color="#1E293B" />
+                  <Ionicons name="person" size={11} color="#1E293B" />
                   <Text style={styles.passengersBadgeText}>4</Text>
                 </View>
               </View>
             </View>
-            <Text style={styles.categoryItemLabel} numberOfLines={2}>
+            <Text style={styles.categoryItemLabel} numberOfLines={1}>
               Local Trip
             </Text>
           </TouchableOpacity>
@@ -360,14 +366,14 @@ const HomeScreen = ({ navigation }) => {
           >
             <View style={styles.categoryIconCard}>
               <View style={styles.carIllustrationBox}>
-                <Ionicons name="car" size={26} color="#7C3AED" />
+                <Ionicons name="car" size={36} color="#7C3AED" />
                 <View style={styles.passengersBadge}>
-                  <Ionicons name="map" size={9} color="#7C3AED" />
+                  <Ionicons name="map" size={11} color="#7C3AED" />
                   <Text style={styles.passengersBadgeText}>&gt;50km</Text>
                 </View>
               </View>
             </View>
-            <Text style={styles.categoryItemLabel} numberOfLines={2}>
+            <Text style={styles.categoryItemLabel} numberOfLines={1}>
               Outstation
             </Text>
           </TouchableOpacity>
@@ -375,43 +381,19 @@ const HomeScreen = ({ navigation }) => {
           {/* 3. Shared Trip */}
           <TouchableOpacity
             style={styles.categoryItem}
-            onPress={() => {
-              if (kycStatus !== 'verified') {
-                Alert.alert(
-                  'Identity Verification Required 🛡️',
-                  'Aadhaar KYC verification by Admin is mandatory to join or publish 50/50 Shared Long Trips. Please submit your verification documents.',
-                  [
-                    { text: 'Verify Identity', onPress: () => navigation.navigate('IdentityVerification') },
-                    { text: 'Cancel', style: 'cancel' }
-                  ]
-                )
-                return
-              }
-
-              Alert.alert(
-                'Shared Outstation Trip Terms ⚠️',
-                'When you enable ride sharing, any verified co-passenger can join your trip.\n\n⚠️ IMPORTANT RULE:\nIf NO other passenger joins your shared ride before departure time, YOU (the 1st customer who booked) must pay the FULL TRIP AMOUNT.\n\nDo you accept and want to proceed?',
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'I Agree & Continue',
-                    onPress: () => navigation.navigate('Booking', { tripMode: 'shared' })
-                  }
-                ]
-              )
-            }}
+            onPress={() => navigation.navigate('SharedTrips')}
             activeOpacity={0.82}
           >
             <View style={styles.categoryIconCard}>
               <View style={styles.carIllustrationBox}>
-                <Ionicons name="people" size={26} color="#059669" />
+                <Ionicons name="people" size={36} color="#059669" />
                 <View style={styles.passengersBadge}>
-                  <Ionicons name="people" size={9} color="#059669" />
+                  <Ionicons name="people" size={11} color="#059669" />
                   <Text style={styles.passengersBadgeText}>2</Text>
                 </View>
               </View>
             </View>
-            <Text style={styles.categoryItemLabel} numberOfLines={2}>
+            <Text style={styles.categoryItemLabel} numberOfLines={1}>
               Shared Trip
             </Text>
           </TouchableOpacity>
@@ -424,15 +406,15 @@ const HomeScreen = ({ navigation }) => {
           >
             <View style={styles.categoryIconCard}>
               <View style={styles.carIllustrationBox}>
-                <Ionicons name="grid" size={24} color="#0F172A" />
+                <Ionicons name="grid" size={34} color="#0F172A" />
                 <View style={styles.passengersBadge}>
-                  <Ionicons name="apps" size={9} color="#D97706" />
+                  <Ionicons name="apps" size={11} color="#D97706" />
                   <Text style={styles.passengersBadgeText}>All</Text>
                 </View>
               </View>
             </View>
-            <Text style={styles.categoryItemLabel} numberOfLines={2}>
-              All Services
+            <Text style={styles.categoryItemLabel} numberOfLines={1}>
+              All
             </Text>
           </TouchableOpacity>
         </View>
@@ -984,60 +966,70 @@ const styles = StyleSheet.create({
   categoriesRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 20,
+    paddingHorizontal: 12,
+    paddingTop: 18,
     paddingBottom: 14,
   },
   categoryItem: {
-    width: (SCREEN_WIDTH - 32 - 36) / 4,
+    flex: 1,
     alignItems: 'center',
+    marginHorizontal: 3,
   },
   categoryIconCard: {
-    width: 60,
-    height: 52,
-    borderRadius: 16,
+    width: '100%',
+    maxWidth: 78,
+    height: 72,
+    borderRadius: 20,
     backgroundColor: '#F8FAFC',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-    marginBottom: 6,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    marginBottom: 8,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
   },
   carIllustrationBox: {
     position: 'relative',
     alignItems: 'center',
     justifyContent: 'center',
+    width: 48,
+    height: 48,
   },
   passengersBadge: {
     position: 'absolute',
     bottom: -6,
-    right: -10,
+    right: -8,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 1,
+    gap: 2,
     backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    paddingHorizontal: 3,
-    paddingVertical: 1,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+    borderWidth: 1.2,
+    borderColor: '#CBD5E1',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 1,
+    shadowOpacity: 0.15,
+    shadowRadius: 2.5,
+    elevation: 2,
   },
   passengersBadgeText: {
-    fontSize: 8,
+    fontSize: 10,
     fontWeight: '900',
     color: '#0F172A',
   },
   categoryItemLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#1E293B',
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
     textAlign: 'center',
-    lineHeight: 14,
+    lineHeight: 16,
+    letterSpacing: -0.2,
   },
 
   // ── Section Common Layout ──
