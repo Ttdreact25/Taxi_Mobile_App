@@ -827,13 +827,20 @@ const DriverHomeScreen = ({ navigation }) => {
         setDriverAds(adRes.value.data.ads || [])
       }
 
-      // 6. Unread Notifications (Filtered strictly to Bookings, Completions, and Reviews)
+      // 6. Unread Notifications (Filtered strictly to: 1. Booking Received, 2. Trip Completed, 3. Customer Reviews)
       if (notifRes.status === 'fulfilled') {
         const allNotifs = notifRes.value.data?.notifications || []
         const relevantUnread = allNotifs.filter(n => {
           if (Number(n.is_read) === 1) return false
           const t = `${n.title || ''} ${n.body || ''} ${n.type || ''}`.toLowerCase()
-          return t.includes('booking') || t.includes('assign') || t.includes('ride') || t.includes('complete') || t.includes('review') || t.includes('rated')
+          // Exclude all unwanted alerts
+          if (t.includes('otp') || t.includes('kyc') || t.includes('registration') || t.includes('broadcast') || t.includes('support') || t.includes('payout') || t.includes('cancel')) {
+            return false
+          }
+          const isBooking = (t.includes('booking') || t.includes('assign') || t.includes('dispatch') || t.includes('pickup alert'))
+          const isComplete = t.includes('complete')
+          const isReview = t.includes('review') || t.includes('rated') || t.includes('star')
+          return isBooking || isComplete || isReview
         }).length
         prevUnreadNotifCountRef.current = relevantUnread
         setUnreadNotifCount(relevantUnread)

@@ -45,10 +45,14 @@ const DriverNotifScreen = ({ navigation }) => {
         ? (notifRes.value.data?.notifications || notifRes.value.data?.data?.notifications || notifRes.value.data?.data || [])
         : []
 
-      // Filter out unwanted spam/broadcasts: Keep ONLY Bookings, Completions, and Reviews
+      // Filter strictly: Keep ONLY 1. Bookings, 2. Completions, and 3. Customer Reviews
       const relevantNotifs = rawNotifs.filter(n => {
         const text = `${n.title || ''} ${n.body || ''} ${n.type || ''}`.toLowerCase()
-        const isBooking = text.includes('booking') || text.includes('assign') || text.includes('ride') || text.includes('pickup alert') || text.includes('dispatch')
+        // Strictly exclude non-trip system events
+        if (text.includes('otp') || text.includes('kyc') || text.includes('registration') || text.includes('broadcast') || text.includes('support') || text.includes('payout') || text.includes('cancel')) {
+          return false
+        }
+        const isBooking = text.includes('booking') || text.includes('assign') || text.includes('pickup alert') || text.includes('dispatch') || text.includes('new ride')
         const isCompleted = text.includes('complete') || (n.type === 'payment' && !text.includes('recharge') && !text.includes('topup'))
         const isReview = text.includes('review') || text.includes('rated') || text.includes('star')
         return isBooking || isCompleted || isReview

@@ -62,7 +62,7 @@ export const speakVoiceAlert = (text, options = {}) => {
     if (ExpoSpeech?.speak) {
       ExpoSpeech.stop?.()
       ExpoSpeech.speak(text, {
-        language: options.language || 'en-IN',
+        language: options.language || 'en-US',
         pitch: options.pitch || 1.05,
         rate: options.rate || 0.95,
         volume: 1.0,
@@ -152,12 +152,11 @@ const playedCustomerArrivalTripIds = new Set()
 export const playDriverBookingAlert = async (bookingIdOrRef = '') => {
   const idStr = bookingIdOrRef ? String(bookingIdOrRef).trim() : ''
 
-  // Must have a valid booking ID, and must NOT have played for this booking before
-  if (!idStr) return
-  if (playedDriverBookingIds.has(idStr)) return
-
-  // Register immediately to prevent race conditions from concurrent triggers
-  playedDriverBookingIds.add(idStr)
+  // If a booking ID is provided, ensure it plays only once per booking
+  if (idStr) {
+    if (playedDriverBookingIds.has(idStr)) return
+    playedDriverBookingIds.add(idStr)
+  }
 
   const now = Date.now()
   if (isPlayingDriverSound || (now - lastDriverSoundTime < 4000)) return
@@ -257,12 +256,11 @@ export const playCustomerTaxiReachedAlert = async (tripIdOrName = '', driverName
     tripId = String(driverName).trim()
   }
 
-  // Must have a valid identifier, and must NOT have played for this trip arrival before
-  if (!tripId) return
-  if (playedCustomerArrivalTripIds.has(tripId)) return
-
-  // Register immediately to lock and prevent duplicate playback across screens
-  playedCustomerArrivalTripIds.add(tripId)
+  // If a valid identifier is provided, lock and prevent duplicate playback across screens
+  if (tripId) {
+    if (playedCustomerArrivalTripIds.has(tripId)) return
+    playedCustomerArrivalTripIds.add(tripId)
+  }
 
   const now = Date.now()
   if (isPlayingCustomerSound || (now - lastCustomerSoundTime < 6000)) return

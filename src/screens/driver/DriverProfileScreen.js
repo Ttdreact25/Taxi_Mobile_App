@@ -1150,7 +1150,7 @@ const DriverProfileScreen = ({ navigation }) => {
           {[
             { icon: 'cash-outline', label: 'Earnings & Payout Settlements', color: '#10B981', action: () => navigation.navigate('Earnings') },
             { icon: 'key-outline', label: 'Change Security Password', color: '#B45309', action: () => setPwModalVisible(true) },
-            { icon: 'notifications-outline', label: 'Broadcast Alerts & Notifications', color: '#D97706', action: () => navigation.navigate('DriverNotifications') },
+            { icon: 'notifications-outline', label: 'Trip Notifications', color: '#2563EB', action: () => navigation.navigate('DriverNotifications') },
             { icon: 'headset-outline', label: 'Help, Safety & 24x7 SOS Support', color: '#EA580C', action: () => navigation.navigate('DriverSupport') },
             { icon: 'document-text-outline', label: 'Privacy Policy', color: '#D97706', action: () => navigation.navigate('PrivacyPolicy') },
             { icon: 'newspaper-outline', label: 'Terms & Conditions', color: '#64748B', action: () => navigation.navigate('Terms') },
