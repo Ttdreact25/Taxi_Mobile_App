@@ -34,6 +34,7 @@ import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import SwipeToActionButton from '../../components/common/SwipeToActionButton'
 import { formatTime12Hr, formatDateDisplay, formatDateTime12Hr } from '../../utils/formatters'
 import { playDriverAlertSound, playDriverBookingReceived } from '../../services/SoundService'
+import { useDoubleBackExit } from '../../components/common/DoubleBackExitHandler'
 
 const REJECT_REASONS = [
   'Pickup location too far away',
@@ -333,6 +334,7 @@ const DriverHomeScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets()
   const isFocused = useIsFocused()
   const { user } = useAuth()
+  const { ExitToastComponent } = useDoubleBackExit(95)
   const [driver, setDriver] = useState(user || null)
 
   useEffect(() => {
@@ -4894,6 +4896,7 @@ const DriverHomeScreen = ({ navigation }) => {
           </View>
         </View>
       </Modal>
+      {ExitToastComponent}
     </View>
   )
 }

@@ -16,9 +16,11 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useAuth } from '../../context/AuthContext'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
+import { useDoubleBackExit } from '../../components/common/DoubleBackExitHandler'
 
 const LoginScreen = ({ navigation }) => {
   const { login } = useAuth()
+  const { ExitToastComponent } = useDoubleBackExit(28)
   const [form, setForm] = useState({ identifier: '', password: '' })
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -203,6 +205,7 @@ const LoginScreen = ({ navigation }) => {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      {ExitToastComponent}
     </SafeAreaView>
   )
 }

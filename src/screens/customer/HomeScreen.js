@@ -31,6 +31,7 @@ import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import AdCarousel from '../../components/ui/AdCarousel'
 import { Skeleton } from '../../components/common/Skeleton'
 import { playCustomerTaxiReachedAlert } from '../../services/SoundService'
+import { useDoubleBackExit } from '../../components/common/DoubleBackExitHandler'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 
@@ -46,6 +47,7 @@ const COUPON_COLORS = [
 const HomeScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets()
   const { user } = useAuth()
+  const { ExitToastComponent } = useDoubleBackExit(95)
   const [types,            setTypes]            = useState([])
   const [activeBooking,    setActiveBooking]    = useState(null)
   const [recentTrips,      setRecentTrips]      = useState([])
@@ -722,6 +724,7 @@ const HomeScreen = ({ navigation }) => {
 
         <View style={{ height: 32 }} />
       </ScrollView>
+      {ExitToastComponent}
     </View>
   )
 }
