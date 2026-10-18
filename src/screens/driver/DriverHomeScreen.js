@@ -647,7 +647,7 @@ const DriverHomeScreen = ({ navigation }) => {
           const newId = firstNew.long_trip_id || firstNew.id
           if (newId && alertedAssignedTripIdRef.current !== `sched_${newId}`) {
             alertedAssignedTripIdRef.current = `sched_${newId}`
-            playDriverBookingReceived(firstNew.booking_ref).catch(() => {})
+            playDriverBookingReceived(newId).catch(() => {})
           }
           if (!assignedAlertTrip) {
             setAssignedAlertTrip({
@@ -791,7 +791,7 @@ const DriverHomeScreen = ({ navigation }) => {
         if (act.status === 'driver_assigned') {
           if (alertedAssignedTripIdRef.current !== act.id) {
             alertedAssignedTripIdRef.current = act.id
-            playDriverBookingReceived(act.booking_ref).catch(() => {})
+            playDriverBookingReceived(act.id).catch(() => {})
           }
           if (!assignedAlertTrip || assignedAlertTrip.id !== act.id) {
             setAssignedAlertTrip(act)
@@ -817,7 +817,7 @@ const DriverHomeScreen = ({ navigation }) => {
           const inId = firstIncoming.id
           if (inId && alertedPendingTripIdRef.current !== inId) {
             alertedPendingTripIdRef.current = inId
-            playDriverBookingReceived(firstIncoming.booking_ref).catch(() => {})
+            playDriverBookingReceived(inId).catch(() => {})
           }
         }
       }
@@ -955,7 +955,7 @@ const DriverHomeScreen = ({ navigation }) => {
         try {
           Vibration.vibrate([0, 500, 200, 500])
         } catch {}
-        playDriverAlertSound().catch(() => {})
+        playDriverBookingReceived(currentId).catch(() => {})
         setCountdown(30)
         if (timerRef.current) clearInterval(timerRef.current)
         timerRef.current = setInterval(() => {
@@ -980,14 +980,14 @@ const DriverHomeScreen = ({ navigation }) => {
   // Instant Sound Alert whenever Accept/Decline Instant Ride Popup opens
   useEffect(() => {
     if (pendingRides[0]?.id) {
-      playDriverAlertSound().catch(() => {})
+      playDriverAlertSound(pendingRides[0].id).catch(() => {})
     }
   }, [pendingRides[0]?.id])
 
   // Immediate Sound Alert whenever Assigned Ride Alert Modal opens
   useEffect(() => {
     if (assignedAlertTrip?.id) {
-      playDriverAlertSound().catch(() => {})
+      playDriverAlertSound(assignedAlertTrip.id).catch(() => {})
     }
   }, [assignedAlertTrip?.id])
 

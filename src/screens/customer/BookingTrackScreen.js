@@ -328,9 +328,9 @@ export default function BookingTrackScreen({ route, navigation }) {
   useEffect(() => {
     if (isDriverArrived && !hasAlertedArrivalRef.current) {
       hasAlertedArrivalRef.current = true
-      playCustomerTaxiReachedAlert(driverName, plateNo || vehicleModel).catch(() => {})
+      playCustomerTaxiReachedAlert(booking?.id || id, driverName, plateNo || vehicleModel).catch(() => {})
     }
-  }, [isDriverArrived, driverName, plateNo, vehicleModel])
+  }, [isDriverArrived, booking?.id, id, driverName, plateNo, vehicleModel])
 
   const isRoundTrip = Boolean(
     Number(booking?.is_round_trip) === 1 ||

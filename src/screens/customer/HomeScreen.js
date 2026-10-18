@@ -156,7 +156,7 @@ const HomeScreen = ({ navigation }) => {
         setActiveBooking(active || null)
         if (active?.status === 'driver_arrived' && alertedArrivedTripIdRef.current !== active.id) {
           alertedArrivedTripIdRef.current = active.id
-          playCustomerTaxiReachedAlert(active.driver_name, active.plate_no || active.model).catch(() => {})
+          playCustomerTaxiReachedAlert(active.id, active.driver_name, active.plate_no || active.model).catch(() => {})
         }
         setUpcomingBooking(upcoming || null)
         setRecentTrips(trips.filter(t => t.status === 'completed').slice(0, 4))

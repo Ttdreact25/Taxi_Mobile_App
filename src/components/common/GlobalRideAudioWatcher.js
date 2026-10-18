@@ -72,8 +72,8 @@ const GlobalRideAudioWatcher = () => {
             const isArrived = active.status === 'driver_arrived' || active.status === 'arrived'
             if (isArrived && alertedArrivedTripIdRef.current !== active.id) {
               alertedArrivedTripIdRef.current = active.id
-              // Play high-clarity Arrival Master Audio + Speech announcement
-              playCustomerTaxiReachedAlert(active.driver_name, active.plate_no || active.model).catch(() => {})
+              // Play high-clarity Arrival Master Audio
+              playCustomerTaxiReachedAlert(active.id, active.driver_name, active.plate_no || active.model).catch(() => {})
               PushNotificationService.showLocalArrivalNotification(
                 '🚖 Driver Reached!',
                 `Driver ${active.driver_name || 'Partner'} has arrived at your pickup point.`
@@ -98,7 +98,7 @@ const GlobalRideAudioWatcher = () => {
               const pId = firstPending.id || firstPending.booking_id
               if (pId && alertedDriverRideIdRef.current !== `pending_${pId}`) {
                 alertedDriverRideIdRef.current = `pending_${pId}`
-                playDriverAlertSound().catch(() => {})
+                playDriverBookingReceived(pId).catch(() => {})
                 PushNotificationService.showLocalBookingAlertNotification(
                   '🚗 New Booking Received!',
                   `New ride request ${firstPending.booking_ref ? '#' + firstPending.booking_ref : ''}. Tap to accept.`
@@ -111,7 +111,7 @@ const GlobalRideAudioWatcher = () => {
               const aId = activeTrip.id || activeTrip.booking_id
               if (aId && alertedDriverRideIdRef.current !== `assigned_${aId}`) {
                 alertedDriverRideIdRef.current = `assigned_${aId}`
-                playDriverAlertSound().catch(() => {})
+                playDriverBookingReceived(aId).catch(() => {})
                 PushNotificationService.showLocalBookingAlertNotification(
                   '🚗 New Booking Assigned!',
                   `You have been assigned to ride ${activeTrip.booking_ref ? '#' + activeTrip.booking_ref : ''}.`
