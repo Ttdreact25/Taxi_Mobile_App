@@ -544,31 +544,74 @@ const DriverProfileScreen = ({ navigation }) => {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Profile Card Banner */}
         <View style={styles.profileHero}>
+          <View style={styles.heroTopAccent} />
+
+          {/* Large Luxury Embossed Watermark */}
+          <Image
+            source={require('../../../assets/cityonetaxi_badge.png')}
+            style={styles.driverWatermarkLogo}
+            resizeMode="contain"
+            pointerEvents="none"
+          />
+
+          {/* Driver Brand & ID Header */}
+          <View style={styles.heroHeaderRow}>
+            <View style={styles.heroBrandBadge}>
+              <Image
+                source={require('../../../assets/cityonetaxi_badge.png')}
+                style={{ width: 22, height: 22 }}
+                resizeMode="contain"
+              />
+              <View>
+                <Text style={styles.heroBrandTitle}>
+                  CITYONE <Text style={{ color: '#D97706' }}>TAXI</Text>
+                </Text>
+                <Text style={styles.heroBrandTier}>COMMERCIAL FLEET PARTNER</Text>
+              </View>
+            </View>
+
+            <View style={styles.heroIdBadge}>
+              <Ionicons name="shield-checkmark" size={12} color="#059669" />
+              <Text style={styles.heroIdText}>DRV-{driver?.id || user?.id || '001'}</Text>
+            </View>
+          </View>
+
           <TouchableOpacity
             style={styles.avatarWrapper}
             onPress={() => setPhotoModalVisible(true)}
             activeOpacity={0.85}
             disabled={uploadingPhoto}
           >
-            <View style={styles.avatar}>
-              {avatarUri ? (
-                <Image source={{ uri: avatarUri }} style={styles.avatarImg} resizeMode="cover" />
-              ) : (
-                <Text style={styles.avatarText}>{(driver?.name?.[0] || user?.name?.[0] || 'D').toUpperCase()}</Text>
-              )}
-              {uploadingPhoto && (
-                <View style={styles.avatarLoadingOverlay}>
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                </View>
-              )}
+            <View style={styles.avatarRing}>
+              <View style={styles.avatar}>
+                {avatarUri ? (
+                  <Image source={{ uri: avatarUri }} style={styles.avatarImg} resizeMode="cover" />
+                ) : (
+                  <Text style={styles.avatarText}>{(driver?.name?.[0] || user?.name?.[0] || 'D').toUpperCase()}</Text>
+                )}
+                {uploadingPhoto && (
+                  <View style={styles.avatarLoadingOverlay}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  </View>
+                )}
+              </View>
             </View>
             <View style={styles.cameraIconBtn}>
-              <Ionicons name="camera" size={14} color={COLORS.white} />
+              <Ionicons name="camera" size={13} color={COLORS.white} />
             </View>
           </TouchableOpacity>
 
           <Text style={styles.driverNameText}>{driver?.name || user?.name || 'Driver Partner'}</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+
+          {/* Vehicle Info Badge Pill */}
+          <View style={styles.vehicleBadgePill}>
+            <Ionicons name="car" size={12} color="#D97706" />
+            <Text style={styles.vehicleBadgeText}>
+              {driver?.vehicle_type || 'Commercial Cab'} · {driver?.plate_no || 'Verified Partner'}
+            </Text>
+          </View>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
             {((
               (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
               (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
@@ -609,7 +652,6 @@ const DriverProfileScreen = ({ navigation }) => {
               <Text style={styles.ratingPillText}>{driver?.rating || '5.0'} Rating</Text>
             </View>
           </View>
-          <Text style={styles.driverIdText}>PARTNER ID: #DRV-{driver?.id || user?.id || '—'}</Text>
         </View>
 
         {/* Vehicle & Partner Details Card */}
@@ -1350,36 +1392,129 @@ const styles = StyleSheet.create({
   },
   profileHero: {
     backgroundColor: COLORS.white,
-    borderRadius: RADIUS.xxl,
-    padding: 20,
+    borderRadius: 24,
+    padding: 18,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
     marginBottom: 16,
-    ...SHADOW.small,
+    ...SHADOW.md,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  heroTopAccent: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 4,
+    backgroundColor: '#FFC700',
+  },
+  driverWatermarkLogo: {
+    position: 'absolute',
+    right: -40,
+    bottom: -40,
+    width: 240,
+    height: 240,
+    opacity: 0.08,
+    transform: [{ rotate: '-12deg' }],
+  },
+  heroHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  heroBrandBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  heroBrandTitle: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: 0.6,
+  },
+  heroBrandTier: {
+    fontSize: 8.5,
+    fontWeight: '800',
+    color: '#94A3B8',
+    letterSpacing: 0.8,
+  },
+  heroIdBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingHorizontal: 9,
+    paddingVertical: 3.5,
+    borderRadius: 12,
+  },
+  heroIdText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#059669',
+    letterSpacing: 0.5,
   },
   avatarWrapper: {
     position: 'relative',
+    width: 88,
+    height: 88,
     marginBottom: 10,
   },
+  avatarRing: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    padding: 3,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 2,
+    borderColor: '#F59E0B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...SHADOW.sm,
+  },
   avatar: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: COLORS.primary,
+    width: '100%',
+    height: '100%',
+    borderRadius: 41,
+    backgroundColor: '#0F172A',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   avatarImg: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+    width: '100%',
+    height: '100%',
   },
   avatarText: {
-    fontSize: 28,
+    fontSize: 32,
     fontWeight: '900',
-    color: COLORS.white,
+    color: '#FFC700',
+  },
+  vehicleBadgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    paddingHorizontal: 12,
+    paddingVertical: 4.5,
+    borderRadius: 14,
+    marginTop: 6,
+  },
+  vehicleBadgeText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#92400E',
   },
   cameraIconBtn: {
     position: 'absolute',

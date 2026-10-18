@@ -315,18 +315,33 @@ const ProfileScreen = ({ navigation }) => {
         
         {/* Profile Header Card */}
         <View style={styles.profileCard}>
+          <View style={styles.cardTopAccent} />
+
+          {/* Large Luxury Embossed Watermark */}
+          <Image
+            source={require('../../../assets/cityonetaxi_badge.png')}
+            style={styles.watermarkLogo}
+            resizeMode="contain"
+            pointerEvents="none"
+          />
+
           {/* Customer Brand & ID Header */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 12 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <View style={styles.cardHeaderRow}>
+            <View style={styles.cardBrandBadge}>
               <Image
                 source={require('../../../assets/cityonetaxi_badge.png')}
-                style={{ width: 24, height: 24 }}
+                style={{ width: 22, height: 22 }}
                 resizeMode="contain"
               />
-              <Text style={{ fontSize: 13, fontWeight: '800', color: '#0F172A' }}>CityOneTaxi</Text>
+              <View>
+                <Text style={styles.cardBrandName}>
+                  CITYONE <Text style={{ color: '#D97706' }}>TAXI</Text>
+                </Text>
+                <Text style={styles.cardBrandTier}>PRIVILEGE PASSENGER</Text>
+              </View>
             </View>
             <View style={styles.idBadge}>
-              <Ionicons name="pricetag-outline" size={12} color="#64748B" />
+              <Ionicons name="finger-print" size={12} color="#D97706" />
               <Text style={styles.idText}>ID: {user?.id ? `CUST-${user.id}` : '—'}</Text>
             </View>
           </View>
@@ -338,32 +353,47 @@ const ProfileScreen = ({ navigation }) => {
             activeOpacity={0.85}
             disabled={uploading}
           >
-            <View style={styles.avatar}>
-              {avatarUri ? (
-                <Image
-                  source={{ uri: avatarUri }}
-                  style={styles.avatarImg}
-                  resizeMode="cover"
-                />
-              ) : (
-                <Text style={styles.avatarText}>{(user?.name?.[0] || 'U').toUpperCase()}</Text>
-              )}
-              {uploading && (
-                <View style={styles.avatarLoadingOverlay}>
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                </View>
-              )}
+            <View style={styles.avatarRing}>
+              <View style={styles.avatar}>
+                {avatarUri ? (
+                  <Image
+                    source={{ uri: avatarUri }}
+                    style={styles.avatarImg}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Text style={styles.avatarText}>{(user?.name?.[0] || 'U').toUpperCase()}</Text>
+                )}
+                {uploading && (
+                  <View style={styles.avatarLoadingOverlay}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  </View>
+                )}
+              </View>
             </View>
 
             {/* Photo Edit Floating Trigger */}
             <View style={styles.cameraBtn}>
-              <Ionicons name="camera" size={15} color="#FFFFFF" />
+              <Ionicons name="camera" size={14} color="#FFFFFF" />
             </View>
           </TouchableOpacity>
 
           <Text style={styles.name}>{user?.name || 'Customer'}</Text>
-          <Text style={styles.email}>{user?.email || '—'}</Text>
-          <Text style={styles.phone}>{user?.phone || '—'}</Text>
+
+          <View style={styles.contactRow}>
+            {Boolean(user?.phone) && (
+              <View style={styles.contactChip}>
+                <Ionicons name="call-outline" size={11} color="#64748B" />
+                <Text style={styles.contactChipText}>{user.phone}</Text>
+              </View>
+            )}
+            {Boolean(user?.email) && (
+              <View style={styles.contactChip}>
+                <Ionicons name="mail-outline" size={11} color="#64748B" />
+                <Text style={styles.contactChipText}>{user.email}</Text>
+              </View>
+            )}
+          </View>
 
           {/* Verified Status Badge */}
           {(() => {
@@ -672,18 +702,26 @@ const ProfileScreen = ({ navigation }) => {
 
 const styles = StyleSheet.create({
   container:             { flex: 1, backgroundColor: COLORS.background },
-  profileCard:           { backgroundColor: COLORS.white, borderRadius: RADIUS.xxl, padding: SPACING.xl, alignItems: 'center', marginVertical: SPACING.lg, ...SHADOW.sm, borderWidth: 1, borderColor: COLORS.gray200, position: 'relative' },
-  idBadge:               { position: 'absolute', top: 14, right: 14, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#F1F5F9', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
-  idText:                { fontSize: 11, fontWeight: '800', color: '#475569' },
-  avatarWrapper:         { position: 'relative', width: 88, height: 88, marginBottom: SPACING.md },
-  avatar:                { width: 88, height: 88, borderRadius: 44, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', ...SHADOW.md, overflow: 'hidden' },
+  profileCard:           { backgroundColor: COLORS.white, borderRadius: 24, padding: 18, alignItems: 'center', marginVertical: 14, ...SHADOW.md, borderWidth: 1.5, borderColor: '#FDE68A', position: 'relative', overflow: 'hidden' },
+  cardTopAccent:         { position: 'absolute', top: 0, left: 0, right: 0, height: 4, backgroundColor: '#FFC700' },
+  watermarkLogo:         { position: 'absolute', right: -35, bottom: -35, width: 220, height: 220, opacity: 0.08, transform: [{ rotate: '-12deg' }] },
+  cardHeaderRow:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#F1F5F9' },
+  cardBrandBadge:        { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  cardBrandName:         { fontSize: 13, fontWeight: '900', color: '#0F172A', letterSpacing: 0.6 },
+  cardBrandTier:         { fontSize: 8.5, fontWeight: '800', color: '#94A3B8', letterSpacing: 0.8 },
+  idBadge:               { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#FFFBEB', borderWidth: 1, borderColor: '#FDE68A', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  idText:                { fontSize: 11, fontWeight: '800', color: '#B45309', letterSpacing: 0.5 },
+  avatarWrapper:         { position: 'relative', width: 92, height: 92, marginBottom: 10 },
+  avatarRing:            { width: 92, height: 92, borderRadius: 46, padding: 3, backgroundColor: '#FFFBEB', borderWidth: 2, borderColor: '#F59E0B', alignItems: 'center', justifyContent: 'center', ...SHADOW.sm },
+  avatar:                { width: '100%', height: '100%', borderRadius: 43, backgroundColor: '#0F172A', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   avatarImg:             { width: '100%', height: '100%' },
-  avatarText:            { fontSize: 34, fontWeight: '900', color: COLORS.white },
+  avatarText:            { fontSize: 34, fontWeight: '900', color: '#FFC700' },
   avatarLoadingOverlay:  { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
-  cameraBtn:             { position: 'absolute', bottom: 0, right: 0, width: 28, height: 28, borderRadius: 14, backgroundColor: COLORS.primary, alignItems: 'center', justifyContent: 'center', borderWidth: 2.5, borderColor: COLORS.white, ...SHADOW.sm },
-  name:                  { fontSize: FONTS.sizes.xl, fontWeight: '900', color: COLORS.text },
-  email:                 { fontSize: FONTS.sizes.sm, color: COLORS.textMuted, marginTop: 2 },
-  phone:                 { fontSize: FONTS.sizes.xs, color: COLORS.textLight, marginTop: 2 },
+  cameraBtn:             { position: 'absolute', bottom: 1, right: 1, width: 28, height: 28, borderRadius: 14, backgroundColor: '#D97706', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: COLORS.white, ...SHADOW.sm },
+  name:                  { fontSize: 20, fontWeight: '900', color: '#0F172A', letterSpacing: 0.3 },
+  contactRow:            { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 6 },
+  contactChip:           { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  contactChipText:       { fontSize: 11, fontWeight: '600', color: '#475569' },
   verifiedBadge:         { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#DCFCE7', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 20, marginTop: SPACING.md },
   verifiedText:          { fontSize: 12, fontWeight: '800', color: '#15803D' },
   statsRow:              { flexDirection: 'row', gap: SPACING.md, marginBottom: SPACING.lg },
