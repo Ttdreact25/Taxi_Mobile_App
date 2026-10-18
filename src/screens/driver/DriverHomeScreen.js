@@ -2561,7 +2561,7 @@ const DriverHomeScreen = ({ navigation }) => {
                         >
                           <Ionicons name="navigate" size={18} color="#FFFFFF" />
                           <Text style={styles.gogoNavBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
-                            📍 Open Google Maps Navigation (Pickup)
+                            Open Google Maps Navigation (Pickup)
                           </Text>
                         </TouchableOpacity>
 
@@ -2633,7 +2633,7 @@ const DriverHomeScreen = ({ navigation }) => {
                         >
                           <Ionicons name="navigate" size={18} color="#FFFFFF" />
                           <Text style={styles.gogoNavBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
-                            {!isTripStarted ? '📍 Open Google Maps Navigation (Pickup)' : '📍 Open Google Maps Navigation (Drop)'}
+                            {!isTripStarted ? 'Open Google Maps Navigation (Pickup)' : 'Open Google Maps Navigation (Drop)'}
                           </Text>
                         </TouchableOpacity>
 

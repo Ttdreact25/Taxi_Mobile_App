@@ -501,8 +501,8 @@ const DriverDocumentsScreen = ({ navigation }) => {
 
       setKycPolicyInfo({
         policy: pol || "1. Upload clear photos of your original Driving License and Vehicle RC Book.\n2. All documents must be clearly legible and currently valid.\n3. Documents will be reviewed and verified by Admin CRM within 24 hours.\n4. For any assistance, contact our official verification hub address or helpline.",
-        address: addr || "No. 12, Anna Salai, Near Mount Road Metro, Chennai, Tamil Nadu - 600002",
-        phone: ph || "+91 98765 43210",
+        address: addr || "No. 6A, Co-operative Colony, Medical College Road, 1st St, Thanjavur, Tamil Nadu 613007",
+        phone: ph || "+91 95660 90798",
       })
 
       // Strict Driver KYC check:
@@ -1208,7 +1208,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
               <View style={{ flex: 1, marginLeft: 8 }}>
                 <Text style={styles.policyMetaLabel}>VERIFICATION HUB ADDRESS:</Text>
                 <Text style={styles.policyAddressValue}>
-                  {kycPolicyInfo.address || 'No. 12, Anna Salai, Near Mount Road Metro, Chennai, Tamil Nadu - 600002'}
+                  {kycPolicyInfo.address || 'No. 6A, Co-operative Colony, Medical College Road, 1st St, Thanjavur, Tamil Nadu 613007'}
                 </Text>
               </View>
             </View>
@@ -1221,14 +1221,14 @@ const DriverDocumentsScreen = ({ navigation }) => {
               <View style={{ flex: 1, marginLeft: 8 }}>
                 <Text style={styles.policyMetaLabel}>DRIVER SUPPORT HELPLINE:</Text>
                 <Text style={styles.policyPhoneValue}>
-                  {kycPolicyInfo.phone || '+91 98765 43210'}
+                  {kycPolicyInfo.phone || '+91 95660 90798'}
                 </Text>
               </View>
               <TouchableOpacity
                 style={styles.policyCallBtn}
                 activeOpacity={0.8}
                 onPress={() => {
-                  const num = (kycPolicyInfo.phone || '+919876543210').replace(/\s+/g, '')
+                  const num = (kycPolicyInfo.phone || '+919566090798').replace(/\s+/g, '')
                   Linking.openURL(`tel:${num}`).catch(() => {
                     Alert.alert('Phone Call', `Helpline number: ${kycPolicyInfo.phone}`)
                   })

@@ -73,11 +73,11 @@ const SupportScreen = ({ navigation }) => {
   }
 
   const handleCall = () => {
-    Linking.openURL('tel:1800123456').catch(() => Alert.alert('Error', 'Unable to initiate call'))
+    Linking.openURL('tel:+919566090798').catch(() => Alert.alert('Error', 'Unable to initiate call'))
   }
 
   const handleWhatsApp = () => {
-    Linking.openURL('https://wa.me/919876543210?text=Hello%20CityOneTaxi%20Support').catch(() => Alert.alert('Error', 'Unable to open WhatsApp'))
+    Linking.openURL('https://wa.me/919566090798?text=Hello%20CityOneTaxi%20Support').catch(() => Alert.alert('Error', 'Unable to open WhatsApp'))
   }
 
   return (

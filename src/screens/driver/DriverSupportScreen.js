@@ -126,12 +126,12 @@ const DriverSupportScreen = ({ navigation }) => {
 
         {/* Partner Support Contact */}
         <View style={styles.contactRow}>
-          <TouchableOpacity style={styles.contactCard} onPress={() => Linking.openURL('tel:+919876543210')}>
+          <TouchableOpacity style={styles.contactCard} onPress={() => Linking.openURL('tel:+919566090798')}>
             <Ionicons name="call-outline" size={22} color={COLORS.primary} />
             <Text style={styles.contactCardTitle}>Call Dispatch</Text>
             <Text style={styles.contactCardSub}>24x7 Control Room</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.contactCard} onPress={() => Linking.openURL('https://wa.me/919876543210')}>
+          <TouchableOpacity style={styles.contactCard} onPress={() => Linking.openURL('https://wa.me/919566090798')}>
             <Ionicons name="logo-whatsapp" size={22} color="#10B981" />
             <Text style={styles.contactCardTitle}>WhatsApp Help</Text>
             <Text style={styles.contactCardSub}>Instant Chat</Text>
