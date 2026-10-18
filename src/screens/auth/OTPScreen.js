@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   Platform,
   ScrollView,
   Image,
+  Modal,
+  Animated,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -30,6 +32,33 @@ const OTPScreen = ({ route, navigation }) => {
   const [resending, setResending] = useState(false)
   const [focusedIndex, setFocusedIndex] = useState(0)
   const refs = [useRef(), useRef(), useRef(), useRef(), useRef(), useRef()]
+
+  // Professional Success Modal State
+  const [showSuccessModal, setShowSuccessModal] = useState(false)
+  const [successModalInfo, setSuccessModalInfo] = useState(null)
+  const modalScale = useRef(new Animated.Value(0.85)).current
+  const modalOpacity = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    if (showSuccessModal) {
+      Animated.parallel([
+        Animated.spring(modalScale, {
+          toValue: 1,
+          friction: 6,
+          tension: 65,
+          useNativeDriver: true,
+        }),
+        Animated.timing(modalOpacity, {
+          toValue: 1,
+          duration: 220,
+          useNativeDriver: true,
+        }),
+      ]).start()
+    } else {
+      modalScale.setValue(0.85)
+      modalOpacity.setValue(0)
+    }
+  }, [showSuccessModal])
 
   const handleChange = (val, idx) => {
     const newOtp = [...otp]
@@ -68,20 +97,49 @@ const OTPScreen = ({ route, navigation }) => {
 
       if (res.data?.token) {
         await tokenManager.save(res.data.token)
-        if (res.data?.user) {
-          updateUser(res.data.user)
-        }
-        if (isLogin || isDriver) {
-          Alert.alert('Welcome Back! 🚗', 'Driver login verified successfully via Email OTP.')
+        const userObj = res.data.user || {}
+        const isDriverRole = isDriver || userObj.role_slug === 'driver' || userObj.role_id === 2
+
+        if (isLogin || isDriverRole) {
+          setSuccessModalInfo({
+            title: 'Welcome Back!',
+            badge: isDriverRole ? 'VERIFIED DRIVER PARTNER' : 'VERIFIED PASSENGER',
+            message: isDriverRole
+              ? 'Driver login verified successfully via Email OTP.'
+              : 'Login verified successfully via Email OTP.',
+            buttonText: isDriverRole ? 'Go to Dashboard' : 'Continue to App',
+            onProceed: () => {
+              setShowSuccessModal(false)
+              updateUser(userObj)
+            },
+          })
+          setShowSuccessModal(true)
           return
         }
-        Alert.alert('Verified! 🎉', 'Welcome to CityOneTaxi! Your account is now verified.', [
-          { text: 'Get Started', onPress: () => navigation.navigate('Login') }
-        ])
+
+        setSuccessModalInfo({
+          title: 'Account Verified!',
+          badge: 'WELCOME TO CITYONETAXI',
+          message: res.data?.message || 'Your account has been verified successfully. Welcome aboard!',
+          buttonText: 'Sign In Now',
+          onProceed: () => {
+            setShowSuccessModal(false)
+            navigation.navigate('Login')
+          },
+        })
+        setShowSuccessModal(true)
       } else {
-        Alert.alert('Verified! 🎉', res.data?.message || 'Email verified successfully. Please sign in.', [
-          { text: 'Sign In Now', onPress: () => navigation.navigate('Login') }
-        ])
+        setSuccessModalInfo({
+          title: 'Account Verified!',
+          badge: 'SECURITY VERIFIED',
+          message: res.data?.message || 'Email verified successfully. Please sign in.',
+          buttonText: 'Sign In Now',
+          onProceed: () => {
+            setShowSuccessModal(false)
+            navigation.navigate('Login')
+          },
+        })
+        setShowSuccessModal(true)
       }
     } catch (err) {
       Alert.alert('Invalid Code', err.response?.data?.message || err.message || 'Incorrect verification code. Please check your email and retry.')
@@ -209,6 +267,87 @@ const OTPScreen = ({ route, navigation }) => {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* ── Professional Welcome / Success Alert Modal ── */}
+      <Modal
+        visible={showSuccessModal}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => {
+          if (successModalInfo?.onProceed) successModalInfo.onProceed()
+        }}
+      >
+        <View style={styles.modalBackdrop}>
+          <Animated.View
+            style={[
+              styles.modalCard,
+              {
+                opacity: modalOpacity,
+                transform: [{ scale: modalScale }],
+              },
+            ]}
+          >
+            {/* Ambient Top Glow Bar */}
+            <View style={styles.modalTopAccent} />
+
+            {/* Unique 3D Badge Icon */}
+            <View style={styles.modalIconRing}>
+              <View style={styles.modalIconSquare}>
+                <Image
+                  source={require('../../../assets/cityonetaxi_badge.png')}
+                  style={styles.modalBadgeImg}
+                  resizeMode="contain"
+                />
+              </View>
+              {/* Floating Verified Badge */}
+              <View style={styles.modalCheckBadge}>
+                <Ionicons name="checkmark-sharp" size={15} color="#FFFFFF" />
+              </View>
+            </View>
+
+            {/* Tag Pill */}
+            <View style={styles.modalTagPill}>
+              <Ionicons name="shield-checkmark" size={13} color="#059669" />
+              <Text style={styles.modalTagText}>
+                {successModalInfo?.badge || 'VERIFIED DRIVER PARTNER'}
+              </Text>
+            </View>
+
+            {/* Modal Title */}
+            <Text style={styles.modalTitle}>{successModalInfo?.title || 'Welcome Back!'}</Text>
+
+            {/* Modal Body Message */}
+            <Text style={styles.modalBody}>
+              {successModalInfo?.message || 'Driver login verified successfully via Email OTP.'}
+            </Text>
+
+            {/* Security Assurance Badge */}
+            <View style={styles.modalSecRow}>
+              <Ionicons name="lock-closed" size={12} color="#64748B" />
+              <Text style={styles.modalSecText}>256-Bit SSL Secured • Active Session</Text>
+            </View>
+
+            {/* Primary Action Button */}
+            <TouchableOpacity
+              style={styles.modalActionBtn}
+              onPress={() => {
+                if (successModalInfo?.onProceed) {
+                  successModalInfo.onProceed()
+                }
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.modalActionBtnText}>
+                {successModalInfo?.buttonText || 'Go to Dashboard'}
+              </Text>
+              <View style={styles.modalArrowCircle}>
+                <Ionicons name="arrow-forward" size={15} color="#0F172A" />
+              </View>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      </Modal>
     </SafeAreaView>
   )
 }
@@ -371,6 +510,176 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: COLORS.textMuted,
+  },
+
+  /* ── Professional Welcome Modal Styles ── */
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 350,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 28,
+    paddingTop: 28,
+    paddingBottom: 24,
+    paddingHorizontal: 22,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#F1F5F9',
+    position: 'relative',
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.25,
+    shadowRadius: 28,
+    elevation: 24,
+  },
+  modalTopAccent: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 5,
+    backgroundColor: '#FFC700',
+  },
+  modalIconRing: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: '#FFFBEB',
+    borderWidth: 2.5,
+    borderColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    position: 'relative',
+    shadowColor: '#F59E0B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  modalIconSquare: {
+    width: 66,
+    height: 66,
+    borderRadius: 20,
+    backgroundColor: '#FFC700',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#B45309',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  modalBadgeImg: {
+    width: 48,
+    height: 48,
+  },
+  modalCheckBadge: {
+    position: 'absolute',
+    bottom: -1,
+    right: -1,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#10B981',
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  modalTagPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  modalTagText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#065F46',
+    letterSpacing: 0.5,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: 0.2,
+    textAlign: 'center',
+  },
+  modalBody: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: '#475569',
+    textAlign: 'center',
+    lineHeight: 19,
+    marginTop: 6,
+    paddingHorizontal: 8,
+  },
+  modalSecRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+    marginTop: 14,
+    marginBottom: 18,
+  },
+  modalSecText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  modalActionBtn: {
+    width: '100%',
+    backgroundColor: '#FFC700',
+    borderRadius: 16,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    shadowColor: '#F59E0B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  modalActionBtnText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: 0.3,
+  },
+  modalArrowCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(15, 23, 42, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 })
 
