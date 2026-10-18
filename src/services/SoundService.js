@@ -140,26 +140,27 @@ let isPlayingCustomerSound = false
 let lastDriverSoundTime = 0
 let lastCustomerSoundTime = 0
 
-// Global alerted trip cache to prevent double-voice or duplicate alerts across screens
-const alertedTripKeys = new Set()
+// Permanent Session Cache: Ensures sounds play STRICTLY ONCE per booking/trip across the entire app session
+const playedDriverBookingIds = new Set()
+const playedCustomerArrivalTripIds = new Set()
 
 /**
  * Unified Driver Booking Alert:
  * Plays the loud, clear voice alert: "Booking received! Booking received! New ride assigned."
- * Protected by global debounce + single-instance lock to prevent rapid cancellation or duplication.
+ * STRICT REQUIREMENT: Plays EXACTLY 1 TIME when the booking request first arrives. Never repeats.
  */
 export const playDriverBookingAlert = async (bookingIdOrRef = '') => {
+  const idStr = bookingIdOrRef ? String(bookingIdOrRef).trim() : ''
+
+  // Must have a valid booking ID, and must NOT have played for this booking before
+  if (!idStr) return
+  if (playedDriverBookingIds.has(idStr)) return
+
+  // Register immediately to prevent race conditions from concurrent triggers
+  playedDriverBookingIds.add(idStr)
+
   const now = Date.now()
-  const key = `driver_${bookingIdOrRef || 'any'}`
-
-  // 1. If this exact ride was already alerted within 45s, or ANY driver sound played in last 4s, SKIP!
-  if (bookingIdOrRef && alertedTripKeys.has(key)) return
   if (isPlayingDriverSound || (now - lastDriverSoundTime < 4000)) return
-
-  if (bookingIdOrRef) {
-    alertedTripKeys.add(key)
-    setTimeout(() => alertedTripKeys.delete(key), 45000)
-  }
 
   isPlayingDriverSound = true
   lastDriverSoundTime = now
@@ -243,24 +244,28 @@ export const playBookingNotificationSound = async () => {
 /**
  * Unified Customer Arrival Alert:
  * Plays ONE single, crystal-clear voice alert: "Driver reached! Driver reached! Your driver has arrived..."
- * Protected by global cache so it NEVER echoes, doubles, or plays different sounds across screens.
+ * STRICT REQUIREMENT: Plays EXACTLY 1 TIME when the driver marks arrival at pickup. Never repeats.
  */
 export const playCustomerTaxiReachedAlert = async (tripIdOrName = '', driverName = '', vehicleDesc = '') => {
-  const tripId = (typeof tripIdOrName === 'number' || (typeof tripIdOrName === 'string' && /^\d+$/.test(tripIdOrName)))
-    ? String(tripIdOrName)
-    : (typeof driverName === 'number' || (typeof driverName === 'string' && /^\d+$/.test(driverName)) ? String(driverName) : '')
+  // Extract or normalize trip/booking identifier
+  let tripId = ''
+  if (tripIdOrName && typeof tripIdOrName === 'object') {
+    tripId = String(tripIdOrName.id || tripIdOrName.booking_id || tripIdOrName.booking_ref || '').trim()
+  } else if (tripIdOrName) {
+    tripId = String(tripIdOrName).trim()
+  } else if (driverName) {
+    tripId = String(driverName).trim()
+  }
+
+  // Must have a valid identifier, and must NOT have played for this trip arrival before
+  if (!tripId) return
+  if (playedCustomerArrivalTripIds.has(tripId)) return
+
+  // Register immediately to lock and prevent duplicate playback across screens
+  playedCustomerArrivalTripIds.add(tripId)
 
   const now = Date.now()
-  const key = `customer_${tripId || 'active'}`
-
-  // If this exact trip arrival was already alerted in last 60s, or ANY customer sound played in last 6s, SKIP!
-  if (tripId && alertedTripKeys.has(key)) return
   if (isPlayingCustomerSound || (now - lastCustomerSoundTime < 6000)) return
-
-  if (tripId) {
-    alertedTripKeys.add(key)
-    setTimeout(() => alertedTripKeys.delete(key), 60000)
-  }
 
   isPlayingCustomerSound = true
   lastCustomerSoundTime = now

@@ -835,9 +835,6 @@ const DriverHomeScreen = ({ navigation }) => {
           const t = `${n.title || ''} ${n.body || ''} ${n.type || ''}`.toLowerCase()
           return t.includes('booking') || t.includes('assign') || t.includes('ride') || t.includes('complete') || t.includes('review') || t.includes('rated')
         }).length
-        if (prevUnreadNotifCountRef.current !== null && relevantUnread > prevUnreadNotifCountRef.current) {
-          playDriverAlertSound().catch(() => {})
-        }
         prevUnreadNotifCountRef.current = relevantUnread
         setUnreadNotifCount(relevantUnread)
       }
@@ -977,14 +974,7 @@ const DriverHomeScreen = ({ navigation }) => {
     return () => {}
   }, [pendingRides])
 
-  // Instant Sound Alert whenever Accept/Decline Instant Ride Popup opens
-  useEffect(() => {
-    if (pendingRides[0]?.id) {
-      playDriverAlertSound(pendingRides[0].id).catch(() => {})
-    }
-  }, [pendingRides[0]?.id])
-
-  // Immediate Sound Alert whenever Assigned Ride Alert Modal opens
+  // Immediate Sound Alert whenever Assigned Ride Alert Modal opens (Strictly 1 time)
   useEffect(() => {
     if (assignedAlertTrip?.id) {
       playDriverAlertSound(assignedAlertTrip.id).catch(() => {})
