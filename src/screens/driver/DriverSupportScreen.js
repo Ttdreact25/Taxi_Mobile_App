@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, ActivityIndicator, Alert, Linking
+  TextInput, ActivityIndicator, Alert, Linking, Image
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -81,6 +81,34 @@ const DriverSupportScreen = ({ navigation }) => {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* Official Driver Partner Support Card */}
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 14,
+          backgroundColor: '#FFFFFF',
+          padding: 16,
+          borderRadius: 18,
+          marginBottom: 16,
+          borderWidth: 1,
+          borderColor: '#E2E8F0',
+          elevation: 2,
+          shadowColor: '#0F172A',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.05,
+          shadowRadius: 6,
+        }}>
+          <Image
+            source={require('../../../assets/cityonetaxi_badge.png')}
+            style={{ width: 48, height: 48 }}
+            resizeMode="contain"
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: '#0F172A' }}>Driver Partner Help Desk</Text>
+            <Text style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>24/7 Dispatch Control & Fleet Support</Text>
+          </View>
+        </View>
+
         {/* Emergency SOS Hotline */}
         <View style={styles.sosCard}>
           <View style={styles.sosIconWrap}>

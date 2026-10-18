@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Image,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -123,9 +124,11 @@ const OTPScreen = ({ route, navigation }) => {
 
           {/* Header Icon & Title */}
           <View style={styles.header}>
-            <View style={styles.iconCircle}>
-              <Ionicons name="mail-unread" size={32} color={COLORS.white} />
-            </View>
+            <Image
+              source={require('../../../assets/cityonetaxi_badge.png')}
+              style={{ width: 72, height: 72, marginBottom: 12, alignSelf: 'center' }}
+              resizeMode="contain"
+            />
             <Text style={styles.brandTitle}>Enter 6-Digit Email OTP</Text>
             <Text style={styles.subtitle}>
               We have dispatched a verification code strictly to your registered email:

@@ -1135,7 +1135,14 @@ const DriverProfileScreen = ({ navigation }) => {
           <Text style={styles.deleteText}>Delete Driver Account & Erase Records</Text>
         </TouchableOpacity>
 
-        <Text style={styles.appVer}>CityOneTaxi Driver Partner Platform · Secure 256-Bit SSL</Text>
+        <View style={{ alignItems: 'center', marginTop: 24, marginBottom: 12 }}>
+          <Image
+            source={require('../../../assets/cityonetaxi_badge.png')}
+            style={{ width: 44, height: 44, marginBottom: 8 }}
+            resizeMode="contain"
+          />
+          <Text style={styles.appVer}>CityOneTaxi Driver Partner Platform · Secure 256-Bit SSL</Text>
+        </View>
       </ScrollView>
 
       {/* Edit Profile Modal */}

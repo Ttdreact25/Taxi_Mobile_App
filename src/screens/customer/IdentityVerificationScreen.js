@@ -370,10 +370,14 @@ const IdentityVerificationScreen = ({ navigation }) => {
         {/* Requirements Banner */}
         <View style={styles.infoBanner}>
           <View style={styles.infoBannerIconWrap}>
-            <Ionicons name="shield-checkmark" size={22} color="#D97706" />
+            <Image
+              source={require('../../../assets/cityonetaxi_badge.png')}
+              style={{ width: 26, height: 26 }}
+              resizeMode="contain"
+            />
           </View>
           <Text style={styles.infoBannerText}>
-            Aadhaar KYC identity verification is required for 50/50 Shared Long Trips to ensure complete passenger safety and verified profiles.
+            CityOneTaxi Aadhaar KYC verification is required for 50/50 Shared Long Trips to ensure complete passenger safety and verified profiles.
           </Text>
         </View>
 

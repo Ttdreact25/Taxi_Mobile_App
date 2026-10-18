@@ -307,10 +307,14 @@ const HomeScreen = ({ navigation }) => {
               </Text>
             </View>
 
-            {/* Subtle Stylized White Car Graphic in Yellow Header */}
+            {/* Subtle Stylized Brand Logo Graphic in Yellow Header */}
             <View style={styles.heroCarGraphicWrap} pointerEvents="none">
               <View style={styles.miniCarBadge}>
-                <Ionicons name="car-sport" size={26} color="#FFFFFF" />
+                <Image
+                  source={require('../../../assets/cityonetaxi_badge.png')}
+                  style={{ width: 42, height: 42 }}
+                  resizeMode="contain"
+                />
               </View>
             </View>
           </View>

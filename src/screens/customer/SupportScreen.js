@@ -9,6 +9,7 @@ import {
   Alert,
   ActivityIndicator,
   Linking,
+  Image,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -95,6 +96,34 @@ const SupportScreen = ({ navigation }) => {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
+        {/* Official Brand Support Banner */}
+        <View style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 14,
+          backgroundColor: '#FFFFFF',
+          padding: 16,
+          borderRadius: 18,
+          marginBottom: 16,
+          borderWidth: 1,
+          borderColor: '#E2E8F0',
+          elevation: 2,
+          shadowColor: '#0F172A',
+          shadowOffset: { width: 0, height: 2 },
+          shadowOpacity: 0.05,
+          shadowRadius: 6,
+        }}>
+          <Image
+            source={require('../../../assets/cityonetaxi_badge.png')}
+            style={{ width: 48, height: 48 }}
+            resizeMode="contain"
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: '#0F172A' }}>CityOneTaxi 24/7 Desk</Text>
+            <Text style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>Official Customer Assistance & Live SOS</Text>
+          </View>
+        </View>
+
         {/* Quick Contact Hero Row */}
         <View style={styles.quickContactRow}>
           <TouchableOpacity style={styles.quickCard} onPress={handleCall} activeOpacity={0.85}>

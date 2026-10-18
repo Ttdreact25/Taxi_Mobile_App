@@ -315,10 +315,20 @@ const ProfileScreen = ({ navigation }) => {
         
         {/* Profile Header Card */}
         <View style={styles.profileCard}>
-          {/* Customer ID Badge */}
-          <View style={styles.idBadge}>
-            <Ionicons name="pricetag-outline" size={12} color="#64748B" />
-            <Text style={styles.idText}>ID: {user?.id ? `CUST-${user.id}` : '—'}</Text>
+          {/* Customer Brand & ID Header */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 12 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Image
+                source={require('../../../assets/cityonetaxi_badge.png')}
+                style={{ width: 24, height: 24 }}
+                resizeMode="contain"
+              />
+              <Text style={{ fontSize: 13, fontWeight: '800', color: '#0F172A' }}>CityOneTaxi</Text>
+            </View>
+            <View style={styles.idBadge}>
+              <Ionicons name="pricetag-outline" size={12} color="#64748B" />
+              <Text style={styles.idText}>ID: {user?.id ? `CUST-${user.id}` : '—'}</Text>
+            </View>
           </View>
 
           {/* Avatar Container with Upload Icon */}
@@ -439,7 +449,14 @@ const ProfileScreen = ({ navigation }) => {
           <Text style={styles.deleteText}>Delete Account & Erase Personal Data</Text>
         </TouchableOpacity>
 
-        <Text style={styles.appVer}>CityOneTaxi Customer App v1.0.0 · 256-Bit SSL Secured</Text>
+        <View style={{ alignItems: 'center', marginTop: 24, marginBottom: 12 }}>
+          <Image
+            source={require('../../../assets/cityonetaxi_badge.png')}
+            style={{ width: 44, height: 44, marginBottom: 8 }}
+            resizeMode="contain"
+          />
+          <Text style={styles.appVer}>CityOneTaxi Customer App v1.0.0 · 256-Bit SSL Secured</Text>
+        </View>
       </ScrollView>
 
       {/* Edit Profile Modal */}

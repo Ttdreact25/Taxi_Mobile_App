@@ -1,5 +1,5 @@
 import React from 'react'
-import { Modal, View, Text, TouchableOpacity, StyleSheet } from 'react-native'
+import { Modal, View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 
@@ -19,7 +19,11 @@ const TripRequestModal = ({ visible, request, onAccept, onDecline }) => {
           {/* Incoming Request Header */}
           <View style={styles.header}>
             <View style={styles.iconPulse}>
-              <Ionicons name="car-sport" size={22} color={COLORS.primary} />
+              <Image
+                source={require('../../../assets/cityonetaxi_badge.png')}
+                style={{ width: 34, height: 34 }}
+                resizeMode="contain"
+              />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.badgeText}>⚡ NEW RIDE REQUEST</Text>

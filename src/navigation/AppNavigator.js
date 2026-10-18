@@ -34,6 +34,14 @@ const AppNavigator = () => {
 
   const showSplash = loading || !splashFinished
 
+  if (showSplash) {
+    return (
+      <View style={styles.container}>
+        <SplashScreen onFinish={() => setSplashFinished(true)} />
+      </View>
+    )
+  }
+
   return (
     <View style={styles.container}>
       <NavigationContainer>
@@ -64,12 +72,6 @@ const AppNavigator = () => {
           )}
         </Stack.Navigator>
       </NavigationContainer>
-
-      {showSplash && (
-        <View style={StyleSheet.absoluteFillObject}>
-          <SplashScreen onFinish={() => setSplashFinished(true)} />
-        </View>
-      )}
     </View>
   )
 }

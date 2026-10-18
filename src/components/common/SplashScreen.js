@@ -31,7 +31,7 @@ export const SplashScreen = ({
       }
     }
 
-    const fallbackTimer = setTimeout(finishSafely, 2800)
+    const fallbackTimer = setTimeout(finishSafely, 3200)
 
     try {
       // 1. Entrance animation (fade in + logo spring)
@@ -70,12 +70,18 @@ export const SplashScreen = ({
         ])
       ).start()
 
-      // 3. Progress bar animation
+      // 3. Progress bar animation + graceful exit fade
       Animated.timing(progressAnim, {
         toValue: 1,
-        duration: 2350,
+        duration: 2200,
         useNativeDriver: false,
-      }).start(() => finishSafely())
+      }).start(() => {
+        Animated.timing(fadeAnim, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }).start(() => finishSafely())
+      })
     } catch {
       finishSafely()
     }
@@ -151,11 +157,11 @@ export const SplashScreen = ({
 
             {/* Feature Highlights Chip */}
             <View style={styles.highlightPill}>
-              <Text style={styles.highlightText}>⚡ Fast Cabs</Text>
+              <Text style={styles.highlightText}> Fast Cabs</Text>
               <Text style={styles.highlightDot}>•</Text>
-              <Text style={styles.highlightText}>🛡️ Safe Travel</Text>
+              <Text style={styles.highlightText}> Safe Travel</Text>
               <Text style={styles.highlightDot}>•</Text>
-              <Text style={styles.highlightText}>💰 Best Fares</Text>
+              <Text style={styles.highlightText}> Best Fares</Text>
             </View>
           </Animated.View>
         </Animated.View>
