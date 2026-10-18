@@ -84,7 +84,7 @@ const TabIcon = ({ routeName, focused }) => {
     <View style={[styles.iconPill, focused && styles.iconPillActive]}>
       <Ionicons
         name={focused ? iconSet.active : iconSet.inactive}
-        size={21}
+        size={25}
         color={focused ? '#0F172A' : '#64748B'}
       />
     </View>
@@ -101,10 +101,10 @@ const DriverTabs = () => {
         headerShown: false,
         tabBarShowLabel: true,
         tabBarLabelStyle: {
-          fontSize: 10.5,
+          fontSize: 11,
           fontWeight: '700',
           paddingBottom: 2,
-          marginTop: -2,
+          marginTop: -1,
           letterSpacing: 0.2,
         },
         tabBarActiveTintColor: '#0F172A',
@@ -113,8 +113,8 @@ const DriverTabs = () => {
           backgroundColor: '#FFFFFF',
           borderTopWidth: 1,
           borderTopColor: '#F1F5F9',
-          height: 62 + bottomInset,
-          paddingTop: 6,
+          height: 66 + bottomInset,
+          paddingTop: 5,
           paddingBottom: bottomInset,
           shadowColor: '#0F172A',
           shadowOffset: { width: 0, height: -4 },
@@ -135,9 +135,9 @@ const DriverTabs = () => {
 
 const styles = StyleSheet.create({
   iconPill: {
-    width: 46,
-    height: 30,
-    borderRadius: 15,
+    width: 52,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
   },
