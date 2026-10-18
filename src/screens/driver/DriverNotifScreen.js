@@ -20,10 +20,10 @@ import { SkeletonList } from '../../components/common/Skeleton'
 import EmptyState from '../../components/common/EmptyState'
 
 const FILTERS = [
-  { id: 'all',       label: 'All Updates' },
-  { id: 'bookings',  label: '🚖 Bookings' },
-  { id: 'completed', label: '✅ Completed Trips' },
-  { id: 'reviews',   label: '⭐ Customer Reviews' },
+  { id: 'all',       label: 'All Updates',       icon: 'layers-outline',            activeIcon: 'layers' },
+  { id: 'bookings',  label: 'Ride Dispatches',   icon: 'car-sport-outline',         activeIcon: 'car-sport' },
+  { id: 'completed', label: 'Completed Trips',   icon: 'checkmark-circle-outline',  activeIcon: 'checkmark-circle' },
+  { id: 'reviews',   label: 'Customer Reviews',  icon: 'star-outline',              activeIcon: 'star' },
 ]
 
 const DriverNotifScreen = ({ navigation }) => {
@@ -71,7 +71,7 @@ const DriverNotifScreen = ({ navigation }) => {
         pickup_address: r.pickup_address,
         dest_address: r.dest_address,
         created_at: r.created_at,
-        title: `⭐ ${r.rating}/5 Customer Rating`,
+        title: `${r.rating}/5 Customer Rating`,
         body: r.comment || 'Passenger gave you a 5-star rating for this ride!',
         type: 'review',
         is_read: 1,
@@ -147,7 +147,10 @@ const DriverNotifScreen = ({ navigation }) => {
                 )}
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.reviewCustName} numberOfLines={1}>{item.customer_name}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                  <Text style={styles.reviewCustName} numberOfLines={1}>{item.customer_name}</Text>
+                  <Ionicons name="checkmark-circle" size={13} color="#10B981" />
+                </View>
                 <Text style={styles.reviewRefText}>{item.booking_ref}</Text>
               </View>
             </View>
@@ -186,42 +189,72 @@ const DriverNotifScreen = ({ navigation }) => {
       )
     }
 
-    // 2. Regular Booking or Completion Notification Card
+    // 2. Regular Booking or Completion Notification Card with Corporate Icon Badges
     const isUnread = item.is_read == 0 || !item.is_read
     const text = `${item.title || ''} ${item.body || ''}`.toLowerCase()
     const isReviewNotif = text.includes('review') || text.includes('rated') || text.includes('star')
     const isCompleted = text.includes('complete')
 
-    let iconCfg = { icon: 'car-sport', color: '#2563EB', bg: '#DBEAFE' }
+    let iconCfg = {
+      icon: 'car-sport',
+      color: '#2563EB',
+      bg: '#EFF6FF',
+      border: '#BFDBFE',
+      tag: 'DISPATCH ALERT',
+      tagColor: '#1D4ED8',
+      tagBg: '#DBEAFE',
+    }
     if (isReviewNotif) {
-      iconCfg = { icon: 'star', color: '#F59E0B', bg: '#FEF3C7' }
+      iconCfg = {
+        icon: 'star',
+        color: '#D97706',
+        bg: '#FFFBEB',
+        border: '#FDE68A',
+        tag: 'PASSENGER REVIEW',
+        tagColor: '#B45309',
+        tagBg: '#FEF3C7',
+      }
     } else if (isCompleted) {
-      iconCfg = { icon: 'checkmark-circle', color: '#16A34A', bg: '#DCFCE7' }
+      iconCfg = {
+        icon: 'shield-checkmark',
+        color: '#059669',
+        bg: '#ECFDF5',
+        border: '#A7F3D0',
+        tag: 'TRIP COMPLETED',
+        tagColor: '#047857',
+        tagBg: '#D1FAE5',
+      }
     }
 
     return (
       <TouchableOpacity
         style={[styles.notifCard, isUnread ? styles.notifCardUnread : styles.notifCardRead]}
         onPress={() => handleMarkRead(item.id)}
-        activeOpacity={0.8}
+        activeOpacity={0.82}
       >
-        <View style={[styles.iconWrap, { backgroundColor: iconCfg.bg }]}>
-          <Ionicons name={iconCfg.icon} size={20} color={iconCfg.color} />
+        <View style={[styles.iconWrap, { backgroundColor: iconCfg.bg, borderColor: iconCfg.border }]}>
+          <Ionicons name={iconCfg.icon} size={22} color={iconCfg.color} />
         </View>
 
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <View style={styles.titleRow}>
-            <Text style={[styles.notifTitle, isUnread && styles.notifTitleBold]}>
-              {item.title || 'Trip Dispatch Alert'}
-            </Text>
+        <View style={{ flex: 1, marginLeft: 14 }}>
+          <View style={styles.cardHeaderTop}>
+            <View style={[styles.categoryPill, { backgroundColor: iconCfg.tagBg }]}>
+              <Text style={[styles.categoryPillText, { color: iconCfg.tagColor }]}>{iconCfg.tag}</Text>
+            </View>
             <Text style={styles.timeText}>
               {item.created_at ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now'}
             </Text>
           </View>
+
+          <View style={styles.titleRow}>
+            <Text style={[styles.notifTitle, isUnread && styles.notifTitleBold]}>
+              {item.title || 'Trip Dispatch Alert'}
+            </Text>
+            {isUnread && <View style={styles.unreadDot} />}
+          </View>
+
           <Text style={styles.notifMessage} numberOfLines={3}>{item.body || item.message}</Text>
         </View>
-
-        {isUnread && <View style={styles.unreadDot} />}
       </TouchableOpacity>
     )
   }
@@ -249,7 +282,14 @@ const DriverNotifScreen = ({ navigation }) => {
                 key={f.id}
                 style={[styles.filterChip, active && styles.filterChipActive]}
                 onPress={() => setFilter(f.id)}
+                activeOpacity={0.8}
               >
+                <Ionicons
+                  name={active ? f.activeIcon : f.icon}
+                  size={15}
+                  color={active ? '#0F172A' : '#64748B'}
+                  style={{ marginRight: 6 }}
+                />
                 <Text style={[styles.filterText, active && styles.filterTextActive]}>{f.label}</Text>
               </TouchableOpacity>
             )
@@ -345,8 +385,10 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F1F5F9',
   },
   filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 14,
-    paddingVertical: 7,
+    paddingVertical: 8,
     borderRadius: 20,
     backgroundColor: '#F1F5F9',
   },
@@ -356,10 +398,11 @@ const styles = StyleSheet.create({
   filterText: {
     fontSize: 12,
     fontWeight: '700',
-    color: COLORS.gray600,
+    color: '#475569',
   },
   filterTextActive: {
-    color: COLORS.white,
+    color: '#0F172A',
+    fontWeight: '800',
   },
   listContent: {
     padding: 16,
@@ -370,7 +413,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     backgroundColor: COLORS.white,
-    borderRadius: RADIUS.lg,
+    borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     borderColor: '#E2E8F0',
@@ -384,17 +427,39 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
   },
   iconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  cardHeaderTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  categoryPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  categoryPillText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   titleRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 4,
+    gap: 6,
   },
   notifTitle: {
     fontSize: 13.5,

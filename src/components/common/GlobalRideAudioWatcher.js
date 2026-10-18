@@ -75,7 +75,7 @@ const GlobalRideAudioWatcher = () => {
               // Play high-clarity Arrival Master Audio
               playCustomerTaxiReachedAlert(active.id, active.driver_name, active.plate_no || active.model).catch(() => {})
               PushNotificationService.showLocalArrivalNotification(
-                '🚖 Driver Reached!',
+                'Driver Reached',
                 `Driver ${active.driver_name || 'Partner'} has arrived at your pickup point.`
               )
             }
@@ -100,7 +100,7 @@ const GlobalRideAudioWatcher = () => {
                 alertedDriverRideIdRef.current = `pending_${pId}`
                 playDriverBookingReceived(pId).catch(() => {})
                 PushNotificationService.showLocalBookingAlertNotification(
-                  '🚗 New Booking Received!',
+                  'Booking Received',
                   `New ride request ${firstPending.booking_ref ? '#' + firstPending.booking_ref : ''}. Tap to accept.`
                 )
               }
@@ -113,7 +113,7 @@ const GlobalRideAudioWatcher = () => {
                 alertedDriverRideIdRef.current = `assigned_${aId}`
                 playDriverBookingReceived(aId).catch(() => {})
                 PushNotificationService.showLocalBookingAlertNotification(
-                  '🚗 New Booking Assigned!',
+                  'Booking Assigned',
                   `You have been assigned to ride ${activeTrip.booking_ref ? '#' + activeTrip.booking_ref : ''}.`
                 )
               }

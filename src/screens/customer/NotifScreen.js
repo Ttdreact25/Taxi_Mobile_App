@@ -12,11 +12,56 @@ import EmptyState from '../../components/common/EmptyState'
 
 const getNotifIcon = (type) => {
   switch (type) {
-    case 'booking': return { name: 'car-sport', color: COLORS.primary, bg: COLORS.primaryLight }
-    case 'payment': return { name: 'card', color: '#10B981', bg: '#D1FAE5' }
-    case 'promo':   return { name: 'pricetag', color: COLORS.secondary, bg: '#FEF3C7' }
-    case 'support': return { name: 'headset', color: '#D97706', bg: '#FFF8E7' }
-    default:        return { name: 'notifications', color: COLORS.primary, bg: COLORS.primaryLight }
+    case 'booking':
+      return {
+        name: 'car-sport',
+        color: '#2563EB',
+        bg: '#EFF6FF',
+        border: '#BFDBFE',
+        tag: 'RIDE UPDATE',
+        tagColor: '#1D4ED8',
+        tagBg: '#DBEAFE',
+      }
+    case 'payment':
+      return {
+        name: 'receipt-outline',
+        color: '#059669',
+        bg: '#ECFDF5',
+        border: '#A7F3D0',
+        tag: 'PAYMENT RECEIPT',
+        tagColor: '#047857',
+        tagBg: '#D1FAE5',
+      }
+    case 'promo':
+      return {
+        name: 'gift-outline',
+        color: '#D97706',
+        bg: '#FFFBEB',
+        border: '#FDE68A',
+        tag: 'EXCLUSIVE OFFER',
+        tagColor: '#B45309',
+        tagBg: '#FEF3C7',
+      }
+    case 'support':
+      return {
+        name: 'headset-outline',
+        color: '#4F46E5',
+        bg: '#EEF2FF',
+        border: '#C7D2FE',
+        tag: 'SUPPORT DESK',
+        tagColor: '#4338CA',
+        tagBg: '#E0E7FF',
+      }
+    default:
+      return {
+        name: 'shield-checkmark-outline',
+        color: '#0F172A',
+        bg: '#F8FAFC',
+        border: '#E2E8F0',
+        tag: 'OFFICIAL NOTICE',
+        tagColor: '#334155',
+        tagBg: '#F1F5F9',
+      }
   }
 }
 
@@ -122,23 +167,27 @@ const NotifScreen = ({ navigation }) => {
                 activeOpacity={0.88}
               >
                 <View style={styles.cardHeader}>
-                  <View style={[styles.iconWrap, { backgroundColor: iconObj.bg }]}>
-                    <Ionicons name={iconObj.name} size={18} color={iconObj.color} />
+                  <View style={[styles.iconWrap, { backgroundColor: iconObj.bg, borderColor: iconObj.border }]}>
+                    <Ionicons name={iconObj.name} size={20} color={iconObj.color} />
                   </View>
 
-                  <View style={{ flex: 1, marginLeft: 10 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <View style={styles.cardTopRow}>
+                      <View style={[styles.typeTagBadge, { backgroundColor: iconObj.tagBg }]}>
+                        <Text style={[styles.typeTagText, { color: iconObj.tagColor }]}>{iconObj.tag}</Text>
+                      </View>
+                      <TouchableOpacity onPress={() => handleDeleteNotif(item.id)} style={styles.deleteBtn}>
+                        <Ionicons name="trash-outline" size={15} color={COLORS.gray400} />
+                      </TouchableOpacity>
+                    </View>
+
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
                       <Text style={[styles.title, isUnread ? styles.unreadTitle : null]} numberOfLines={1}>
                         {item.title}
                       </Text>
                       {isUnread && <View style={styles.unreadDot} />}
                     </View>
-                    <Text style={styles.typeTag}>{item.type?.toUpperCase() || 'SYSTEM'}</Text>
                   </View>
-
-                  <TouchableOpacity onPress={() => handleDeleteNotif(item.id)} style={styles.deleteBtn}>
-                    <Ionicons name="trash-outline" size={16} color={COLORS.gray400} />
-                  </TouchableOpacity>
                 </View>
 
                 <Text style={styles.body}>{item.body}</Text>
@@ -164,14 +213,16 @@ const styles = StyleSheet.create({
   markAllBtn:    { width: 36, height: 36, borderRadius: RADIUS.md, backgroundColor: COLORS.primaryLight, alignItems: 'center', justifyContent: 'center' },
   
   listContent:   { paddingHorizontal: SPACING.lg, paddingBottom: SPACING.xxl, gap: 10 },
-  card:          { backgroundColor: COLORS.white, borderRadius: RADIUS.xl, padding: SPACING.md, ...SHADOW.sm, borderWidth: 1, borderColor: COLORS.gray100 },
-  unreadCard:    { borderColor: COLORS.primaryLight, backgroundColor: '#F8FAFC' },
-  cardHeader:    { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
-  iconWrap:      { width: 36, height: 36, borderRadius: RADIUS.lg, alignItems: 'center', justifyContent: 'center' },
-  title:         { fontSize: FONTS.sizes.xs, fontWeight: '700', color: COLORS.text, flex: 1 },
-  unreadTitle:   { fontWeight: '800', color: COLORS.primary },
+  card:          { backgroundColor: COLORS.white, borderRadius: RADIUS.xl, padding: SPACING.md, ...SHADOW.sm, borderWidth: 1, borderColor: '#E2E8F0' },
+  unreadCard:    { borderColor: '#FDE68A', backgroundColor: '#FFFDF5' },
+  cardHeader:    { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 6 },
+  cardTopRow:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  iconWrap:      { width: 44, height: 44, borderRadius: 14, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  typeTagBadge:  { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  typeTagText:   { fontSize: 9.5, fontWeight: '800', letterSpacing: 0.3 },
+  title:         { fontSize: 13.5, fontWeight: '700', color: COLORS.text, flex: 1 },
+  unreadTitle:   { fontWeight: '800', color: '#0F172A' },
   unreadDot:     { width: 7, height: 7, borderRadius: 3.5, backgroundColor: COLORS.primary },
-  typeTag:       { fontSize: 9, fontWeight: '700', color: COLORS.textMuted, marginTop: 1 },
   deleteBtn:     { padding: 4 },
   body:          { fontSize: FONTS.sizes.xs, color: COLORS.gray700, lineHeight: 18, marginVertical: 2 },
   date:          { fontSize: 10, color: COLORS.textMuted, marginTop: 6, fontWeight: '500' },
