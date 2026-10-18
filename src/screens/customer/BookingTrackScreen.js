@@ -15,6 +15,7 @@ import {
   Modal,
   Platform,
   TextInput,
+  Animated,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -44,6 +45,80 @@ const formatDurationHours = (mins) => {
   if (h > 0 && m > 0) return `${h} hr${h > 1 ? 's' : ''} ${m} min${m > 1 ? 's' : ''}`
   if (h > 0) return `${h} hr${h > 1 ? 's' : ''}`
   return `${m} mins`
+}
+
+const DispatchLivePulseDot = () => {
+  const pulse = useRef(new Animated.Value(1)).current
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 0.35,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+      ])
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [pulse])
+
+  return (
+    <Animated.View
+      style={[
+        styles.searchingLivePulseDot,
+        {
+          opacity: pulse,
+          transform: [
+            {
+              scale: pulse.interpolate({
+                inputRange: [0.35, 1],
+                outputRange: [0.8, 1.2],
+              }),
+            },
+          ],
+        },
+      ]}
+    />
+  )
+}
+
+const DispatchingScanBar = () => {
+  const anim = useRef(new Animated.Value(0)).current
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: 1600,
+          useNativeDriver: false,
+        }),
+        Animated.timing(anim, {
+          toValue: 0,
+          duration: 1600,
+          useNativeDriver: false,
+        }),
+      ])
+    )
+    loop.start()
+    return () => loop.stop()
+  }, [anim])
+
+  const left = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '65%'],
+  })
+
+  return (
+    <View style={styles.dispatchTrack}>
+      <Animated.View style={[styles.dispatchBar, { left }]} />
+    </View>
+  )
 }
 
 const CustomerWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate = 2, categoryName = 'Cab' }) => {
@@ -874,40 +949,44 @@ export default function BookingTrackScreen({ route, navigation }) {
             </TouchableOpacity>
           ) : (
             <View style={styles.searchingDriverCard}>
-              <View style={styles.searchingRadarWrap}>
-                <ActivityIndicator size="small" color="#D97706" />
-              </View>
+              <View style={styles.searchingCardContentRow}>
+                <View style={styles.searchingRadarWrap}>
+                  <View style={styles.searchingRadarCenter}>
+                    <Ionicons name="car-sport" size={17} color="#D97706" />
+                  </View>
+                  <ActivityIndicator size="small" color="#F59E0B" style={styles.searchingSpinnerOverlay} />
+                </View>
 
-              <View style={{ flex: 1, marginLeft: 12 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Text style={styles.searchingTitle}>
+                <View style={styles.searchingTextWrap}>
+                  <Text style={styles.searchingTitle} numberOfLines={2}>
                     {status === 'driver_assigned'
                       ? 'Connecting with Driver...'
                       : (status === 'pending_driver_assignment'
                           ? 'Driver Assignment in Progress'
                           : (isOutstationTrip ? 'Driver Assignment Pending' : 'Searching for Driver...'))}
                   </Text>
-                  <View style={styles.searchingPulseDot} />
+                  <Text style={styles.searchingSub}>
+                    {status === 'driver_assigned'
+                      ? 'Driver assigned by Admin. Waiting for driver confirmation...'
+                      : (status === 'pending_driver_assignment'
+                          ? (isOutstationTrip
+                              ? 'Admin is assigning the best category driver for your outstation trip.'
+                              : 'Admin is reviewing and assigning a driver. Auto-assign will trigger if unassigned.')
+                          : (isOutstationTrip
+                              ? 'Admin is assigning the best category driver for your outstation trip.'
+                              : 'Looking for nearby drivers. Please hold on...'))}
+                  </Text>
                 </View>
-                <Text style={styles.searchingSub}>
-                  {status === 'driver_assigned'
-                    ? 'Driver assigned by Admin. Waiting for driver confirmation...'
-                    : (status === 'pending_driver_assignment'
-                        ? (isOutstationTrip
-                            ? 'Admin is assigning the best category driver for your outstation trip.'
-                            : 'Admin is reviewing and assigning a driver. Auto-assign will trigger if unassigned.')
-                        : (isOutstationTrip
-                            ? 'Admin is assigning the best category driver for your outstation trip.'
-                            : 'Looking for nearby drivers. Please hold on...'))}
-                </Text>
+
+                <View style={styles.searchingBadge}>
+                  <DispatchLivePulseDot />
+                  <Text style={styles.searchingBadgeText}>
+                    {status === 'driver_assigned' ? 'Connecting' : (status === 'pending_driver_assignment' ? 'Assigning' : 'Searching')}
+                  </Text>
+                </View>
               </View>
 
-              <View style={styles.searchingBadge}>
-                <Ionicons name="radio-outline" size={14} color="#D97706" />
-                <Text style={styles.searchingBadgeText}>
-                  {status === 'driver_assigned' ? 'Connecting' : (status === 'pending_driver_assignment' ? 'Assigning' : 'Searching')}
-                </Text>
-              </View>
+              <DispatchingScanBar />
             </View>
           )}
 
@@ -2026,60 +2105,110 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
-  // ── Searching for Driver Card ──
+  // ── Searching for Driver Card (Executive Corporate Design) ──
   searchingDriverCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFBEB',
-    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
     padding: 14,
     borderWidth: 1.5,
-    borderColor: '#FDE68A',
+    borderColor: '#FEF3C7',
     marginBottom: 12,
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  searchingCardContentRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
   },
   searchingRadarWrap: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#FEF3C7',
+    backgroundColor: '#FFFBEB',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1.5,
-    borderColor: '#F59E0B',
+    borderColor: '#FDE68A',
+    position: 'relative',
+    marginTop: 2,
+  },
+  searchingRadarCenter: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchingSpinnerOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  searchingTextWrap: {
+    flex: 1,
+    marginLeft: 12,
+    marginRight: 8,
   },
   searchingTitle: {
-    fontSize: 15,
+    fontSize: 14.5,
     fontWeight: '800',
-    color: '#92400E',
-  },
-  searchingPulseDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#D97706',
+    color: '#0F172A',
+    letterSpacing: -0.2,
+    lineHeight: 20,
   },
   searchingSub: {
     fontSize: 12,
     fontWeight: '500',
-    color: '#B45309',
-    marginTop: 2,
-    lineHeight: 16,
+    color: '#64748B',
+    marginTop: 3,
+    lineHeight: 16.5,
   },
   searchingBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#FEF3C7',
-    paddingVertical: 5,
-    paddingHorizontal: 8,
-    borderRadius: 10,
+    gap: 5,
+    backgroundColor: '#FFFBEB',
+    paddingVertical: 4.5,
+    paddingHorizontal: 9,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#FDE68A',
+    alignSelf: 'flex-start',
+    marginTop: 2,
+  },
+  searchingLivePulseDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#D97706',
   },
   searchingBadgeText: {
     fontSize: 11,
     fontWeight: '800',
     color: '#B45309',
+    letterSpacing: 0.3,
+  },
+  dispatchTrack: {
+    height: 3,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 2,
+    marginTop: 12,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  dispatchBar: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: '35%',
+    backgroundColor: '#F59E0B',
+    borderRadius: 2,
   },
 
   // ── Driver Info Card ──
