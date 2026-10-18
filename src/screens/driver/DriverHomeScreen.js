@@ -1846,166 +1846,146 @@ const DriverHomeScreen = ({ navigation }) => {
           )
         })()}
 
-        {/* 2. ONLINE STATUS CARD (Premium Gradient Card with live GPS, City, Area, Last Updated Time) */}
+        {/* 2. STANDALONE BIG PROFESSIONAL DUTY TOGGLE BUTTON */}
         {(() => {
           const isKycApproved =
             (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
             (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
             (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
             (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
+
           return (
-            <View style={styles.telemetryCard}>
-              <View style={styles.telemetryTopRow}>
-                <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <View style={[styles.statusBeacon, { backgroundColor: isOnline ? '#10B981' : isKycApproved ? '#475569' : '#F59E0B' }]}>
-                      <View style={[styles.statusBeaconInner, { backgroundColor: isOnline ? '#34D399' : isKycApproved ? '#94A3B8' : '#FCD34D' }]} />
-                    </View>
-                    <Text style={styles.telemetryCardTitle}>
-                      {isOnline ? 'DUTY ACTIVE · ONLINE' : isKycApproved ? 'DUTY OFF · OFFLINE' : 'KYC APPROVAL PENDING'}
-                    </Text>
-                  </View>
-                  <Text style={styles.telemetryCardSub} numberOfLines={1}>
-                    {isOnline
-                      ? 'Live GPS broadcasting • Ready to receive passenger requests'
-                      : isKycApproved
-                      ? 'Tap the button below when ready to accept rides'
-                      : 'Submit documents to get approved and unlock taxi duty'}
+            <TouchableOpacity
+              style={[
+                isOnline ? {
+                  backgroundColor: '#FFFFFF',
+                  borderRadius: 20,
+                  borderWidth: 2,
+                  borderColor: '#10B981',
+                  paddingVertical: 18,
+                  paddingHorizontal: 20,
+                  marginHorizontal: 16,
+                  marginTop: 12,
+                  marginBottom: 8,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  elevation: 5,
+                  shadowColor: '#10B981',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.25,
+                  shadowRadius: 8,
+                } : {
+                  backgroundColor: '#16A34A',
+                  borderRadius: 20,
+                  paddingVertical: 18,
+                  paddingHorizontal: 20,
+                  marginHorizontal: 16,
+                  marginTop: 12,
+                  marginBottom: 8,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  elevation: 6,
+                  shadowColor: '#16A34A',
+                  shadowOffset: { width: 0, height: 6 },
+                  shadowOpacity: 0.35,
+                  shadowRadius: 10,
+                },
+                (!isKycApproved || toggling) && { opacity: 0.7 }
+              ]}
+              onPress={() => handleToggleOnline(!isOnline)}
+              disabled={!isKycApproved || toggling}
+              activeOpacity={0.85}
+            >
+              {toggling ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, flex: 1, paddingVertical: 4 }}>
+                  <ActivityIndicator color={isOnline ? '#10B981' : '#FFFFFF'} size="small" />
+                  <Text style={{ fontSize: 16, fontWeight: '800', color: isOnline ? '#0F172A' : '#FFFFFF' }}>
+                    Updating Duty Status...
                   </Text>
                 </View>
-              </View>
-
-              {/* BIG HIGH-VISIBILITY DUTY TOGGLE BUTTON */}
-              <TouchableOpacity
-                style={[
-                  isOnline ? styles.bigDutyBtnOnline : styles.bigDutyBtnOffline,
-                  (!isKycApproved || toggling) && { opacity: 0.65 }
-                ]}
-                onPress={() => handleToggleOnline(!isOnline)}
-                disabled={!isKycApproved || toggling}
-                activeOpacity={0.85}
-              >
-                {toggling ? (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
-                    <ActivityIndicator color="#FFFFFF" size="small" />
-                    <Text style={styles.bigDutyBtnTextMain}>Updating Duty Status...</Text>
-                  </View>
-                ) : isOnline ? (
-                  <View style={styles.bigDutyBtnContent}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                      <View style={styles.dutyOnlinePulseCircle}>
-                        <Ionicons name="radio" size={16} color="#10B981" />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.bigDutyBtnTextOnline}>YOU ARE ONLINE</Text>
-                        <Text style={styles.bigDutyBtnSubOnline}>Ready for incoming passenger bookings</Text>
-                      </View>
+              ) : isOnline ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, flex: 1 }}>
+                    <View style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: 24,
+                      backgroundColor: '#DCFCE7',
+                      borderWidth: 2,
+                      borderColor: '#86EFAC',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}>
+                      <Ionicons name="radio" size={22} color="#16A34A" />
                     </View>
-                    <View style={styles.dutyGoOfflineBadge}>
-                      <Ionicons name="power" size={13} color="#EF4444" />
-                      <Text style={styles.dutyGoOfflineBadgeText}>Go Offline</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 18, fontWeight: '900', color: '#0F172A', letterSpacing: 0.4 }}>
+                        YOU ARE ONLINE
+                      </Text>
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: '#16A34A', marginTop: 2 }}>
+                        ● Ready for incoming bookings
+                      </Text>
                     </View>
                   </View>
-                ) : (
-                  <View style={styles.bigDutyBtnContent}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                      <View style={styles.dutyOfflineIconCircle}>
-                        <Ionicons name="power" size={20} color="#FFFFFF" />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.bigDutyBtnTextOffline}>
-                          {isKycApproved ? 'GO ONLINE' : 'KYC REQUIRED'}
-                        </Text>
-                        <Text style={styles.bigDutyBtnSubOffline}>
-                          {isKycApproved ? 'Tap to start duty & receive bookings' : 'Account awaiting verification'}
-                        </Text>
-                      </View>
-                    </View>
-                    {isKycApproved ? (
-                      <View style={styles.dutyGoOnlineBadge}>
-                        <Text style={styles.dutyGoOnlineBadgeText}>START</Text>
-                        <Ionicons name="chevron-forward" size={14} color="#15803D" />
-                      </View>
-                    ) : (
-                      <Ionicons name="lock-closed" size={18} color="#94A3B8" />
-                    )}
+                  <View style={{
+                    backgroundColor: '#FEE2E2',
+                    borderWidth: 1.5,
+                    borderColor: '#FCA5A5',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 5,
+                    paddingHorizontal: 14,
+                    paddingVertical: 9,
+                    borderRadius: 14,
+                  }}>
+                    <Ionicons name="power" size={15} color="#DC2626" />
+                    <Text style={{ fontSize: 13, fontWeight: '900', color: '#DC2626' }}>Go Offline</Text>
                   </View>
-                )}
-              </TouchableOpacity>
-
-              {/* Telemetry Divider */}
-              <View style={styles.telemetryDivider} />
-
-              {/* Location & GPS Telemetry Grid with Professional Icons */}
-              <View style={styles.telemetryPillsRow}>
-                <View style={styles.telemetryPill}>
-                  <Ionicons name="location-sharp" size={13} color="#38BDF8" />
-                  <Text style={styles.telemetryPillText} numberOfLines={1}>
-                    {currentCity ? `${currentCity}${currentArea ? ` · ${currentArea}` : ''}` : 'Detecting City...'}
-                  </Text>
                 </View>
-                <View style={styles.telemetryPill}>
-                  <Ionicons name="radio" size={13} color={isOnline ? '#22C55E' : '#64748B'} />
-                  <Text style={[styles.telemetryPillText, isOnline && { color: '#86EFAC' }]} numberOfLines={1}>
-                    {isOnline ? 'GPS Active' : 'GPS Standby'}
-                  </Text>
-                </View>
-                <View style={styles.telemetryPill}>
-                  <Ionicons name="time" size={13} color="#94A3B8" />
-                  <Text style={styles.telemetryPillText} numberOfLines={1}>{lastUpdatedTime}</Text>
-                </View>
-              </View>
-
-              {/* Active Trip Services Bar with Professional Vector Icons */}
-              {(() => {
-                const rawSt = driver?.service_types || user?.service_types || 'local,hourly,outstation'
-                const arr = String(rawSt).split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
-                const hasLocalDrop = arr.includes('local_drop') || arr.includes('local')
-                const hasHourly = arr.includes('hourly_package') || arr.includes('hourly')
-                const hasOneWay = arr.includes('outstation_oneway') || arr.includes('outstation')
-                const hasRound = arr.includes('outstation_round') || arr.includes('outstation')
-
-                return (
-                  <TouchableOpacity
-                    style={styles.telemetryServicesRow}
-                    onPress={() => navigation.navigate('Profile')}
-                    activeOpacity={0.8}
-                  >
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, flexWrap: 'wrap' }}>
-                      <Text style={styles.telemetryServicesLabel}>Trip Types:</Text>
-                      {hasLocalDrop && (
-                        <View style={[styles.serviceTag, { backgroundColor: 'rgba(59, 130, 246, 0.15)', borderColor: '#2563EB' }]}>
-                          <Ionicons name="car-sport" size={12} color="#60A5FA" />
-                          <Text style={[styles.serviceTagText, { color: '#93C5FD' }]}>Local Drop</Text>
-                        </View>
-                      )}
-                      {hasHourly && (
-                        <View style={[styles.serviceTag, { backgroundColor: 'rgba(217, 119, 6, 0.15)', borderColor: '#D97706' }]}>
-                          <Ionicons name="time" size={12} color="#FBBF24" />
-                          <Text style={[styles.serviceTagText, { color: '#FCD34D' }]}>Hourly</Text>
-                        </View>
-                      )}
-                      {hasOneWay && (
-                        <View style={[styles.serviceTag, { backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: '#059669' }]}>
-                          <Ionicons name="navigate" size={12} color="#34D399" />
-                          <Text style={[styles.serviceTagText, { color: '#6EE7B7' }]}>One-Way</Text>
-                        </View>
-                      )}
-                      {hasRound && (
-                        <View style={[styles.serviceTag, { backgroundColor: 'rgba(139, 92, 246, 0.15)', borderColor: '#7C3AED' }]}>
-                          <Ionicons name="repeat" size={12} color="#C084FC" />
-                          <Text style={[styles.serviceTagText, { color: '#C4B5FD' }]}>Round Trip</Text>
-                        </View>
-                      )}
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14, flex: 1 }}>
+                    <View style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: 24,
+                      backgroundColor: 'rgba(255, 255, 255, 0.22)',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}>
+                      <Ionicons name="power" size={24} color="#FFFFFF" />
                     </View>
-                    <View style={styles.serviceConfigurePill}>
-                      <Ionicons name="options-outline" size={11} color="#818CF8" />
-                      <Text style={{ fontSize: 10.5, fontWeight: '800', color: '#818CF8' }}>Configure</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 18, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.6 }}>
+                        {isKycApproved ? 'GO ONLINE' : 'KYC REQUIRED'}
+                      </Text>
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: '#D1FAE5', marginTop: 2 }}>
+                        {isKycApproved ? 'Tap to start duty & receive bookings' : 'Account awaiting verification'}
+                      </Text>
                     </View>
-                  </TouchableOpacity>
-                )
-              })()}
-            </View>
+                  </View>
+                  {isKycApproved ? (
+                    <View style={{
+                      backgroundColor: '#FFFFFF',
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 4,
+                      paddingHorizontal: 14,
+                      paddingVertical: 9,
+                      borderRadius: 14,
+                      elevation: 2,
+                    }}>
+                      <Text style={{ fontSize: 13, fontWeight: '900', color: '#15803D', letterSpacing: 0.3 }}>START</Text>
+                      <Ionicons name="chevron-forward" size={15} color="#15803D" />
+                    </View>
+                  ) : (
+                    <Ionicons name="lock-closed" size={20} color="#FFFFFF" />
+                  )}
+                </View>
+              )}
+            </TouchableOpacity>
           )
         })()}
 
