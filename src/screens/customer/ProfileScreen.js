@@ -115,14 +115,20 @@ const ProfileScreen = ({ navigation }) => {
       const res = await uploadAPI.upload(formData, 'profile')
       if (res.data?.status === 'success') {
         const newUrl = res.data.url || res.data.avatar_url
+        const newPath = res.data.path || res.data.relative_path || newUrl
         if (res.data.user) {
           updateUser(res.data.user)
         } else {
           updateUser(prev => ({
             ...prev,
-            avatar: res.data.path || newUrl,
-            avatar_url: newUrl
+            avatar: newPath,
+            avatar_url: newUrl,
+            kyc_profile_photo: newPath,
           }))
+        }
+        await loadProfile()
+        if (typeof refreshUser === 'function') {
+          await refreshUser()
         }
         Alert.alert('Success 🎉', 'Profile photo updated successfully!')
       } else {
@@ -162,7 +168,11 @@ const ProfileScreen = ({ navigation }) => {
                 if (res.data.user) {
                   updateUser(res.data.user)
                 } else {
-                  updateUser(prev => ({ ...prev, avatar: null, avatar_url: null }))
+                  updateUser(prev => ({ ...prev, avatar: null, avatar_url: null, kyc_profile_photo: null }))
+                }
+                await loadProfile()
+                if (typeof refreshUser === 'function') {
+                  await refreshUser()
                 }
                 Alert.alert('Photo Removed', 'Your profile photo has been removed.')
               } else {
@@ -294,7 +304,12 @@ const ProfileScreen = ({ navigation }) => {
     )
   }
 
+  const [avatarError, setAvatarError] = useState(false)
   const avatarUri = resolveAssetUrl(user?.avatar_url || user?.avatar)
+
+  useEffect(() => {
+    setAvatarError(false)
+  }, [avatarUri])
 
   const menuItems = [
     { icon: 'person-circle-outline', label: 'Customer Identity KYC', color: '#059669', onPress: () => navigation.navigate('IdentityVerification') },
@@ -355,11 +370,13 @@ const ProfileScreen = ({ navigation }) => {
           >
             <View style={styles.avatarRing}>
               <View style={styles.avatar}>
-                {avatarUri ? (
+                {(avatarUri && !avatarError) ? (
                   <Image
+                    key={avatarUri}
                     source={{ uri: avatarUri }}
                     style={styles.avatarImg}
                     resizeMode="cover"
+                    onError={() => setAvatarError(true)}
                   />
                 ) : (
                   <Text style={styles.avatarText}>{(user?.name?.[0] || 'U').toUpperCase()}</Text>

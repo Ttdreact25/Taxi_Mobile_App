@@ -505,18 +505,19 @@ export const createUploadFormData = (localUri, options = {}) => {
   // 3. Guarantee filename ALWAYS has the extension
   const safeFilename = `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`
 
-  // 4. Safe URI: on Android, if asset has base64, using a data: URI allows React Native's
-  // RequestBodyUtil to stream directly from in-memory bytes without filesystem permissions
+  // 4. Safe URI: React Native FormData requires a real file:// or content:// URI to stream files.
+  // We NEVER pass data: URIs into FormData as OkHttp on Android cannot stream them.
   let safeUri = localUri
-  if (asset?.base64) {
-    safeUri = `data:${mimeType};base64,${asset.base64}`
-  } else if (Platform.OS === 'android') {
+  if (Platform.OS === 'android') {
     try {
       safeUri = decodeURI(localUri)
     } catch {
       safeUri = localUri
     }
-  } else {
+    if (!safeUri.startsWith('file://') && !safeUri.startsWith('content://')) {
+      safeUri = `file://${safeUri}`
+    }
+  } else if (Platform.OS === 'ios') {
     safeUri = localUri.replace('file://', '')
   }
 
@@ -528,7 +529,7 @@ export const createUploadFormData = (localUri, options = {}) => {
   })
   formData.append('type', type)
 
-  // Attach metadata for fallback
+  // Attach metadata for fallback (if multipart upload fails, xhr.onerror uses this base64 JSON payload)
   formData._rawBase64 = asset?.base64 || null
   formData._mimeType = mimeType
 

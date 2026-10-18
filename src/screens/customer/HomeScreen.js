@@ -285,6 +285,7 @@ const HomeScreen = ({ navigation }) => {
               >
                 {resolveAssetUrl(user?.avatar_url || user?.avatar) ? (
                   <Image
+                    key={resolveAssetUrl(user?.avatar_url || user?.avatar)}
                     source={{ uri: resolveAssetUrl(user?.avatar_url || user?.avatar) }}
                     style={styles.heroAvatarImg}
                     resizeMode="cover"
