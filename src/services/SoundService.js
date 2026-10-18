@@ -133,10 +133,19 @@ const playWebAudioTone = (pattern = 'driver') => {
   }
 }
 
+let lastDriverAlertTime = 0
+
 /**
  * Play urgent Driver Ride Alert Sound (Assign & Dispatch Alert)
+ * Master audio: High-Volume Alarm Chimes + Boosted Voice "Booking received! Booking received! New ride assigned."
  */
 export const playDriverAlertSound = async () => {
+  const now = Date.now()
+  if (now - lastDriverAlertTime < 2200) {
+    return
+  }
+  lastDriverAlertTime = now
+
   // Always trigger strong haptic vibration pattern
   try {
     Vibration.vibrate([0, 800, 200, 800, 200, 800, 200, 800])
@@ -144,65 +153,47 @@ export const playDriverAlertSound = async () => {
 
   await initAudioMode()
 
+  let played = false
+
   // 1. Modern expo-audio (SDK 52+)
   if (ExpoAudio?.createAudioPlayer) {
     try {
-      if (activePlayer) {
-        try {
-          activePlayer.pause?.()
-          activePlayer.remove?.()
-        } catch {}
-        activePlayer = null
-      }
-
       const player = ExpoAudio.createAudioPlayer(require('../../assets/sounds/driver_alert.wav'))
       activePlayer = player
       player.volume = 1.0
       player.play()
-
-      try {
-        player.addListener?.('playbackStatusUpdate', (status) => {
-          if (status?.didJustFinish) {
-            try { player.remove?.() } catch {}
-            if (activePlayer === player) activePlayer = null
-          }
-        })
-      } catch {}
-      return
+      played = true
     } catch (e) {
       console.warn('[SoundService] expo-audio failed, falling back:', e?.message)
     }
   }
 
   // 2. Legacy expo-av fallback
-  if (ExpoAudio?.Audio?.Sound?.createAsync) {
+  if (!played && ExpoAudio?.Audio?.Sound?.createAsync) {
     try {
-      if (activePlayer) {
-        try {
-          await activePlayer.stopAsync?.()
-          await activePlayer.unloadAsync?.()
-        } catch {}
-        activePlayer = null
-      }
-
       const { sound } = await ExpoAudio.Audio.Sound.createAsync(
         require('../../assets/sounds/driver_alert.wav'),
         { shouldPlay: true, volume: 1.0 }
       )
       activePlayer = sound
       sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.didJustFinish) {
+        if (status?.didJustFinish) {
           sound.unloadAsync().catch(() => {})
           if (activePlayer === sound) activePlayer = null
         }
       })
-      return
+      played = true
     } catch (e) {
       console.warn('[SoundService] expo-av failed:', e?.message)
     }
   }
 
-  // 3. Web Audio fallback
+  // 3. Fallback Speech synthesis if audio file could not play
+  if (!played) {
+    speakVoiceAlert('Booking received! Booking received! New ride assigned.', { language: 'en-US' })
+  }
+
+  // 4. Web Audio fallback
   if (Platform.OS === 'web') {
     playWebAudioTone('driver')
   }
@@ -217,25 +208,9 @@ export const playAudioFile = async (audioSource, volume = 1.0) => {
   // 1. Modern expo-audio (SDK 52+)
   if (ExpoAudio?.createAudioPlayer) {
     try {
-      if (activePlayer) {
-        try {
-          activePlayer.pause?.()
-          activePlayer.remove?.()
-        } catch {}
-        activePlayer = null
-      }
       const player = ExpoAudio.createAudioPlayer(audioSource)
-      activePlayer = player
       player.volume = volume
       player.play()
-      try {
-        player.addListener?.('playbackStatusUpdate', (status) => {
-          if (status?.didJustFinish) {
-            try { player.remove?.() } catch {}
-            if (activePlayer === player) activePlayer = null
-          }
-        })
-      } catch {}
       return player
     } catch (e) {
       console.warn('[SoundService] expo-audio player error:', e?.message)
@@ -245,22 +220,13 @@ export const playAudioFile = async (audioSource, volume = 1.0) => {
   // 2. Legacy expo-av fallback
   if (ExpoAudio?.Audio?.Sound?.createAsync) {
     try {
-      if (activePlayer) {
-        try {
-          await activePlayer.stopAsync?.()
-          await activePlayer.unloadAsync?.()
-        } catch {}
-        activePlayer = null
-      }
       const { sound } = await ExpoAudio.Audio.Sound.createAsync(
         audioSource,
         { shouldPlay: true, volume }
       )
-      activePlayer = sound
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status?.didJustFinish) {
           sound.unloadAsync().catch(() => {})
-          if (activePlayer === sound) activePlayer = null
         }
       })
       return sound
@@ -278,24 +244,15 @@ export const playDriverBookingReceived = async (bookingRef = '') => {
     // 1. Multi-burst vibration
     Vibration.vibrate([0, 800, 250, 800, 250, 800, 250, 800])
 
-    // 2. Play maximum volume alarm chime
+    // 2. Play maximum volume master alarm + voice ("Booking received! Booking received!")
     await playDriverAlertSound()
 
-    // 3. Play generated studio voice audio: "Booking received! Booking received! New ride assigned."
-    setTimeout(async () => {
-      try {
-        await playAudioFile(require('../../assets/sounds/booking_received.mp3'), 1.0)
-      } catch (ae) {
-        speakVoiceAlert('Booking received! Booking received! New ride assigned.')
-      }
-    }, 350)
-
-    // 4. Loud speech synthesis reinforcement for maximum clarity
+    // 3. Also schedule Speech reinforcement if phone is in background or muted
     setTimeout(() => {
-      speakVoiceAlert('Booking received! Booking received! New ride assigned.')
-    }, 1800)
+      speakVoiceAlert('Booking received! Booking received! New ride assigned.', { language: 'en-US' })
+    }, 4500)
 
-    // 5. Trigger immediate local notification banner
+    // 4. Trigger immediate local notification banner
     PushNotificationService.showLocalBookingAlertNotification(
       '🚗 New Booking Received!',
       `Booking received ${bookingRef ? '#' + bookingRef : ''}. Tap to view and accept.`
@@ -346,34 +303,51 @@ export const playBookingNotificationSound = async () => {
 
 /**
  * Customer Alert: Plays loud arrival chime + Loud Voice Announcement: "Driver reached!"
- * Also triggers OS-level heads-up notification
+ * Master audio: driver_reached.wav (Arrival Chimes + "Driver reached! Driver reached! Your driver has arrived...")
  */
 export const playCustomerTaxiReachedAlert = async (driverName = '', vehicleDesc = '') => {
   try {
     // 1. Double vibration burst
     Vibration.vibrate([0, 600, 200, 600, 200, 600])
 
-    // 2. Play arrival chime
-    await playBookingNotificationSound()
+    await initAudioMode()
 
-    // 3. Play generated studio voice audio: "Driver reached! Driver reached! Your driver has arrived at the pickup location."
-    setTimeout(async () => {
+    // 2. Play master driver_reached.wav
+    let played = false
+    if (ExpoAudio?.createAudioPlayer) {
       try {
-        await playAudioFile(require('../../assets/sounds/driver_reached.mp3'), 1.0)
-      } catch (ae) {
-        speakVoiceAlert('Driver reached! Driver reached! Your driver has arrived at the pickup location.')
-      }
-    }, 350)
+        const player = ExpoAudio.createAudioPlayer(require('../../assets/sounds/driver_reached.wav'))
+        player.volume = 1.0
+        player.play()
+        played = true
+      } catch (e) {}
+    }
 
-    // 4. Loud Voice Announcement reinforcement
-    setTimeout(() => {
+    if (!played && ExpoAudio?.Audio?.Sound?.createAsync) {
+      try {
+        const { sound } = await ExpoAudio.Audio.Sound.createAsync(
+          require('../../assets/sounds/driver_reached.wav'),
+          { shouldPlay: true, volume: 1.0 }
+        )
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status?.didJustFinish) {
+            sound.unloadAsync().catch(() => {})
+          }
+        })
+        played = true
+      } catch (e) {}
+    }
+
+    // 3. Fallback if audio file player was not supported
+    if (!played) {
+      await playBookingNotificationSound()
       const announcement = driverName
         ? `Driver reached! Driver ${driverName} has arrived at your pickup location.`
         : 'Driver reached! Your driver has arrived at the pickup location.'
-      speakVoiceAlert(announcement)
-    }, 1800)
+      speakVoiceAlert(announcement, { language: 'en-US' })
+    }
 
-    // 5. Trigger OS-level notification
+    // 4. Trigger OS-level notification
     PushNotificationService.showLocalArrivalNotification(
       '🚖 Driver Reached! Driver Has Arrived',
       driverName ? `Driver ${driverName} ${vehicleDesc ? `(${vehicleDesc})` : ''} has reached your pickup point.` : 'Your driver has reached your pickup location. Please board the cab.'

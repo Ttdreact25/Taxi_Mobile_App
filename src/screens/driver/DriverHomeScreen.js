@@ -955,7 +955,7 @@ const DriverHomeScreen = ({ navigation }) => {
         try {
           Vibration.vibrate([0, 500, 200, 500])
         } catch {}
-        playDriverAlertSound().catch(() => {})
+        playDriverBookingReceived(currentIncoming?.booking_ref).catch(() => {})
         setCountdown(30)
         if (timerRef.current) clearInterval(timerRef.current)
         timerRef.current = setInterval(() => {
