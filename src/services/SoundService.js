@@ -314,17 +314,35 @@ export const playCustomerTaxiReachedAlert = async (tripIdOrName = '', driverName
 }
 
 /**
+ * Universal Audio Player helper for audio sources
+ */
+export const playAudioFile = async (audioSource, volume = 1.0) => {
+  await initAudioMode()
+  if (ExpoAudio?.createAudioPlayer) {
+    try {
+      const player = ExpoAudio.createAudioPlayer(audioSource)
+      player.volume = volume
+      player.play()
+      return player
+    } catch (e) {
+      console.warn('[SoundService] expo-audio player error:', e?.message)
+    }
+  }
+  return null
+}
+
+/**
  * Stop any active playing sound
  */
 export const stopActiveSound = async () => {
-  if (activePlayer) {
+  if (activeAudioPlayer) {
     try {
-      activePlayer.pause?.()
-      activePlayer.remove?.()
-      activePlayer.stopAsync?.()
-      activePlayer.unloadAsync?.()
+      activeAudioPlayer.pause?.()
+      activeAudioPlayer.remove?.()
+      activeAudioPlayer.stopAsync?.()
+      activeAudioPlayer.unloadAsync?.()
     } catch (e) {}
-    activePlayer = null
+    activeAudioPlayer = null
   }
   try {
     ExpoSpeech?.stop?.()
