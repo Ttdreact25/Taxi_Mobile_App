@@ -209,23 +209,93 @@ export const playDriverAlertSound = async () => {
 }
 
 /**
- * High-Volume Driver Alert for New Bookings: Urgent Alarm + Loud Voice Announcement
- * Says: "Booking Received! New ride assigned."
+ * Universal Audio Player helper for Expo SDK audio
+ */
+export const playAudioFile = async (audioSource, volume = 1.0) => {
+  await initAudioMode()
+
+  // 1. Modern expo-audio (SDK 52+)
+  if (ExpoAudio?.createAudioPlayer) {
+    try {
+      if (activePlayer) {
+        try {
+          activePlayer.pause?.()
+          activePlayer.remove?.()
+        } catch {}
+        activePlayer = null
+      }
+      const player = ExpoAudio.createAudioPlayer(audioSource)
+      activePlayer = player
+      player.volume = volume
+      player.play()
+      try {
+        player.addListener?.('playbackStatusUpdate', (status) => {
+          if (status?.didJustFinish) {
+            try { player.remove?.() } catch {}
+            if (activePlayer === player) activePlayer = null
+          }
+        })
+      } catch {}
+      return player
+    } catch (e) {
+      console.warn('[SoundService] expo-audio player error:', e?.message)
+    }
+  }
+
+  // 2. Legacy expo-av fallback
+  if (ExpoAudio?.Audio?.Sound?.createAsync) {
+    try {
+      if (activePlayer) {
+        try {
+          await activePlayer.stopAsync?.()
+          await activePlayer.unloadAsync?.()
+        } catch {}
+        activePlayer = null
+      }
+      const { sound } = await ExpoAudio.Audio.Sound.createAsync(
+        audioSource,
+        { shouldPlay: true, volume }
+      )
+      activePlayer = sound
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status?.didJustFinish) {
+          sound.unloadAsync().catch(() => {})
+          if (activePlayer === sound) activePlayer = null
+        }
+      })
+      return sound
+    } catch (e) {
+      console.warn('[SoundService] expo-av error:', e?.message)
+    }
+  }
+}
+
+/**
+ * High-Volume Driver Alert for New Bookings: Urgent Alarm + Loud Voice "Booking Received!"
  */
 export const playDriverBookingReceived = async (bookingRef = '') => {
   try {
     // 1. Multi-burst vibration
     Vibration.vibrate([0, 800, 250, 800, 250, 800, 250, 800])
 
-    // 2. Play maximum volume alarm sound
+    // 2. Play maximum volume alarm chime
     await playDriverAlertSound()
 
-    // 3. Loud Voice Announcement: "Booking received! New ride assigned."
+    // 3. Play generated studio voice audio: "Booking received! Booking received! New ride assigned."
+    setTimeout(async () => {
+      try {
+        await playAudioFile(require('../../assets/sounds/booking_received.mp3'), 1.0)
+      } catch (ae) {
+        speakVoiceAlert('Booking received! Booking received! New ride assigned.')
+      }
+    }, 350)
+
+    // 4. Loud speech synthesis reinforcement for maximum clarity
     setTimeout(() => {
       speakVoiceAlert('Booking received! Booking received! New ride assigned.')
-    }, 450)
+    }, 1800)
 
-    // 4. Also trigger immediate local notification banner
+    // 5. Trigger immediate local notification banner
     PushNotificationService.showLocalBookingAlertNotification(
       '🚗 New Booking Received!',
       `Booking received ${bookingRef ? '#' + bookingRef : ''}. Tap to view and accept.`
@@ -275,7 +345,7 @@ export const playBookingNotificationSound = async () => {
 }
 
 /**
- * Customer Alert: Plays loud arrival chime + Loud Voice Announcement: "Taxi reached!"
+ * Customer Alert: Plays loud arrival chime + Loud Voice Announcement: "Driver reached!"
  * Also triggers OS-level heads-up notification
  */
 export const playCustomerTaxiReachedAlert = async (driverName = '', vehicleDesc = '') => {
@@ -286,18 +356,27 @@ export const playCustomerTaxiReachedAlert = async (driverName = '', vehicleDesc 
     // 2. Play arrival chime
     await playBookingNotificationSound()
 
-    // 3. Loud Voice Announcement: "Taxi reached! Your driver has arrived at the pickup location."
+    // 3. Play generated studio voice audio: "Driver reached! Driver reached! Your driver has arrived at the pickup location."
+    setTimeout(async () => {
+      try {
+        await playAudioFile(require('../../assets/sounds/driver_reached.mp3'), 1.0)
+      } catch (ae) {
+        speakVoiceAlert('Driver reached! Driver reached! Your driver has arrived at the pickup location.')
+      }
+    }, 350)
+
+    // 4. Loud Voice Announcement reinforcement
     setTimeout(() => {
       const announcement = driverName
-        ? `Taxi reached! Driver ${driverName} has arrived at your pickup location.`
-        : 'Taxi reached! Your driver has arrived at the pickup location.'
+        ? `Driver reached! Driver ${driverName} has arrived at your pickup location.`
+        : 'Driver reached! Your driver has arrived at the pickup location.'
       speakVoiceAlert(announcement)
-    }, 400)
+    }, 1800)
 
-    // 4. Trigger OS-level notification
+    // 5. Trigger OS-level notification
     PushNotificationService.showLocalArrivalNotification(
-      '🚖 Taxi Reached! Your Driver Has Arrived',
-      driverName ? `Driver ${driverName} ${vehicleDesc ? `(${vehicleDesc})` : ''} has reached your pickup point.` : 'Your taxi has reached your pickup location. Please board the cab.'
+      '🚖 Driver Reached! Driver Has Arrived',
+      driverName ? `Driver ${driverName} ${vehicleDesc ? `(${vehicleDesc})` : ''} has reached your pickup point.` : 'Your driver has reached your pickup location. Please board the cab.'
     )
   } catch (e) {
     console.warn('[SoundService] playCustomerTaxiReachedAlert error:', e)
@@ -327,6 +406,7 @@ export default {
   playDriverBookingReceived,
   playBookingNotificationSound,
   playCustomerTaxiReachedAlert,
+  playAudioFile,
   speakVoiceAlert,
   stopActiveSound,
 }
