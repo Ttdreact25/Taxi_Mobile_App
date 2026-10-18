@@ -977,6 +977,13 @@ const DriverHomeScreen = ({ navigation }) => {
     return () => {}
   }, [pendingRides])
 
+  // Immediate Sound Alert whenever Assigned Ride Alert Modal opens
+  useEffect(() => {
+    if (assignedAlertTrip?.id) {
+      playDriverBookingReceived(assignedAlertTrip.booking_ref).catch(() => {})
+    }
+  }, [assignedAlertTrip?.id])
+
   // Toggle Online with Mandatory Live Selfie Verification
   const handleToggleOnline = async (val) => {
     const targetOnline = typeof val === 'boolean' ? val : !isOnline

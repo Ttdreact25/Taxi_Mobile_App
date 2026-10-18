@@ -21,6 +21,7 @@ import TermsScreen         from '../screens/customer/TermsScreen'
 
 import { View, StyleSheet } from 'react-native'
 import PushNotificationService from '../services/PushNotificationService'
+import GlobalRideAudioWatcher from '../components/common/GlobalRideAudioWatcher'
 
 const Stack = createNativeStackNavigator()
 
@@ -44,6 +45,7 @@ const AppNavigator = () => {
 
   return (
     <View style={styles.container}>
+      <GlobalRideAudioWatcher />
       <NavigationContainer>
         <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
           {!user ? (

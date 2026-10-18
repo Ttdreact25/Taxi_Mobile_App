@@ -133,19 +133,11 @@ const playWebAudioTone = (pattern = 'driver') => {
   }
 }
 
-let lastDriverAlertTime = 0
-
 /**
  * Play urgent Driver Ride Alert Sound (Assign & Dispatch Alert)
  * Master audio: High-Volume Alarm Chimes + Boosted Voice "Booking received! Booking received! New ride assigned."
  */
 export const playDriverAlertSound = async () => {
-  const now = Date.now()
-  if (now - lastDriverAlertTime < 2200) {
-    return
-  }
-  lastDriverAlertTime = now
-
   // Always trigger strong haptic vibration pattern
   try {
     Vibration.vibrate([0, 800, 200, 800, 200, 800, 200, 800])
@@ -159,27 +151,34 @@ export const playDriverAlertSound = async () => {
   if (ExpoAudio?.createAudioPlayer) {
     try {
       const player = ExpoAudio.createAudioPlayer(require('../../assets/sounds/driver_alert.wav'))
-      activePlayer = player
       player.volume = 1.0
       player.play()
       played = true
     } catch (e) {
-      console.warn('[SoundService] expo-audio failed, falling back:', e?.message)
+      console.warn('[SoundService] expo-audio primary failed:', e?.message)
     }
   }
 
-  // 2. Legacy expo-av fallback
+  // 2. Secondary fallback using booking_received.wav
+  if (!played && ExpoAudio?.createAudioPlayer) {
+    try {
+      const player = ExpoAudio.createAudioPlayer(require('../../assets/sounds/booking_received.wav'))
+      player.volume = 1.0
+      player.play()
+      played = true
+    } catch (e) {}
+  }
+
+  // 3. Legacy expo-av fallback
   if (!played && ExpoAudio?.Audio?.Sound?.createAsync) {
     try {
       const { sound } = await ExpoAudio.Audio.Sound.createAsync(
         require('../../assets/sounds/driver_alert.wav'),
         { shouldPlay: true, volume: 1.0 }
       )
-      activePlayer = sound
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status?.didJustFinish) {
           sound.unloadAsync().catch(() => {})
-          if (activePlayer === sound) activePlayer = null
         }
       })
       played = true
@@ -188,12 +187,12 @@ export const playDriverAlertSound = async () => {
     }
   }
 
-  // 3. Fallback Speech synthesis if audio file could not play
+  // 4. Fallback Speech synthesis if audio file could not play
   if (!played) {
     speakVoiceAlert('Booking received! Booking received! New ride assigned.', { language: 'en-US' })
   }
 
-  // 4. Web Audio fallback
+  // 5. Web Audio fallback
   if (Platform.OS === 'web') {
     playWebAudioTone('driver')
   }
@@ -247,12 +246,7 @@ export const playDriverBookingReceived = async (bookingRef = '') => {
     // 2. Play maximum volume master alarm + voice ("Booking received! Booking received!")
     await playDriverAlertSound()
 
-    // 3. Also schedule Speech reinforcement if phone is in background or muted
-    setTimeout(() => {
-      speakVoiceAlert('Booking received! Booking received! New ride assigned.', { language: 'en-US' })
-    }, 4500)
-
-    // 4. Trigger immediate local notification banner
+    // 3. Trigger immediate local notification banner
     PushNotificationService.showLocalBookingAlertNotification(
       '🚗 New Booking Received!',
       `Booking received ${bookingRef ? '#' + bookingRef : ''}. Tap to view and accept.`
