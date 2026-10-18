@@ -10,6 +10,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Image,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -65,11 +66,13 @@ const LoginScreen = ({ navigation }) => {
           {/* Top Brand Header (Light Theme) */}
           <View style={styles.header}>
             <View style={styles.logoWrap}>
-              <View style={styles.logoCircle}>
-                <Ionicons name="car" size={32} color={COLORS.white} />
-              </View>
+              <Image
+                source={require('../../../assets/cityonetaxi_badge.png')}
+                style={styles.logoImage}
+                resizeMode="contain"
+              />
               <View style={styles.verifiedDot}>
-                <Ionicons name="checkmark" size={10} color={COLORS.white} />
+                <Ionicons name="checkmark" size={11} color={COLORS.white} />
               </View>
             </View>
 
@@ -222,16 +225,13 @@ const styles = StyleSheet.create({
   },
   logoWrap: {
     position: 'relative',
-    marginBottom: 12,
-  },
-  logoCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 22,
-    backgroundColor: COLORS.primary,
+    marginBottom: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    ...SHADOW.glow,
+  },
+  logoImage: {
+    width: 82,
+    height: 82,
   },
   verifiedDot: {
     position: 'absolute',

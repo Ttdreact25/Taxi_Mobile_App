@@ -194,8 +194,12 @@ export default function TicketScreen({ route, navigation }) {
           <View style={styles.banner}>
             <View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Ionicons name="car-sport" size={18} color="#FFFFFF" />
-                <Text style={styles.bannerLogo}>CITYONETAXI</Text>
+                <Image
+                  source={require('../../../assets/cityonetaxi_badge.png')}
+                  style={{ width: 22, height: 22 }}
+                  resizeMode="contain"
+                />
+                <Text style={styles.bannerLogo}>CITY ONE TAXI</Text>
               </View>
               <Text style={styles.bannerSub}>OFFICIAL BOARDING PASS</Text>
             </View>

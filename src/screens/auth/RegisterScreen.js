@@ -148,6 +148,11 @@ const RegisterScreen = ({ navigation }) => {
 
           {/* Header Brand */}
           <View style={styles.header}>
+            <Image
+              source={require('../../../assets/cityonetaxi_badge.png')}
+              style={{ width: 72, height: 72, marginBottom: 8, alignSelf: 'center' }}
+              resizeMode="contain"
+            />
             <Text style={styles.brandTitle}>
               Join CityOne<Text style={{ color: COLORS.secondary }}>Taxi</Text>
             </Text>

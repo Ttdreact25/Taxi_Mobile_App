@@ -1670,7 +1670,11 @@ const DriverHomeScreen = ({ navigation }) => {
         <View style={styles.heroTopBar}>
           <View style={styles.heroBrandRow}>
             <View style={styles.taxiBadgePill}>
-              <Ionicons name="car-sport" size={13} color="#FFC700" />
+              <Image
+                source={require('../../../assets/cityonetaxi_badge.png')}
+                style={{ width: 17, height: 17, marginRight: 4 }}
+                resizeMode="contain"
+              />
               <Text style={styles.taxiBadgeText}>CityOneTaxi</Text>
             </View>
             <TouchableOpacity
@@ -1745,7 +1749,11 @@ const DriverHomeScreen = ({ navigation }) => {
           {/* Stylized Taxi Watermark Badge */}
           <View style={styles.heroCarGraphicWrap} pointerEvents="none">
             <View style={styles.miniCarBadge}>
-              <Ionicons name="speedometer" size={26} color="#FFFFFF" />
+              <Image
+                source={require('../../../assets/cityonetaxi_badge.png')}
+                style={{ width: 42, height: 42 }}
+                resizeMode="contain"
+              />
             </View>
           </View>
         </View>

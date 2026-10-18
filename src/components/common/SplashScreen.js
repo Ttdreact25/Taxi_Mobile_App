@@ -17,9 +17,10 @@ export const SplashScreen = ({
   onFinish,
 }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current
-  const logoScale = useRef(new Animated.Value(0.85)).current
+  const logoScale = useRef(new Animated.Value(0.78)).current
+  const pulseAnim = useRef(new Animated.Value(1)).current
   const progressAnim = useRef(new Animated.Value(0)).current
-  const taglineSlide = useRef(new Animated.Value(20)).current
+  const textSlide = useRef(new Animated.Value(24)).current
 
   useEffect(() => {
     let finished = false
@@ -30,33 +31,49 @@ export const SplashScreen = ({
       }
     }
 
-    const fallbackTimer = setTimeout(finishSafely, 2600)
+    const fallbackTimer = setTimeout(finishSafely, 2800)
 
     try {
       // 1. Entrance animation (fade in + logo spring)
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
-          duration: 700,
+          duration: 750,
           useNativeDriver: true,
         }),
         Animated.spring(logoScale, {
           toValue: 1,
           friction: 6,
-          tension: 40,
+          tension: 38,
           useNativeDriver: true,
         }),
-        Animated.timing(taglineSlide, {
+        Animated.timing(textSlide, {
           toValue: 0,
           duration: 800,
           useNativeDriver: true,
         }),
       ]).start()
 
-      // 2. Progress bar animation
+      // 2. Subtle continuous breathing pulse on halo
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.12,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start()
+
+      // 3. Progress bar animation
       Animated.timing(progressAnim, {
         toValue: 1,
-        duration: 2200,
+        duration: 2350,
         useNativeDriver: false,
       }).start(() => finishSafely())
     } catch {
@@ -68,7 +85,7 @@ export const SplashScreen = ({
 
   const progressWidth = progressAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 140],
+    outputRange: [0, 160],
   })
 
   return (
@@ -81,62 +98,71 @@ export const SplashScreen = ({
         style={styles.backgroundImage}
         resizeMode="cover"
       >
-        {/* Top Vignette Overlay for High Legibility */}
+        {/* Dark Film Noir Gradient Overlays */}
         <View style={styles.topVignette} />
-
-        {/* Bottom Vignette Overlay for Footer Contrast */}
+        <View style={styles.centerBackdrop} />
         <View style={styles.bottomVignette} />
 
-        {/* ── Top Section: Logo & Brand Header ── */}
+        {/* ── Center Hero Section: Official Emblem ── */}
         <Animated.View
           style={[
-            styles.headerWrap,
+            styles.centerSection,
             {
               opacity: fadeAnim,
               transform: [{ scale: logoScale }],
             },
           ]}
         >
-          {/* Logo Badge with Golden Ring */}
-          <View style={styles.logoBadgeContainer}>
-            <View style={styles.logoRing}>
+          {/* Top Eyebrow Tag */}
+          <View style={styles.eyebrowTag}>
+            <Text style={styles.eyebrowStar}>★</Text>
+            <Text style={styles.eyebrowText}>TAMIL NADU'S TRUSTED NETWORK</Text>
+            <Text style={styles.eyebrowStar}>★</Text>
+          </View>
+
+          {/* Animated Glowing Golden Halo behind the badge */}
+          <View style={styles.badgeWrapper}>
+            <Animated.View
+              style={[
+                styles.glowingHalo,
+                { transform: [{ scale: pulseAnim }] },
+              ]}
+            />
+
+            {/* Official 3D Circular Logo Emblem */}
+            <View style={styles.logoBadgeContainer}>
               <Image
-                source={require('../../../assets/CityOneTaxi.png')}
+                source={require('../../../assets/cityonetaxi_badge.png')}
                 style={styles.logoImage}
-                resizeMode="cover"
+                resizeMode="contain"
               />
             </View>
           </View>
 
-          {/* Brand Title with Accent Lines */}
-          <View style={styles.brandTitleRow}>
-            <View style={styles.accentLine} />
-            <Text style={styles.brandTitle}>
-              CITYONE <Text style={styles.brandTitleGold}>TAXI</Text>
-            </Text>
-            <View style={styles.accentLine} />
-          </View>
+          {/* Tagline & Accent Bar */}
+          <Animated.View style={{ alignItems: 'center', transform: [{ translateY: textSlide }] }}>
+            <View style={styles.accentRow}>
+              <View style={styles.goldLine} />
+              <View style={styles.goldDot} />
+              <View style={styles.goldLine} />
+            </View>
 
-          {/* Subtitle / Tagline */}
-          <Animated.Text
-            style={[
-              styles.subtitleText,
-              { transform: [{ translateY: taglineSlide }] },
-            ]}
-          >
-            {subtitle}
-          </Animated.Text>
+            <Text style={styles.subtitleText}>{subtitle}</Text>
+
+            {/* Feature Highlights Chip */}
+            <View style={styles.highlightPill}>
+              <Text style={styles.highlightText}>⚡ Fast Cabs</Text>
+              <Text style={styles.highlightDot}>•</Text>
+              <Text style={styles.highlightText}>🛡️ Safe Travel</Text>
+              <Text style={styles.highlightDot}>•</Text>
+              <Text style={styles.highlightText}>💰 Best Fares</Text>
+            </View>
+          </Animated.View>
         </Animated.View>
 
-        {/* ── Bottom Section: Catchphrase & Animated Progress Bar ── */}
+        {/* ── Bottom Section: Loading Indicator & Reassurance ── */}
         <Animated.View style={[styles.bottomWrap, { opacity: fadeAnim }]}>
-          {/* Golden Stylized Catchphrase */}
-          <View style={styles.catchphraseBox}>
-            <Text style={styles.catchphraseLine1}>Safe Rides</Text>
-            <Text style={styles.catchphraseLine2}>Happy Journeys</Text>
-          </View>
-
-          {/* Animated Glowing Progress Bar */}
+          {/* Progress Bar Container */}
           <View style={styles.progressBarTrack}>
             <Animated.View
               style={[
@@ -146,11 +172,15 @@ export const SplashScreen = ({
             />
           </View>
 
+          <Text style={styles.loadingStatusText}>Preparing your seamless journey...</Text>
+
           {/* Footer Sub-Note */}
           <View style={styles.footerNoteRow}>
-            <Text style={{ color: '#FBBF24', fontSize: 13, fontWeight: '900' }}>✓</Text>
+            <View style={styles.verifiedCheckBadge}>
+              <Text style={styles.verifiedCheckText}>✓</Text>
+            </View>
             <Text style={styles.footerNoteText}>
-              Tamil Nadu's No. 1 Trusted Taxi Network
+              Official 24x7 Cab Service • Live GPS Tracking
             </Text>
           </View>
         </Animated.View>
@@ -175,122 +205,160 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: SCREEN_HEIGHT * 0.38,
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    height: SCREEN_HEIGHT * 0.35,
+    backgroundColor: 'rgba(11, 15, 25, 0.65)',
+  },
+  centerBackdrop: {
+    position: 'absolute',
+    top: SCREEN_HEIGHT * 0.25,
+    left: 0,
+    right: 0,
+    height: SCREEN_HEIGHT * 0.5,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
   },
   bottomVignette: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: SCREEN_HEIGHT * 0.42,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    height: SCREEN_HEIGHT * 0.38,
+    backgroundColor: 'rgba(11, 15, 25, 0.78)',
   },
 
-  // ── Top Header ──
-  headerWrap: {
+  // ── Center Section ──
+  centerSection: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: Math.max(StatusBar.currentHeight || 0, 52),
     paddingHorizontal: 24,
     zIndex: 10,
+    marginTop: 20,
+  },
+  eyebrowTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: 'rgba(251, 191, 36, 0.16)',
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.45)',
+    marginBottom: 20,
+  },
+  eyebrowStar: {
+    fontSize: 10,
+    color: '#FBBF24',
+    fontWeight: '900',
+  },
+  eyebrowText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FDE68A',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+  badgeWrapper: {
+    width: 204,
+    height: 204,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+    marginBottom: 18,
+  },
+  glowingHalo: {
+    position: 'absolute',
+    width: 216,
+    height: 216,
+    borderRadius: 108,
+    backgroundColor: 'rgba(245, 158, 11, 0.25)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(251, 191, 36, 0.4)',
   },
   logoBadgeContainer: {
-    marginBottom: 12,
-  },
-  logoRing: {
-    width: 92,
-    height: 92,
-    borderRadius: 46,
-    borderWidth: 0,
-    shadowColor: '#FFC700',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.55,
-    shadowRadius: 16,
-    elevation: 12,
-    overflow: 'hidden',
-    backgroundColor: '#000000',
+    width: 188,
+    height: 188,
+    borderRadius: 94,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#F59E0B',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.65,
+    shadowRadius: 24,
+    elevation: 18,
   },
   logoImage: {
-    width: '100%',
-    height: '100%',
+    width: 188,
+    height: 188,
   },
-  brandTitleRow: {
+  accentRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
-    marginBottom: 6,
+    gap: 8,
+    marginBottom: 8,
   },
-  accentLine: {
-    width: 24,
+  goldLine: {
+    width: 28,
     height: 1.5,
     backgroundColor: '#F59E0B',
-    opacity: 0.8,
+    opacity: 0.85,
   },
-  brandTitle: {
-    fontSize: 26,
-    fontWeight: '900',
-    color: '#FFFFFF',
-    letterSpacing: 2.2,
-    textTransform: 'uppercase',
-    textShadowColor: 'rgba(0, 0, 0, 0.85)',
-    textShadowOffset: { width: 0, height: 2 },
-    textShadowRadius: 8,
-  },
-  brandTitleGold: {
-    color: '#FBBF24',
+  goldDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#FBBF24',
   },
   subtitleText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#E2E8F0',
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#F8FAFC',
     letterSpacing: 1.2,
-    textTransform: 'capitalize',
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 6,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.9)',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 8,
+    marginBottom: 14,
+  },
+  highlightPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  highlightText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#E2E8F0',
+    letterSpacing: 0.3,
+  },
+  highlightDot: {
+    fontSize: 10,
+    color: '#F59E0B',
+    fontWeight: '900',
   },
 
-  // ── Bottom Catchphrase & Progress Bar ──
+  // ── Bottom Wrap ──
   bottomWrap: {
     alignItems: 'center',
-    paddingBottom: Math.max(StatusBar.currentHeight || 0, 44),
+    paddingBottom: Math.max(StatusBar.currentHeight || 0, 42),
     paddingHorizontal: 24,
     zIndex: 10,
     width: '100%',
   },
-  catchphraseBox: {
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  catchphraseLine1: {
-    fontSize: 32,
-    fontWeight: '800',
-    fontStyle: 'italic',
-    color: '#FCD34D',
-    letterSpacing: 1.2,
-    textShadowColor: 'rgba(0, 0, 0, 0.95)',
-    textShadowOffset: { width: 0, height: 3 },
-    textShadowRadius: 10,
-  },
-  catchphraseLine2: {
-    fontSize: 34,
-    fontWeight: '800',
-    fontStyle: 'italic',
-    color: '#FBBF24',
-    letterSpacing: 1.4,
-    marginTop: -4,
-    textShadowColor: 'rgba(0, 0, 0, 0.95)',
-    textShadowOffset: { width: 0, height: 3 },
-    textShadowRadius: 10,
-  },
   progressBarTrack: {
-    width: 140,
-    height: 4.5,
+    width: 160,
+    height: 5,
     borderRadius: 3,
-    backgroundColor: 'rgba(255, 255, 255, 0.28)',
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
     overflow: 'hidden',
-    marginBottom: 16,
+    marginBottom: 10,
   },
   progressBarFill: {
     height: '100%',
@@ -298,23 +366,43 @@ const styles = StyleSheet.create({
     borderRadius: 3,
     shadowColor: '#F59E0B',
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 6,
+    shadowOpacity: 0.95,
+    shadowRadius: 8,
+  },
+  loadingStatusText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94A3B8',
+    letterSpacing: 0.6,
+    marginBottom: 14,
   },
   footerNoteRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    opacity: 0.92,
+    gap: 7,
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  verifiedCheckBadge: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#10B981',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verifiedCheckText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
   },
   footerNoteText: {
     fontSize: 11,
     fontWeight: '600',
     color: '#CBD5E1',
-    letterSpacing: 0.6,
-    textShadowColor: 'rgba(0, 0, 0, 0.8)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    letterSpacing: 0.5,
   },
 })
 

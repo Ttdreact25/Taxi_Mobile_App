@@ -253,7 +253,11 @@ const HomeScreen = ({ navigation }) => {
           <View style={styles.heroTopBar}>
             <View style={styles.heroBrandRow}>
               <View style={styles.taxiBadgePill}>
-                <Ionicons name="car" size={12} color="#000000" />
+                <Image
+                  source={require('../../../assets/cityonetaxi_badge.png')}
+                  style={{ width: 17, height: 17, marginRight: 4 }}
+                  resizeMode="contain"
+                />
                 <Text style={styles.taxiBadgeText}>CityOneTaxi</Text>
               </View>
               <View style={styles.liveTagPill}>
