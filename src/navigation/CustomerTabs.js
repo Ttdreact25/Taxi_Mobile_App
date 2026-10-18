@@ -55,6 +55,7 @@ const BookingStack = () => (
 const TripsStack = () => (
   <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
     <Stack.Screen name="TripsList"            component={TripHistoryScreen} />
+    <Stack.Screen name="Booking"              component={BookingScreen} />
     <Stack.Screen name="Ticket"               component={TicketScreen} />
     <Stack.Screen name="BookingTrack"         component={BookingTrackScreen} />
     <Stack.Screen name="LongTrip"             component={BookingScreen} initialParams={{ tripMode: 'outstation' }} />
@@ -66,6 +67,7 @@ const TripsStack = () => (
 const ProfileStack = () => (
   <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
     <Stack.Screen name="ProfileMain"          component={ProfileScreen} />
+    <Stack.Screen name="Booking"              component={BookingScreen} />
     <Stack.Screen name="SavedPlaces"          component={SavedPlacesScreen} />
     <Stack.Screen name="IdentityVerification" component={IdentityVerificationScreen} />
     <Stack.Screen name="Notifications"        component={NotifScreen} />
@@ -80,7 +82,6 @@ const ProfileStack = () => (
 const TabIcon = ({ routeName, focused }) => {
   const icons = {
     Home:    focused ? 'home'   : 'home-outline',
-    Booking: focused ? 'car'    : 'car-outline',
     Trips:   focused ? 'time'   : 'time-outline',
     Profile: focused ? 'person' : 'person-outline',
   }
@@ -89,7 +90,7 @@ const TabIcon = ({ routeName, focused }) => {
     <View style={[styles.iconPill, focused && styles.iconPillActive]}>
       <Ionicons
         name={icons[routeName] || 'ellipse'}
-        size={22}
+        size={26}
         color={focused ? '#D97706' : COLORS.gray400}
       />
     </View>
@@ -106,10 +107,10 @@ const CustomerTabs = () => {
         headerShown: false,
         tabBarShowLabel: true,
         tabBarLabelStyle: {
-          fontSize: 11,
+          fontSize: 12,
           fontWeight: '700',
           paddingBottom: 2,
-          marginTop: -2,
+          marginTop: -1,
         },
         tabBarActiveTintColor: '#D97706',
         tabBarInactiveTintColor: COLORS.gray400,
@@ -117,7 +118,7 @@ const CustomerTabs = () => {
           backgroundColor: COLORS.white,
           borderTopWidth: 1,
           borderTopColor: COLORS.gray100,
-          height: 60 + bottomInset,
+          height: 64 + bottomInset,
           paddingTop: 6,
           paddingBottom: bottomInset,
           shadowColor: '#0F172A',
@@ -130,7 +131,6 @@ const CustomerTabs = () => {
       })}
     >
       <Tab.Screen name="Home"    component={HomeStack}    options={{ title: 'Home' }} />
-      <Tab.Screen name="Booking" component={BookingStack} options={{ title: 'Book Ride' }} />
       <Tab.Screen name="Trips"   component={TripsStack}   options={{ title: 'My Trips' }} />
       <Tab.Screen name="Profile" component={ProfileStack} options={{ title: 'Profile' }} />
     </Tab.Navigator>
@@ -139,8 +139,8 @@ const CustomerTabs = () => {
 
 const styles = StyleSheet.create({
   iconPill: {
-    width: 44,
-    height: 28,
+    width: 52,
+    height: 32,
     borderRadius: RADIUS.full,
     alignItems: 'center',
     justifyContent: 'center',

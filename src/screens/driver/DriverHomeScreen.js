@@ -1962,7 +1962,7 @@ const DriverHomeScreen = ({ navigation }) => {
                         {isKycApproved ? 'GO ONLINE' : 'KYC REQUIRED'}
                       </Text>
                       <Text style={{ fontSize: 12, fontWeight: '600', color: '#D1FAE5', marginTop: 2 }}>
-                        {isKycApproved ? 'Tap to start duty & receive bookings' : 'Account awaiting verification'}
+                        {isKycApproved ? 'Tap to start duty' : 'Account awaiting verification'}
                       </Text>
                     </View>
                   </View>
