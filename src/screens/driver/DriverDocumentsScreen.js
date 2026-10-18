@@ -500,7 +500,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
       }
 
       setKycPolicyInfo({
-        policy: pol || "1. Original Driving License (ஓட்டுநர் உரிமம்) மற்றும் RC Book தெளிவாக புகைப்படம் எடுத்து பதிவேற்றவும்.\n2. அனைத்து ஆவணங்களும் தெளிவாகவும், செல்லுபடியாகும் (valid) நிலையிலும் இருக்க வேண்டும்.\n3. ஆவணங்கள் பதிவேற்றிய பிறகு 24 மணி நேரத்திற்குள் Admin CRM மூலம் சரிபார்க்கப்படும்.\n4. ஏதேனும் சந்தேகம் இருப்பின் கீழே உள்ள அலுவலக முகவரி அல்லது தொலைபேசி எண்ணை தொடர்பு கொள்ளவும்.",
+        policy: pol || "1. Upload clear photos of your original Driving License and Vehicle RC Book.\n2. All documents must be clearly legible and currently valid.\n3. Documents will be reviewed and verified by Admin CRM within 24 hours.\n4. For any assistance, contact our official verification hub address or helpline.",
         address: addr || "No. 12, Anna Salai, Near Mount Road Metro, Chennai, Tamil Nadu - 600002",
         phone: ph || "+91 98765 43210",
       })
@@ -765,11 +765,11 @@ const DriverDocumentsScreen = ({ navigation }) => {
     // ── 1. MANDATORY POLICY ACCEPTANCE CHECK ───────────────────
     if (!policyAccepted) {
       Alert.alert(
-        'Policy Acceptance Required / விதிமுறை ஒப்புதல் தேவை',
-        'Please read the Driver KYC Policy paragraph at the top and check "I have read and agree to the Policy" before submitting your documents.\n\nமேலே உள்ள விதிமுறைகளை முழுமையாக படித்து ஒப்புக்கொண்ட பின்னரே ஆவணங்களைச் சமர்ப்பிக்க முடியும்.',
+        'Policy Acceptance Required',
+        'Please read the Driver KYC Policy paragraph at the top and check "I have read and agree to this Policy" before submitting your documents.',
         [
           {
-            text: 'Read Policy Now / படித்து ஒப்புக்கொள்ளவும்',
+            text: 'Read Policy Now',
             onPress: () => {
               scrollViewRef.current?.scrollTo?.({ y: 0, animated: true })
             }
@@ -782,13 +782,13 @@ const DriverDocumentsScreen = ({ navigation }) => {
     // ── 2. MANDATORY DETAILS & DOCUMENTS (ALL REQUIRED) ────────
     // Driving License Number
     if (!form.license_no || !form.license_no.trim()) {
-      Alert.alert('Missing Driving License / ஓட்டுநர் உரிம எண் தேவை', 'Please enter your Driving License Number (e.g. TN-01-2024-1234567).')
+      Alert.alert('Missing Driving License', 'Please enter your Driving License Number (e.g. TN-01-2024-1234567).')
       return
     }
 
     // Driving License Expiry
     if (!form.license_expiry || !form.license_expiry.trim()) {
-      Alert.alert('License Expiry Date Required / உரிம காலாவதி தேதி தேவை', 'Please enter your Driving License Expiry Date (YYYY-MM-DD).')
+      Alert.alert('License Expiry Date Required', 'Please enter your Driving License Expiry Date (YYYY-MM-DD).')
       return
     }
 
@@ -806,7 +806,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
 
     // Aadhaar Number
     if (!form.aadhaar_no || !form.aadhaar_no.trim()) {
-      Alert.alert('Aadhaar Number Required / ஆதார் எண் தேவை', 'Please enter your 12-digit Aadhaar Card Number.')
+      Alert.alert('Aadhaar Number Required', 'Please enter your 12-digit Aadhaar Card Number.')
       return
     }
 
@@ -842,7 +842,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
 
     // Commercial Taxi Permit Expiry Date
     if (!form.permit_expiry || !form.permit_expiry.trim()) {
-      Alert.alert('Permit Expiry Date Required / பெர்மிட் காலாவதி தேதி தேவை', 'Please enter your Commercial Taxi Permit Expiry Date (YYYY-MM-DD).')
+      Alert.alert('Permit Expiry Date Required', 'Please enter your Commercial Taxi Permit Expiry Date (YYYY-MM-DD).')
       return
     }
 
@@ -854,7 +854,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
 
     // Vehicle Insurance Expiry Date
     if (!form.insurance_expiry || !form.insurance_expiry.trim()) {
-      Alert.alert('Insurance Expiry Date Required / இன்சூரன்ஸ் காலாவதி தேதி தேவை', 'Please enter your Vehicle Insurance Expiry Date (YYYY-MM-DD).')
+      Alert.alert('Insurance Expiry Date Required', 'Please enter your Vehicle Insurance Expiry Date (YYYY-MM-DD).')
       return
     }
 
@@ -879,7 +879,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
 
     // Digital Signature
     if (!form.signature_image && !form.signature_url && !profile?.signature_image && !profile?.signature_url) {
-      Alert.alert('Digital Signature Required / கையொப்பம் தேவை', 'Please draw your digital signature or upload your signature photo before submitting.')
+      Alert.alert('Digital Signature Required', 'Please draw your digital signature or upload your signature photo before submitting.')
       return
     }
 
@@ -1184,14 +1184,14 @@ const DriverDocumentsScreen = ({ navigation }) => {
             </View>
             <View style={{ flex: 1, marginLeft: 10 }}>
               <Text style={styles.policyCardTitle}>Driver Verification Policy & Rules</Text>
-              <Text style={styles.policyCardSub}>ஓட்டுநர் சரிபார்ப்பு கொள்கை & வழிகாட்டுதல்கள்</Text>
+              <Text style={styles.policyCardSub}>Official Commercial Partner Compliance Guidelines</Text>
             </View>
             <View style={styles.policyOfficialBadge}>
               <Text style={styles.policyOfficialBadgeText}>OFFICIAL</Text>
             </View>
           </View>
 
-          {/* Formatted Guidelines Body Text (Preserves Tamil Unicode and line breaks) */}
+          {/* Formatted Guidelines Body Text */}
           <View style={styles.policyBodyWrap}>
             <Text style={styles.policyText}>
               {kycPolicyInfo.policy || '1. Please upload valid Commercial Driving License, RC Book, Insurance & Selfie.\n2. All documents are reviewed and approved by the Admin team.'}
@@ -1206,7 +1206,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
                 <Ionicons name="location" size={15} color="#4F46E5" />
               </View>
               <View style={{ flex: 1, marginLeft: 8 }}>
-                <Text style={styles.policyMetaLabel}>VERIFICATION HUB / அலுவலக முகவரி:</Text>
+                <Text style={styles.policyMetaLabel}>VERIFICATION HUB ADDRESS:</Text>
                 <Text style={styles.policyAddressValue}>
                   {kycPolicyInfo.address || 'No. 12, Anna Salai, Near Mount Road Metro, Chennai, Tamil Nadu - 600002'}
                 </Text>
@@ -1219,7 +1219,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
                 <Ionicons name="call" size={15} color="#059669" />
               </View>
               <View style={{ flex: 1, marginLeft: 8 }}>
-                <Text style={styles.policyMetaLabel}>DRIVER HELPLINE / உதவி எண்:</Text>
+                <Text style={styles.policyMetaLabel}>DRIVER SUPPORT HELPLINE:</Text>
                 <Text style={styles.policyPhoneValue}>
                   {kycPolicyInfo.phone || '+91 98765 43210'}
                 </Text>
@@ -1264,7 +1264,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
                   I have read and agree to this Policy
                 </Text>
                 <Text style={styles.policyAcceptSub}>
-                  மேலே உள்ள விதிமுறைகளை முழுமையாக படித்து ஒப்புக்கொள்கிறேன் *
+                  I confirm that I have read and agree to all verification terms *
                 </Text>
               </View>
               <View style={[
@@ -2208,7 +2208,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
                   I confirm that I have read the complete Driver KYC Policy paragraph at the top, and all submitted details & document photos are 100% genuine and valid.
                 </Text>
                 <Text style={styles.bottomConsentTamil}>
-                  மேலே உள்ள விதிமுறைகளை படித்துவிட்டேன். நான் சமர்ப்பிக்கும் ஆவணங்கள் உண்மையானவை என ஒப்புக்கொள்கிறேன்.
+                  All information provided is authentic and verifiable under transport compliance regulations.
                 </Text>
               </View>
               <View style={[

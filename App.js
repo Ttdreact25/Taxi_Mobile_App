@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-nati
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider } from './src/context/AuthContext'
+import { CorporateAlertProvider } from './src/components/common/CorporateAlertProvider'
 import AppNavigator from './src/navigation/AppNavigator'
 
 class GlobalErrorBoundary extends Component {
@@ -108,8 +109,10 @@ export default function App() {
     <GlobalErrorBoundary>
       <SafeAreaProvider>
         <AuthProvider>
-          <StatusBar style="dark" />
-          <AppNavigator />
+          <CorporateAlertProvider>
+            <StatusBar style="dark" />
+            <AppNavigator />
+          </CorporateAlertProvider>
         </AuthProvider>
       </SafeAreaProvider>
     </GlobalErrorBoundary>
