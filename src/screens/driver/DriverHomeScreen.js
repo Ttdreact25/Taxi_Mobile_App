@@ -955,7 +955,7 @@ const DriverHomeScreen = ({ navigation }) => {
         try {
           Vibration.vibrate([0, 500, 200, 500])
         } catch {}
-        playDriverBookingReceived(currentIncoming?.booking_ref).catch(() => {})
+        playDriverAlertSound().catch(() => {})
         setCountdown(30)
         if (timerRef.current) clearInterval(timerRef.current)
         timerRef.current = setInterval(() => {
@@ -977,10 +977,17 @@ const DriverHomeScreen = ({ navigation }) => {
     return () => {}
   }, [pendingRides])
 
+  // Instant Sound Alert whenever Accept/Decline Instant Ride Popup opens
+  useEffect(() => {
+    if (pendingRides[0]?.id) {
+      playDriverAlertSound().catch(() => {})
+    }
+  }, [pendingRides[0]?.id])
+
   // Immediate Sound Alert whenever Assigned Ride Alert Modal opens
   useEffect(() => {
     if (assignedAlertTrip?.id) {
-      playDriverBookingReceived(assignedAlertTrip.booking_ref).catch(() => {})
+      playDriverAlertSound().catch(() => {})
     }
   }, [assignedAlertTrip?.id])
 

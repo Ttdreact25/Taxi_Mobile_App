@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react'
 import { AppState, Platform, Vibration } from 'react-native'
 import { useAuth } from '../../context/AuthContext'
 import { bookingsAPI, driverAPI } from '../../api/api'
-import { playCustomerTaxiReachedAlert, playDriverBookingReceived } from '../../services/SoundService'
+import { playCustomerTaxiReachedAlert, playDriverAlertSound, playDriverBookingReceived } from '../../services/SoundService'
 import PushNotificationService from '../../services/PushNotificationService'
 
 let ExpoAudio = null
@@ -98,7 +98,7 @@ const GlobalRideAudioWatcher = () => {
               const pId = firstPending.id || firstPending.booking_id
               if (pId && alertedDriverRideIdRef.current !== `pending_${pId}`) {
                 alertedDriverRideIdRef.current = `pending_${pId}`
-                playDriverBookingReceived(firstPending.booking_ref).catch(() => {})
+                playDriverAlertSound().catch(() => {})
                 PushNotificationService.showLocalBookingAlertNotification(
                   '🚗 New Booking Received!',
                   `New ride request ${firstPending.booking_ref ? '#' + firstPending.booking_ref : ''}. Tap to accept.`
@@ -111,7 +111,7 @@ const GlobalRideAudioWatcher = () => {
               const aId = activeTrip.id || activeTrip.booking_id
               if (aId && alertedDriverRideIdRef.current !== `assigned_${aId}`) {
                 alertedDriverRideIdRef.current = `assigned_${aId}`
-                playDriverBookingReceived(activeTrip.booking_ref).catch(() => {})
+                playDriverAlertSound().catch(() => {})
                 PushNotificationService.showLocalBookingAlertNotification(
                   '🚗 New Booking Assigned!',
                   `You have been assigned to ride ${activeTrip.booking_ref ? '#' + activeTrip.booking_ref : ''}.`

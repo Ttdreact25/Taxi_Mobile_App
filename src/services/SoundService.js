@@ -133,9 +133,11 @@ const playWebAudioTone = (pattern = 'driver') => {
   }
 }
 
+let currentDriverPlayer = null
+
 /**
  * Play urgent Driver Ride Alert Sound (Assign & Dispatch Alert)
- * Master audio: High-Volume Alarm Chimes + Boosted Voice "Booking received! Booking received! New ride assigned."
+ * Plays the original high-priority dispatch alarm tone (driver_alert.wav)
  */
 export const playDriverAlertSound = async () => {
   // Always trigger strong haptic vibration pattern
@@ -145,54 +147,65 @@ export const playDriverAlertSound = async () => {
 
   await initAudioMode()
 
-  let played = false
-
   // 1. Modern expo-audio (SDK 52+)
   if (ExpoAudio?.createAudioPlayer) {
     try {
+      if (currentDriverPlayer) {
+        try { currentDriverPlayer.pause?.() } catch {}
+        try { currentDriverPlayer.remove?.() } catch {}
+        currentDriverPlayer = null
+      }
+
       const player = ExpoAudio.createAudioPlayer(require('../../assets/sounds/driver_alert.wav'))
+      currentDriverPlayer = player
+      activePlayer = player
       player.volume = 1.0
       player.play()
-      played = true
+
+      try {
+        player.addListener?.('playbackStatusUpdate', (status) => {
+          if (status?.didJustFinish) {
+            try { player.remove?.() } catch {}
+            if (currentDriverPlayer === player) currentDriverPlayer = null
+            if (activePlayer === player) activePlayer = null
+          }
+        })
+      } catch {}
+      return
     } catch (e) {
-      console.warn('[SoundService] expo-audio primary failed:', e?.message)
+      console.warn('[SoundService] expo-audio failed, falling back:', e?.message)
     }
   }
 
-  // 2. Secondary fallback using booking_received.wav
-  if (!played && ExpoAudio?.createAudioPlayer) {
+  // 2. Legacy expo-av fallback
+  if (ExpoAudio?.Audio?.Sound?.createAsync) {
     try {
-      const player = ExpoAudio.createAudioPlayer(require('../../assets/sounds/booking_received.wav'))
-      player.volume = 1.0
-      player.play()
-      played = true
-    } catch (e) {}
-  }
+      if (currentDriverPlayer) {
+        try { await currentDriverPlayer.stopAsync?.() } catch {}
+        try { await currentDriverPlayer.unloadAsync?.() } catch {}
+        currentDriverPlayer = null
+      }
 
-  // 3. Legacy expo-av fallback
-  if (!played && ExpoAudio?.Audio?.Sound?.createAsync) {
-    try {
       const { sound } = await ExpoAudio.Audio.Sound.createAsync(
         require('../../assets/sounds/driver_alert.wav'),
         { shouldPlay: true, volume: 1.0 }
       )
+      currentDriverPlayer = sound
+      activePlayer = sound
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status?.didJustFinish) {
           sound.unloadAsync().catch(() => {})
+          if (currentDriverPlayer === sound) currentDriverPlayer = null
+          if (activePlayer === sound) activePlayer = null
         }
       })
-      played = true
+      return
     } catch (e) {
       console.warn('[SoundService] expo-av failed:', e?.message)
     }
   }
 
-  // 4. Fallback Speech synthesis if audio file could not play
-  if (!played) {
-    speakVoiceAlert('Booking received! Booking received! New ride assigned.', { language: 'en-US' })
-  }
-
-  // 5. Web Audio fallback
+  // 3. Web Audio fallback
   if (Platform.OS === 'web') {
     playWebAudioTone('driver')
   }
