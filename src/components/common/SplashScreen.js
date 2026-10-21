@@ -9,6 +9,7 @@ import {
   Dimensions,
   StatusBar,
 } from 'react-native'
+import * as ExpoSplashScreen from 'expo-splash-screen'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
 
@@ -22,12 +23,15 @@ export const SplashScreen = ({
   }, [onFinish])
 
   const fadeAnim = useRef(new Animated.Value(0)).current
-  const logoScale = useRef(new Animated.Value(0.78)).current
+  const logoScale = useRef(new Animated.Value(0.85)).current
   const pulseAnim = useRef(new Animated.Value(1)).current
   const progressAnim = useRef(new Animated.Value(0)).current
-  const textSlide = useRef(new Animated.Value(24)).current
+  const textSlide = useRef(new Animated.Value(20)).current
 
   useEffect(() => {
+    // Hide native splash screen seamlessly now that React Native splash screen is mounted
+    ExpoSplashScreen.hideAsync().catch(() => {})
+
     let finished = false
     const finishSafely = () => {
       if (!finished) {
@@ -36,25 +40,25 @@ export const SplashScreen = ({
       }
     }
 
-    const fallbackTimer = setTimeout(finishSafely, 3600)
+    const fallbackTimer = setTimeout(finishSafely, 2600)
 
     try {
       // 1. Entrance animation (fade in + logo spring)
       Animated.parallel([
         Animated.timing(fadeAnim, {
           toValue: 1,
-          duration: 750,
+          duration: 500,
           useNativeDriver: true,
         }),
         Animated.spring(logoScale, {
           toValue: 1,
-          friction: 6,
-          tension: 38,
+          friction: 7,
+          tension: 45,
           useNativeDriver: true,
         }),
         Animated.timing(textSlide, {
           toValue: 0,
-          duration: 800,
+          duration: 600,
           useNativeDriver: true,
         }),
       ]).start()
@@ -75,16 +79,16 @@ export const SplashScreen = ({
         ])
       ).start()
 
-      // 3. Progress bar animation - 2800ms full smooth fill-up
+      // 3. Progress bar animation - 1800ms full smooth fill-up
       Animated.timing(progressAnim, {
         toValue: 1,
-        duration: 2800,
+        duration: 1800,
         useNativeDriver: false,
       }).start(({ finished: animFinished }) => {
         if (animFinished) {
           Animated.timing(fadeAnim, {
             toValue: 0,
-            duration: 200,
+            duration: 250,
             useNativeDriver: true,
           }).start(() => finishSafely())
         }

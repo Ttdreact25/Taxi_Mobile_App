@@ -106,13 +106,10 @@ const errorStyles = StyleSheet.create({
 
 import * as ExpoSplashScreen from 'expo-splash-screen'
 
-// Dismiss native launch screen immediately as soon as JS bundle executes
-ExpoSplashScreen.hideAsync().catch(() => {})
+// Keep native launch screen visible seamlessly while JS bundle is initializing
+ExpoSplashScreen.preventAutoHideAsync().catch(() => {})
 
 export default function App() {
-  React.useEffect(() => {
-    ExpoSplashScreen.hideAsync().catch(() => {})
-  }, [])
 
   return (
     <GlobalErrorBoundary>
