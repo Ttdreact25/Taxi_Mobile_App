@@ -28,10 +28,10 @@ import {
   resolveAssetUrl,
 } from '../../api/api'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
-import AdCarousel from '../../components/ui/AdCarousel'
 import { Skeleton } from '../../components/common/Skeleton'
 import { playCustomerTaxiReachedAlert } from '../../services/SoundService'
 import { useDoubleBackExit } from '../../components/common/DoubleBackExitHandler'
+import AdCarousel from '../../components/ui/AdCarousel'
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 
@@ -347,86 +347,64 @@ const HomeScreen = ({ navigation }) => {
           </View>
         </View>
 
-        {/* ── 2. QUICK CATEGORY ROW (4 ITEMS MATCHING SCREENSHOT) ── */}
+        {/* ── 2. QUICK SERVICE CARDS (LOCAL, OUTSTATION, SHARED) ── */}
         <View style={styles.categoriesRow}>
           {/* 1. Local Trip */}
           <TouchableOpacity
-            style={styles.categoryItem}
+            style={styles.serviceCard}
             onPress={() => navigation.navigate('Booking', { tripMode: 'local' })}
-            activeOpacity={0.82}
+            activeOpacity={0.85}
           >
-            <View style={styles.categoryIconCard}>
-              <View style={styles.carIllustrationBox}>
-                <Ionicons name="car-sport" size={36} color="#D97706" />
-                <View style={styles.passengersBadge}>
-                  <Ionicons name="person" size={11} color="#1E293B" />
-                  <Text style={styles.passengersBadgeText}>4</Text>
-                </View>
-              </View>
+            <View style={[styles.serviceIconBox, styles.localIconBox]}>
+              <Ionicons name="car-sport" size={26} color="#D97706" />
             </View>
-            <Text style={styles.categoryItemLabel} numberOfLines={1}>
+            <Text style={styles.serviceTitle} numberOfLines={1}>
               Local Trip
             </Text>
+            <View style={styles.servicePill}>
+              <Ionicons name="person" size={9} color="#B45309" />
+              <Text style={styles.servicePillText}>4 Seats</Text>
+            </View>
           </TouchableOpacity>
 
           {/* 2. Outstation */}
           <TouchableOpacity
-            style={styles.categoryItem}
+            style={styles.serviceCard}
             onPress={() => navigation.navigate('Booking', { tripMode: 'outstation' })}
-            activeOpacity={0.82}
+            activeOpacity={0.85}
           >
-            <View style={styles.categoryIconCard}>
-              <View style={styles.carIllustrationBox}>
-                <Ionicons name="car" size={36} color="#7C3AED" />
-                <View style={styles.passengersBadge}>
-                  <Ionicons name="map" size={11} color="#7C3AED" />
-                  <Text style={styles.passengersBadgeText}>&gt;50km</Text>
-                </View>
-              </View>
+            <View style={[styles.serviceIconBox, styles.outstationIconBox]}>
+              <Ionicons name="navigate" size={24} color="#7C3AED" />
             </View>
-            <Text style={styles.categoryItemLabel} numberOfLines={1}>
+            <Text style={styles.serviceTitle} numberOfLines={1}>
               Outstation
             </Text>
+            <View style={[styles.servicePill, styles.outstationPill]}>
+              <Ionicons name="speedometer-outline" size={9} color="#7C3AED" />
+              <Text style={[styles.servicePillText, { color: '#7C3AED' }]}>50+ km</Text>
+            </View>
           </TouchableOpacity>
 
           {/* 3. Shared Trip */}
           <TouchableOpacity
-            style={styles.categoryItem}
+            style={styles.serviceCard}
             onPress={() => navigation.navigate('SharedTrips')}
-            activeOpacity={0.82}
+            activeOpacity={0.85}
           >
-            <View style={styles.categoryIconCard}>
-              <View style={styles.carIllustrationBox}>
-                <Ionicons name="people" size={36} color="#059669" />
-                <View style={styles.passengersBadge}>
-                  <Ionicons name="people" size={11} color="#059669" />
-                  <Text style={styles.passengersBadgeText}>2</Text>
-                </View>
-              </View>
+            {/* Top Offer Badge */}
+            <View style={styles.cardSaveBadge}>
+              <Text style={styles.cardSaveBadgeText}>50% OFF</Text>
             </View>
-            <Text style={styles.categoryItemLabel} numberOfLines={1}>
+            <View style={[styles.serviceIconBox, styles.sharedIconBox]}>
+              <Ionicons name="people" size={26} color="#059669" />
+            </View>
+            <Text style={styles.serviceTitle} numberOfLines={1}>
               Shared Trip
             </Text>
-          </TouchableOpacity>
-
-          {/* 4. All Services */}
-          <TouchableOpacity
-            style={styles.categoryItem}
-            onPress={() => navigation.navigate('Booking')}
-            activeOpacity={0.82}
-          >
-            <View style={styles.categoryIconCard}>
-              <View style={styles.carIllustrationBox}>
-                <Ionicons name="grid" size={34} color="#0F172A" />
-                <View style={styles.passengersBadge}>
-                  <Ionicons name="apps" size={11} color="#D97706" />
-                  <Text style={styles.passengersBadgeText}>All</Text>
-                </View>
-              </View>
+            <View style={[styles.servicePill, styles.sharedPill]}>
+              <Ionicons name="people-outline" size={9} color="#059669" />
+              <Text style={[styles.servicePillText, { color: '#059669' }]}>Carpool</Text>
             </View>
-            <Text style={styles.categoryItemLabel} numberOfLines={1}>
-              All
-            </Text>
           </TouchableOpacity>
         </View>
 
@@ -525,12 +503,12 @@ const HomeScreen = ({ navigation }) => {
           </View>
         )}
 
-        {/* ── 4. "WHAT'S NEW" BANNER SECTION (MATCHING SCREENSHOT) ── */}
+        {/* ── 4. "WHAT'S NEW" BANNER SECTION ── */}
         <View style={styles.sectionWrap}>
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.sectionTitleBlack}>What's New</Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Booking')} activeOpacity={0.7}>
-              <Text style={styles.sectionMoreLink}>More</Text>
+            <TouchableOpacity onPress={() => navigation.navigate('Offers')} activeOpacity={0.7}>
+              <Text style={styles.sectionMoreLink}>Offers</Text>
             </TouchableOpacity>
           </View>
 
@@ -542,7 +520,7 @@ const HomeScreen = ({ navigation }) => {
           ) : (
             <TouchableOpacity
               style={styles.whatsNewCardFallback}
-              onPress={() => navigation.navigate('Booking')}
+              onPress={() => navigation.navigate('Offers')}
               activeOpacity={0.9}
             >
               <View style={styles.whatsNewContentLeft}>
@@ -568,7 +546,7 @@ const HomeScreen = ({ navigation }) => {
                 />
               </View>
 
-              {/* Pagination Dots at Bottom Right (Matching Screenshot) */}
+              {/* Pagination Dots at Bottom Right */}
               <View style={styles.whatsNewDotsRow}>
                 <View style={[styles.whatsNewDot, styles.whatsNewDotActive]} />
                 <View style={styles.whatsNewDot} />
@@ -621,81 +599,6 @@ const HomeScreen = ({ navigation }) => {
             </TouchableOpacity>
           </ScrollView>
         </View>
-
-        {/* ── 6. "RECENT DESTINATIONS" SECTION (MATCHING SCREENSHOT BOTTOM) ── */}
-        {recentTrips.length > 0 && (
-          <View style={styles.sectionWrap}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitleBlack}>Recent Destinations</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('Trips')} activeOpacity={0.7}>
-                <Text style={styles.sectionMoreLink}>View All</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.recentDestList}>
-              {recentTrips.map((trip) => (
-                <TouchableOpacity
-                  key={trip.id}
-                  style={styles.recentDestItem}
-                  onPress={() => navigation.navigate('Booking', {
-                    destination: trip.dest_address,
-                    destCoords: (trip.dest_latitude && trip.dest_longitude) ? { lat: parseFloat(trip.dest_latitude), lng: parseFloat(trip.dest_longitude) } : null,
-                  })}
-                  activeOpacity={0.8}
-                >
-                  <View style={styles.recentDestIconWrap}>
-                    <Ionicons name="time" size={18} color="#D97706" />
-                  </View>
-                  <View style={{ flex: 1, marginRight: 10 }}>
-                    <Text style={styles.recentDestTitle} numberOfLines={1}>
-                      {trip.dest_address?.split(',')[0] || trip.dest_address}
-                    </Text>
-                    <Text style={styles.recentDestAddress} numberOfLines={1}>
-                      {trip.dest_address}
-                    </Text>
-                  </View>
-                  <View style={styles.recentDestAction}>
-                    <Text style={styles.recentDestFare}>₹{Math.round(trip.final_fare || trip.fare_estimate || 0)}</Text>
-                    <Ionicons name="chevron-forward" size={16} color="#94A3B8" />
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* ── 7. EXCLUSIVE PROMOS & COUPONS (DYNAMIC FROM DB) ── */}
-        {coupons.length > 0 && (
-          <View style={styles.sectionWrap}>
-            <View style={styles.sectionHeaderRow}>
-              <Text style={styles.sectionTitleBlack}>Special Offers & Coupons</Text>
-            </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.savedPlacesScroll}>
-              {coupons.map((c, i) => {
-                const colorSet = COUPON_COLORS[i % COUPON_COLORS.length]
-                const discountDesc = c.description || (c.discount_type === 'percent'
-                  ? `${c.discount_value}% OFF`
-                  : `Flat ₹${c.discount_value} OFF`)
-                return (
-                  <View key={c.id || i} style={[styles.couponCard, { backgroundColor: colorSet.bg }]}>
-                    <View style={styles.couponTag}>
-                      <Ionicons name="pricetag" size={12} color={colorSet.color} />
-                      <Text style={[styles.couponCode, { color: colorSet.color }]}>{c.code}</Text>
-                    </View>
-                    <Text style={[styles.couponDesc, { color: colorSet.color }]} numberOfLines={2}>{discountDesc}</Text>
-                    <TouchableOpacity
-                      style={styles.applyBtn}
-                      onPress={() => navigation.navigate('Booking', { coupon: c.code })}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={styles.applyBtnText}>Apply Code</Text>
-                    </TouchableOpacity>
-                  </View>
-                )
-              })}
-            </ScrollView>
-          </View>
-        )}
 
         {/* ── 8. SAFETY & 24/7 HELPLINE BANNER ── */}
         <View style={styles.sectionWrap}>
@@ -974,74 +877,195 @@ const styles = StyleSheet.create({
     color: '#0F172A',
   },
 
-  // ── 2. Quick Category Row (4 Items) ──
+  // ── 2. Quick Service Cards (Local, Outstation, Shared) ──
   categoriesRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
+    paddingHorizontal: 16,
     paddingTop: 18,
-    paddingBottom: 14,
+    paddingBottom: 12,
+    gap: 10,
   },
-  categoryItem: {
+  serviceCard: {
     flex: 1,
-    alignItems: 'center',
-    marginHorizontal: 3,
-  },
-  categoryIconCard: {
-    width: '100%',
-    maxWidth: 78,
-    height: 72,
-    borderRadius: 20,
-    backgroundColor: '#F8FAFC',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1.2,
     borderColor: '#E2E8F0',
-    marginBottom: 8,
-    shadowColor: '#64748B',
+    paddingVertical: 14,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    position: 'relative',
+    shadowColor: '#0F172A',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
     elevation: 2,
   },
-  carIllustrationBox: {
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
+  serviceIconBox: {
     width: 48,
     height: 48,
-  },
-  passengersBadge: {
-    position: 'absolute',
-    bottom: -6,
-    right: -8,
-    flexDirection: 'row',
+    borderRadius: 15,
     alignItems: 'center',
-    gap: 2,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderWidth: 1.2,
-    borderColor: '#CBD5E1',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2.5,
-    elevation: 2,
+    justifyContent: 'center',
+    marginBottom: 8,
   },
-  passengersBadgeText: {
-    fontSize: 10,
+  localIconBox: {
+    backgroundColor: '#FFFBEB',
+    borderWidth: 1,
+    borderColor: '#FEF3C7',
+  },
+  outstationIconBox: {
+    backgroundColor: '#FAF5FF',
+    borderWidth: 1,
+    borderColor: '#F3E8FF',
+  },
+  sharedIconBox: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#DCFCE7',
+  },
+  serviceTitle: {
+    fontSize: 13,
     fontWeight: '900',
     color: '#0F172A',
-  },
-  categoryItemLabel: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#0F172A',
     textAlign: 'center',
-    lineHeight: 16,
+    marginBottom: 5,
     letterSpacing: -0.2,
+  },
+  servicePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#FFFBEB',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  outstationPill: {
+    backgroundColor: '#FAF5FF',
+    borderColor: '#DDD6FE',
+  },
+  sharedPill: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+  },
+  servicePillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  cardSaveBadge: {
+    position: 'absolute',
+    top: -7,
+    right: 8,
+    backgroundColor: '#059669',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 7,
+    shadowColor: '#059669',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+    elevation: 3,
+    zIndex: 5,
+  },
+  cardSaveBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 0.2,
+  },
+
+  // ── Fallback Promo Banner Card ──
+  whatsNewCardFallback: {
+    backgroundColor: '#5BA88C',
+    borderRadius: 20,
+    height: 148,
+    flexDirection: 'row',
+    overflow: 'hidden',
+    position: 'relative',
+    padding: 16,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  whatsNewContentLeft: {
+    flex: 1.2,
+    justifyContent: 'center',
+    zIndex: 2,
+  },
+  whatsNewHeading: {
+    fontSize: 17,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  priceTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: 4,
+  },
+  whatsNewSubText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: 'rgba(255, 255, 255, 0.95)',
+  },
+  blankInputBox: {
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.5)',
+  },
+  blankInputText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  whatsNewFootnote: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontStyle: 'italic',
+  },
+  whatsNewCharacterWrap: {
+    flex: 0.8,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    position: 'relative',
+  },
+  whatsNewCharacterImg: {
+    width: 140,
+    height: 160,
+    position: 'absolute',
+    bottom: -16,
+    right: -10,
+  },
+  whatsNewDotsRow: {
+    position: 'absolute',
+    bottom: 12,
+    right: 16,
+    flexDirection: 'row',
+    gap: 4,
+    zIndex: 3,
+  },
+  whatsNewDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.45)',
+  },
+  whatsNewDotActive: {
+    backgroundColor: '#FFFFFF',
+    width: 14,
+    borderRadius: 3,
   },
 
   // ── Section Common Layout ──

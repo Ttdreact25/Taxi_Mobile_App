@@ -17,6 +17,8 @@ import {
   StatusBar,
   Dimensions,
   Platform,
+  Animated,
+  Easing,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect, useIsFocused } from '@react-navigation/native'
@@ -29,11 +31,17 @@ import { useAuth } from '../../context/AuthContext'
 
 // Module-level persistent cache of dismissed cancelled trip IDs (guarantees alert shows exactly ONCE across screens/tabs)
 const acknowledgedCancelledTripIds = new Set()
+
+export const getCleanId = (val) => {
+  if (val === undefined || val === null || val === '') return null
+  const num = Number(val)
+  return (!isNaN(num) && num > 0) ? num : null
+}
 const { width: SCREEN_WIDTH } = Dimensions.get('window')
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import SwipeToActionButton from '../../components/common/SwipeToActionButton'
 import { formatTime12Hr, formatDateDisplay, formatDateTime12Hr } from '../../utils/formatters'
-import { playDriverAlertSound, playDriverBookingReceived } from '../../services/SoundService'
+import { playDriverAlertSound, playDriverBookingReceived, resetPlayedDriverBookingAlert } from '../../services/SoundService'
 import { useDoubleBackExit } from '../../components/common/DoubleBackExitHandler'
 
 const REJECT_REASONS = [
@@ -330,6 +338,141 @@ const DriverWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate = 
   )
 }
 
+// ── Animated Brand Watermark Component (Continuous Pulse & Radar Glow) ──
+const AnimatedBrandWatermark = () => {
+  const pulseAnim = useRef(new Animated.Value(1)).current
+  const radarAnim = useRef(new Animated.Value(0)).current
+  const floatAnim = useRef(new Animated.Value(0)).current
+  const glowAnim  = useRef(new Animated.Value(0.7)).current
+
+  useEffect(() => {
+    // 1. Subtle breathing / pulse animation on the logo emblem
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.06,
+          duration: 1800,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1800,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    )
+
+    // 2. Continuous radar expand & fade effect
+    const radarLoop = Animated.loop(
+      Animated.timing(radarAnim, {
+        toValue: 1,
+        duration: 2200,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      })
+    )
+
+    // 3. Gentle vertical float
+    const floatLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(floatAnim, {
+          toValue: -5,
+          duration: 1500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(floatAnim, {
+          toValue: 0,
+          duration: 1500,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ])
+    )
+
+    // 4. Subtle green radar dot breathing
+    const glowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(glowAnim, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(glowAnim, {
+          toValue: 0.45,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+      ])
+    )
+
+    pulseLoop.start()
+    radarLoop.start()
+    floatLoop.start()
+    glowLoop.start()
+
+    return () => {
+      pulseLoop.stop()
+      radarLoop.stop()
+      floatLoop.stop()
+      glowLoop.stop()
+    }
+  }, [pulseAnim, radarAnim, floatAnim, glowAnim])
+
+  const radarScale = radarAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.42],
+  })
+
+  const radarOpacity = radarAnim.interpolate({
+    inputRange: [0, 0.4, 1],
+    outputRange: [0.65, 0.28, 0],
+  })
+
+  return (
+    <View style={styles.brandWatermarkCard}>
+      <View style={styles.watermarkOuterWrap}>
+        {/* Animated Expanding Radar Ring */}
+        <Animated.View
+          style={[
+            styles.watermarkRadarRing,
+            {
+              transform: [{ scale: radarScale }],
+              opacity: radarOpacity,
+            },
+          ]}
+        />
+
+        {/* Central Logo Emblem with floating + pulse */}
+        <Animated.View
+          style={[
+            styles.watermarkEmblemWrap,
+            {
+              transform: [{ scale: pulseAnim }, { translateY: floatAnim }],
+            },
+          ]}
+        >
+          <Image
+            source={require('../../../assets/cityonetaxi_badge.png')}
+            style={styles.watermarkEmblem}
+            resizeMode="contain"
+          />
+        </Animated.View>
+      </View>
+
+      <Text style={styles.watermarkBrandTitle}>CITYONE TAXI</Text>
+      <Text style={styles.watermarkBrandTagline}>OFFICIAL CHAUFFEUR PARTNER NETWORK</Text>
+
+      <View style={styles.watermarkBadgeRow}>
+        <Animated.View style={[styles.animatedPulseDot, { opacity: glowAnim }]} />
+        <Text style={styles.watermarkBadgeText}>Fleet Ready • 24x7 Road Network Active</Text>
+      </View>
+    </View>
+  )
+}
+
 const DriverHomeScreen = ({ navigation }) => {
   const insets = useSafeAreaInsets()
   const isFocused = useIsFocused()
@@ -368,6 +511,7 @@ const DriverHomeScreen = ({ navigation }) => {
   const [weeklyEarnings, setWeeklyEarnings] = useState({ total: 0, trips_detail: [] })
   const [vehicleModalVisible, setVehicleModalVisible] = useState(false)
   const [showLiveMapDetails, setShowLiveMapDetails] = useState(true)
+  const [addonSettings, setAddonSettings] = useState({ pet_charge: 150, rooftop_carrier_charge: 250 })
 
   // Action Loading States
   const [acceptingTripId, setAcceptingTripId] = useState(null)
@@ -418,7 +562,37 @@ const DriverHomeScreen = ({ navigation }) => {
   const completedTripIdsRef = useRef(new Set())
   const locallyAcceptedTripIdsRef = useRef(new Set())
   const declinedTripIdsRef = useRef(new Set())
+  const declinedAtTimestampsRef = useRef({})
   const acknowledgedCancelledTripIdRef = useRef(null)
+
+  const addDeclinedId = useCallback((val) => {
+    const clean = getCleanId(val)
+    if (clean) {
+      declinedTripIdsRef.current.add(clean)
+      acknowledgedCancelledTripIds.add(clean)
+      declinedAtTimestampsRef.current[clean] = Date.now()
+    }
+  }, [])
+
+  const unblockDeclinedId = useCallback((val) => {
+    const clean = getCleanId(val)
+    if (clean) {
+      declinedTripIdsRef.current.delete(clean)
+      acknowledgedCancelledTripIds.delete(clean)
+      delete declinedAtTimestampsRef.current[clean]
+      resetPlayedDriverBookingAlert(clean)
+    }
+  }, [])
+
+  const isTripDeclined = useCallback((...ids) => {
+    for (const raw of ids) {
+      const clean = getCleanId(raw)
+      if (clean && declinedTripIdsRef.current.has(clean)) {
+        return true
+      }
+    }
+    return false
+  }, [])
   const lastGeoRef = useRef({ lat: 0, lng: 0, area: '', city: '', address: '', timestamp: 0 })
   const [startedHeadingRides, setStartedHeadingRides] = useState(new Set())
 
@@ -574,6 +748,10 @@ const DriverHomeScreen = ({ navigation }) => {
         if (s.driver_daily_target) adminTarget = Number(s.driver_daily_target)
         if (s.driver_daily_target_trips) adminTargetTrips = Number(s.driver_daily_target_trips)
         if (s.driver_target_bonus) adminBonus = Number(s.driver_target_bonus)
+        setAddonSettings({
+          pet_charge: Number(s.pet_charge || 150),
+          rooftop_carrier_charge: Number(s.rooftop_carrier_charge || 250),
+        })
       }
 
       if (dashRes.status === 'fulfilled' && dashRes.value.data?.status === 'success') {
@@ -620,41 +798,70 @@ const DriverHomeScreen = ({ navigation }) => {
         }))
       }
 
+      // Purge any stale or invalid entries from decline sets
+      declinedTripIdsRef.current.forEach(id => {
+        if (typeof id !== 'number' || isNaN(id) || id <= 0) {
+          declinedTripIdsRef.current.delete(id)
+        }
+      })
+      acknowledgedCancelledTripIds.forEach(id => {
+        if (typeof id !== 'number' || isNaN(id) || id <= 0) {
+          acknowledgedCancelledTripIds.delete(id)
+        }
+      })
+
       // 2. Scheduled & Admin Assigned Trips
       if (schedRes.status === 'fulfilled' && schedRes.value.data?.status === 'success') {
         const sData = schedRes.value.data
         const rawNewAssignments = sData.new_assignments || []
+
+        // If server returns trips assigned to this driver, check if they are freshly (re-)assigned by Admin
+        rawNewAssignments.forEach(t => {
+          const tIds = [getCleanId(t.id), getCleanId(t.long_trip_id), getCleanId(t.booking_id)].filter(Boolean)
+          const declTimes = tIds.map(id => declinedAtTimestampsRef.current[id]).filter(Boolean)
+          const recentDecline = declTimes.length > 0 && declTimes.some(tm => Date.now() - tm < 3500)
+          
+          if (!recentDecline) {
+            // Fresh or deliberate Re-assignment from Admin! Unblock all clean IDs immediately
+            tIds.forEach(id => unblockDeclinedId(id))
+          }
+        })
+
         const newAssignments = rawNewAssignments.filter(t => {
-          const tid = Number(t.id)
-          const ltid = Number(t.long_trip_id)
-          const bid = Number(t.booking_id)
-          return !declinedTripIdsRef.current.has(tid) &&
-                 !declinedTripIdsRef.current.has(ltid) &&
-                 !declinedTripIdsRef.current.has(bid)
+          const tIds = [getCleanId(t.id), getCleanId(t.long_trip_id), getCleanId(t.booking_id)].filter(Boolean)
+          const declTimes = tIds.map(id => declinedAtTimestampsRef.current[id]).filter(Boolean)
+          if (declTimes.length > 0 && declTimes.some(tm => Date.now() - tm < 3500)) {
+            return false
+          }
+          return !isTripDeclined(t.id, t.long_trip_id, t.booking_id)
         })
         setAdminAssignedTrips(newAssignments)
         setUpcomingTrips((sData.upcoming_trips || []).filter(t => {
-          const tid = Number(t.id)
-          const ltid = Number(t.long_trip_id)
-          const bid = Number(t.booking_id)
-          return !declinedTripIdsRef.current.has(tid) &&
-                 !declinedTripIdsRef.current.has(ltid) &&
-                 !declinedTripIdsRef.current.has(bid)
+          const tIds = [getCleanId(t.id), getCleanId(t.long_trip_id), getCleanId(t.booking_id)].filter(Boolean)
+          const declTimes = tIds.map(id => declinedAtTimestampsRef.current[id]).filter(Boolean)
+          if (declTimes.length > 0 && declTimes.some(tm => Date.now() - tm < 3500)) {
+            return false
+          }
+          return !isTripDeclined(t.id, t.long_trip_id, t.booking_id)
         }))
 
         if (newAssignments.length > 0) {
           const firstNew = newAssignments[0]
-          const newId = firstNew.long_trip_id || firstNew.id
-          if (newId && alertedAssignedTripIdRef.current !== `sched_${newId}`) {
-            alertedAssignedTripIdRef.current = `sched_${newId}`
+          const newId = getCleanId(firstNew.long_trip_id) || getCleanId(firstNew.id) || getCleanId(firstNew.booking_id)
+          const targetAlertId = getCleanId(firstNew.booking_id) || getCleanId(firstNew.id) || newId
+          if (newId) {
+            unblockDeclinedId(newId)
+            alertedAssignedTripIdRef.current = null
+            resetPlayedDriverBookingAlert(newId)
+            resetPlayedDriverBookingAlert(targetAlertId)
             playDriverBookingReceived(newId).catch(() => {})
           }
-          if (!assignedAlertTrip) {
+          if (!assignedAlertTrip || getCleanId(assignedAlertTrip.id) !== targetAlertId) {
             setAssignedAlertTrip({
               ...firstNew,
-              id: firstNew.booking_id || firstNew.id,
+              id: targetAlertId,
               is_long_trip: true,
-              long_trip_id: firstNew.long_trip_id || firstNew.id,
+              long_trip_id: getCleanId(firstNew.long_trip_id) || newId,
               customer_name: firstNew.customer_name || 'Passenger',
               pickup_address: firstNew.pickup_address,
               dest_address: firstNew.dest_address,
@@ -671,18 +878,26 @@ const DriverHomeScreen = ({ navigation }) => {
       } else if (dashRes.status === 'fulfilled' && Array.isArray(dashRes.value.data?.pending_rides)) {
         incomingRides = dashRes.value.data.pending_rides
       }
-      incomingRides = incomingRides.filter(r => !declinedTripIdsRef.current.has(Number(r.id)))
+      incomingRides = incomingRides.filter(r => !isTripDeclined(r.id))
 
       // 4. Active Ride & Shared Manifest
       let act = (activeRes.status === 'fulfilled' && activeRes.value.data?.status === 'success' && activeRes.value.data.booking)
         ? activeRes.value.data.booking
         : (dashRes.status === 'fulfilled' && dashRes.value.data?.active_booking ? dashRes.value.data.active_booking : null)
 
-      if (act && (
-        declinedTripIdsRef.current.has(Number(act.id)) ||
-        (act.long_trip_id && declinedTripIdsRef.current.has(Number(act.long_trip_id))) ||
-        (act.booking_id && declinedTripIdsRef.current.has(Number(act.booking_id)))
-      )) {
+      if (act && act.status === 'driver_assigned') {
+        const actIds = [getCleanId(act.id), getCleanId(act.long_trip_id), getCleanId(act.booking_id)].filter(Boolean)
+        const declTimes = actIds.map(id => declinedAtTimestampsRef.current[id]).filter(Boolean)
+        const recentDecline = declTimes.length > 0 && declTimes.some(tm => Date.now() - tm < 3500)
+
+        if (!recentDecline) {
+          // Fresh assignment or deliberate re-assignment from Admin! Unblock immediately
+          actIds.forEach(id => unblockDeclinedId(id))
+        } else {
+          // Declined recently within 3.5 seconds, ignore in-flight stale poll
+          act = null
+        }
+      } else if (act && isTripDeclined(act.id, act.long_trip_id, act.booking_id)) {
         act = null
       }
 
@@ -789,11 +1004,16 @@ const DriverHomeScreen = ({ navigation }) => {
 
         // Immediate Audio/Haptic Alert and Popup Modal when driver is assigned to a ride!
         if (act.status === 'driver_assigned') {
-          if (alertedAssignedTripIdRef.current !== act.id) {
-            alertedAssignedTripIdRef.current = act.id
-            playDriverBookingReceived(act.id).catch(() => {})
+          const actCleanId = getCleanId(act.id) || getCleanId(act.booking_id) || getCleanId(act.long_trip_id)
+          if (actCleanId) {
+            unblockDeclinedId(actCleanId)
+            if (alertedAssignedTripIdRef.current !== actCleanId) {
+              alertedAssignedTripIdRef.current = actCleanId
+              resetPlayedDriverBookingAlert(actCleanId)
+              playDriverBookingReceived(actCleanId).catch(() => {})
+            }
           }
-          if (!assignedAlertTrip || assignedAlertTrip.id !== act.id) {
+          if (!assignedAlertTrip || getCleanId(assignedAlertTrip.id) !== actCleanId) {
             setAssignedAlertTrip(act)
           }
         } else if (act.status !== 'driver_assigned') {
@@ -827,20 +1047,24 @@ const DriverHomeScreen = ({ navigation }) => {
         setDriverAds(adRes.value.data.ads || [])
       }
 
-      // 6. Unread Notifications (Filtered strictly to: 1. Booking Received, 2. Trip Completed, 3. Customer Reviews)
+      // 6. Unread Notifications (Filtered strictly to Admin Broadcasts)
       if (notifRes.status === 'fulfilled') {
         const allNotifs = notifRes.value.data?.notifications || []
         const relevantUnread = allNotifs.filter(n => {
           if (Number(n.is_read) === 1) return false
           const t = `${n.title || ''} ${n.body || ''} ${n.type || ''}`.toLowerCase()
-          // Exclude all unwanted alerts
-          if (t.includes('otp') || t.includes('kyc') || t.includes('registration') || t.includes('broadcast') || t.includes('support') || t.includes('payout') || t.includes('cancel')) {
+          // Exclude any internal logs
+          if (t.includes('otp') || t.includes('kyc') || t.includes('registration') || t.includes('dispatch') || t.includes('booking') || t.includes('completed')) {
             return false
           }
-          const isBooking = (t.includes('booking') || t.includes('assign') || t.includes('dispatch') || t.includes('pickup alert'))
-          const isComplete = t.includes('complete')
-          const isReview = t.includes('review') || t.includes('rated') || t.includes('star')
-          return isBooking || isComplete || isReview
+          return (
+            n.type === 'broadcast' ||
+            n.type === 'admin_broadcast' ||
+            t.includes('broadcast') ||
+            t.includes('announcement') ||
+            t.includes('notice') ||
+            t.includes('admin')
+          )
         }).length
         prevUnreadNotifCountRef.current = relevantUnread
         setUnreadNotifCount(relevantUnread)
@@ -1194,53 +1418,41 @@ const DriverHomeScreen = ({ navigation }) => {
 
   // Reject Admin Assigned Trip
   const handleRejectAdminAssignedTrip = async (trip, reason) => {
-    const longTripId = trip.long_trip_id || trip.id
-    const bookingId = trip.booking_id || trip.id
+    const longTripId = getCleanId(trip?.long_trip_id) || getCleanId(trip?.id)
+    const bookingId = getCleanId(trip?.booking_id) || getCleanId(trip?.id)
     try {
-      if (trip.id) {
-        declinedTripIdsRef.current.add(Number(trip.id))
-        acknowledgedCancelledTripIds.add(Number(trip.id))
-      }
-      if (trip.long_trip_id) {
-        declinedTripIdsRef.current.add(Number(trip.long_trip_id))
-        acknowledgedCancelledTripIds.add(Number(trip.long_trip_id))
-      }
-      if (trip.booking_id) {
-        declinedTripIdsRef.current.add(Number(trip.booking_id))
-        acknowledgedCancelledTripIds.add(Number(trip.booking_id))
-      }
-      if (bookingId) {
-        declinedTripIdsRef.current.add(Number(bookingId))
-        acknowledgedCancelledTripIds.add(Number(bookingId))
-      }
-      if (longTripId) {
-        declinedTripIdsRef.current.add(Number(longTripId))
-        acknowledgedCancelledTripIds.add(Number(longTripId))
-      }
+      if (trip?.id) addDeclinedId(trip.id)
+      if (trip?.long_trip_id) addDeclinedId(trip.long_trip_id)
+      if (trip?.booking_id) addDeclinedId(trip.booking_id)
+      if (bookingId) addDeclinedId(bookingId)
+      if (longTripId) addDeclinedId(longTripId)
 
+      alertedAssignedTripIdRef.current = null
       setAssignedAlertTrip(null)
       setRejectModalTrip(null)
       setAdminAssignedTrips(prev => prev.filter(t => 
-        (t.long_trip_id || t.id) !== longTripId && t.booking_id !== bookingId && t.id !== trip.id
+        (getCleanId(t.long_trip_id) || getCleanId(t.id)) !== longTripId && 
+        getCleanId(t.booking_id) !== bookingId && 
+        getCleanId(t.id) !== getCleanId(trip?.id)
       ))
-      if (activeRide && (activeRide.id === trip.id || activeRide.id === bookingId)) {
+      if (activeRide && (getCleanId(activeRide.id) === getCleanId(trip?.id) || getCleanId(activeRide.id) === bookingId)) {
         setActiveRide(null)
         prevActiveRideRef.current = null
       }
 
       // Call primary endpoint first, then fallback to prevent conflicting database race condition
       let responded = false
-      if (trip.long_trip_id || trip.is_long_trip) {
+      if (trip?.long_trip_id || trip?.is_long_trip) {
         try {
           const res = await longTripAPI.respondScheduledTrip(longTripId, 'reject', reason)
           if (res.data?.status === 'success') responded = true
         } catch {}
       }
-      if (!responded) {
+      if (!responded && bookingId) {
         await driverAPI.respondBooking(bookingId, { action: 'reject', reason: reason || selectedReason }).catch(() => {})
       }
 
-      Alert.alert('Assignment Declined', `Trip #${trip.booking_ref || trip.id} rejected. It has been routed to the next nearby driver.`)
+      Alert.alert('Assignment Declined', `Trip #${trip?.booking_ref || trip?.id || bookingId} rejected. It has been routed to the next nearby driver.`)
       loadDashboardData()
     } catch {
       Alert.alert('Error', 'Failed to decline trip assignment.')
@@ -1281,36 +1493,40 @@ const DriverHomeScreen = ({ navigation }) => {
 
   // Decline Instant Local Ride
   const handleDeclineInstantRide = async (rideId, reason = '') => {
+    const cleanId = getCleanId(rideId)
     try {
-      if (rideId) {
-        declinedTripIdsRef.current.add(Number(rideId))
-        acknowledgedCancelledTripIds.add(Number(rideId))
+      if (cleanId) {
+        addDeclinedId(cleanId)
       }
+      alertedAssignedTripIdRef.current = null
+      alertedPendingTripIdRef.current = null
       setAssignedAlertTrip(null)
-      setPendingRides(prev => prev.filter(r => r.id !== rideId))
-      setAdminAssignedTrips(prev => prev.filter(t => t.id !== rideId && t.booking_id !== rideId && t.long_trip_id !== rideId))
+      setPendingRides(prev => prev.filter(r => getCleanId(r.id) !== cleanId))
+      setAdminAssignedTrips(prev => prev.filter(t => getCleanId(t.id) !== cleanId && getCleanId(t.booking_id) !== cleanId && getCleanId(t.long_trip_id) !== cleanId))
       setRejectModalTrip(null)
-      if (activeRide && activeRide.id === rideId) {
-        if (activeRide.long_trip_id) declinedTripIdsRef.current.add(Number(activeRide.long_trip_id))
+      if (activeRide && getCleanId(activeRide.id) === cleanId) {
+        if (activeRide.long_trip_id) addDeclinedId(activeRide.long_trip_id)
         setActiveRide(null)
         prevActiveRideRef.current = null
-        locallyAcceptedTripIdsRef.current.delete(rideId)
+        locallyAcceptedTripIdsRef.current.delete(cleanId)
         setStartedHeadingRides(prev => {
           const next = new Set(prev)
-          next.delete(rideId)
+          next.delete(cleanId)
           return next
         })
-        SecureStore.deleteItemAsync(`heading_started_${rideId}`).catch(() => {})
+        SecureStore.deleteItemAsync(`heading_started_${cleanId}`).catch(() => {})
       }
 
       // Call primary endpoint first, then fallback to prevent conflicting database race condition
       let responded = false
-      try {
-        const res = await driverAPI.respondBooking(rideId, { action: 'reject', reason: reason || selectedReason })
-        if (res.data?.status === 'success') responded = true
-      } catch {}
-      if (!responded) {
-        await longTripAPI.respondScheduledTrip(rideId, 'reject', reason || selectedReason).catch(() => {})
+      if (cleanId) {
+        try {
+          const res = await driverAPI.respondBooking(cleanId, { action: 'reject', reason: reason || selectedReason })
+          if (res.data?.status === 'success') responded = true
+        } catch {}
+        if (!responded) {
+          await longTripAPI.respondScheduledTrip(cleanId, 'reject', reason || selectedReason).catch(() => {})
+        }
       }
 
       Alert.alert('Assignment Declined', 'Ride assignment rejected. It has been routed to the next nearby driver.')
@@ -1663,9 +1879,24 @@ const DriverHomeScreen = ({ navigation }) => {
 
 
   const activeIncoming = pendingRides[0] || null
+  const hasActiveBooking = Boolean(activeRide) ||
+    (pendingRides && pendingRides.length > 0) ||
+    (adminAssignedTrips && adminAssignedTrips.length > 0) ||
+    (upcomingTrips && upcomingTrips.length > 0)
 
   return (
     <View style={styles.container}>
+      {/* Subtle Full-Screen Watermark Behind Content (only when idle / no active booking) */}
+      {!hasActiveBooking && (
+        <View style={styles.screenWatermarkBg} pointerEvents="none">
+          <Image
+            source={require('../../../assets/cityonetaxi_badge.png')}
+            style={styles.screenWatermarkImg}
+            resizeMode="contain"
+          />
+        </View>
+      )}
+
       <StatusBar barStyle="dark-content" backgroundColor="#FFC700" translucent={false} />
       {/* Top Notch Status Bar Area in Signature Customer Taxi Yellow (#FFC700) */}
       <View style={{ height: insets.top, backgroundColor: '#FFC700' }} />
@@ -3283,168 +3514,9 @@ const DriverHomeScreen = ({ navigation }) => {
           </View>
         )}
 
-        
-        {/* 10. RECENT RIDES (Latest 3 with View All) */}
-        <View style={styles.sectionHeader}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="receipt-outline" size={16} color="#0F172A" />
-            <Text style={styles.sectionTitle}>Recent Rides</Text>
-          </View>
-          {recentTrips && recentTrips.length > 0 && (
-            <TouchableOpacity onPress={() => navigation.navigate('Trips')} activeOpacity={0.8}>
-              <Text style={styles.viewAllText}>View All ({recentTrips.length}) →</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {recentTrips && recentTrips.length > 0 ? (
-          <View style={{ paddingHorizontal: 16 }}>
-            {recentTrips.slice(0, 3).map((ride, idx) => {
-              const isCancelled = (ride.status || '').toLowerCase().includes('cancel')
-              const fareAmt = Math.round(ride.final_fare || ride.fare || ride.original_fare || 0)
-              return (
-                <View key={ride.id || idx} style={styles.recentRideCard}>
-                  <View style={styles.recentRideTop}>
-                    <Text style={styles.recentRef}>{ride.booking_ref || `CTB#${ride.id}`}</Text>
-                    <View style={[styles.recentStatusBadge, { backgroundColor: isCancelled ? '#FEE2E2' : '#DCFCE7' }]}>
-                      <Text style={[styles.recentStatusText, { color: isCancelled ? '#DC2626' : '#15803D' }]}>
-                        {isCancelled ? 'CANCELLED' : 'COMPLETED'}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.recentRoute}>
-                    <View style={styles.recentRouteLine}>
-                      <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
-                      <Text style={styles.recentRouteText} numberOfLines={1}>{ride.pickup_address}</Text>
-                    </View>
-                    <View style={styles.recentRouteLine}>
-                      <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
-                      <Text style={styles.recentRouteText} numberOfLines={1}>{ride.dest_address}</Text>
-                    </View>
-                  </View>
-                  <View style={styles.recentBottom}>
-                    <Text style={styles.recentDate}>
-                      🗓 {formatDateDisplay(ride.created_at || ride.pickup_date)} · {formatTime12Hr(ride.pickup_time || ride.created_at)}
-                    </Text>
-                    <Text style={styles.recentFare}>₹{fareAmt}</Text>
-                  </View>
-                </View>
-              )
-            })}
-
-            {recentTrips.length > 3 && (
-              <TouchableOpacity
-                style={styles.moreReviewsBtn}
-                onPress={() => navigation.navigate('Trips')}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.moreReviewsBtnText}>View All {recentTrips.length} Rides →</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        ) : (
-          <View style={styles.emptyRecentCard}>
-            <Ionicons name="car-outline" size={28} color="#94A3B8" />
-            <Text style={styles.emptyRecentTitle}>No rides yet today</Text>
-            <Text style={styles.emptyRecentSub}>Go Online to receive incoming ride requests in your city</Text>
-          </View>
-        )}
-
-        {/* 11. CUSTOMER REVIEWS FOR THIS DRIVER (Latest 3 with View All) */}
-        <View style={[styles.sectionHeader, { marginTop: 18 }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Ionicons name="star" size={16} color="#F59E0B" />
-            <Text style={styles.sectionTitle}>Customer Reviews</Text>
-            <View style={styles.dashRatingPill}>
-              <Ionicons name="star" size={11} color="#F59E0B" />
-              <Text style={styles.dashRatingPillText}>{driver?.rating || '5.0'}</Text>
-            </View>
-          </View>
-          {driverReviews && driverReviews.length > 0 && (
-            <TouchableOpacity
-              onPress={() => navigation.navigate('DriverReviews', { reviews: driverReviews })}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.viewAllText}>View All ({driverReviews.length}) →</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {driverReviews && driverReviews.length > 0 ? (
-          <View style={{ paddingHorizontal: 16, marginBottom: 16 }}>
-            {driverReviews.slice(0, 3).map((rev, idx) => {
-              const stars = Math.min(5, Math.max(1, Math.round(Number(rev.rating) || 5)))
-              return (
-                <View key={rev.id || idx} style={styles.dashReviewCard}>
-                  <View style={styles.dashReviewHeader}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                      <View style={styles.dashReviewAvatarWrap}>
-                        {resolveAssetUrl(rev.reviewer_avatar) ? (
-                          <Image source={{ uri: resolveAssetUrl(rev.reviewer_avatar) }} style={styles.dashReviewAvatarImg} />
-                        ) : (
-                          <Text style={styles.dashReviewAvatarText}>
-                            {((rev.reviewer_name || 'C')?.[0] || 'C').toUpperCase()}
-                          </Text>
-                        )}
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.dashReviewName} numberOfLines={1}>{rev.reviewer_name || 'Passenger'}</Text>
-                        <Text style={styles.dashReviewRef}>{rev.booking_ref || `Trip #${rev.booking_id}`}</Text>
-                      </View>
-                    </View>
-                    <View style={styles.dashStarPill}>
-                      <Ionicons name="star" size={12} color="#F59E0B" />
-                      <Text style={styles.dashStarPillText}>{Number(rev.rating || 5).toFixed(1)}</Text>
-                    </View>
-                  </View>
-
-                  {rev.comment ? (
-                    <View style={styles.dashReviewCommentBox}>
-                      <Text style={styles.dashReviewCommentText}>"{rev.comment}"</Text>
-                    </View>
-                  ) : (
-                    <View style={styles.dashReviewCommentBox}>
-                      <Text style={[styles.dashReviewCommentText, { fontStyle: 'italic', color: '#94A3B8' }]}>
-                        Rated {rev.rating} stars for a smooth and safe journey
-                      </Text>
-                    </View>
-                  )}
-
-                  <View style={styles.dashReviewFooter}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                      {[1, 2, 3, 4, 5].map(s => (
-                        <Ionicons
-                          key={s}
-                          name={s <= stars ? "star" : "star-outline"}
-                          size={13}
-                          color={s <= stars ? "#F59E0B" : "#CBD5E1"}
-                        />
-                      ))}
-                    </View>
-                    <Text style={styles.dashReviewDate}>
-                      {rev.created_at ? formatDateDisplay(rev.created_at) : 'Recently'}
-                    </Text>
-                  </View>
-                </View>
-              )
-            })}
-
-            {driverReviews.length > 3 && (
-              <TouchableOpacity
-                style={styles.moreReviewsBtn}
-                onPress={() => navigation.navigate('DriverReviews', { reviews: driverReviews })}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.moreReviewsBtnText}>View All {driverReviews.length} Reviews →</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        ) : (
-          <View style={styles.emptyReviewCard}>
-            <Ionicons name="star-outline" size={26} color="#CBD5E1" />
-            <Text style={styles.emptyReviewTitle}>No Customer Reviews Yet</Text>
-            <Text style={styles.emptyReviewSub}>Completed rides with happy passengers will show ratings & feedback here</Text>
-          </View>
+        {/* 10. OFFICIAL BRAND WATERMARK EMBLEM (Animated, hidden when driver has any booking) */}
+        {!hasActiveBooking && (
+          <AnimatedBrandWatermark />
         )}
       </ScrollView>
 
@@ -4030,7 +4102,7 @@ const DriverHomeScreen = ({ navigation }) => {
                 }}
                 onPress={() => {
                   const tripObj = assignedAlertTrip
-                  const tripId = tripObj?.id
+                  const tripId = getCleanId(tripObj?.id) || getCleanId(tripObj?.booking_id) || getCleanId(tripObj?.long_trip_id)
                   const isLt = Boolean(tripObj?.is_long_trip || tripObj?.long_trip_id)
                   setAssignedAlertTrip(null)
                   if (isLt) {
@@ -4709,6 +4781,16 @@ const DriverHomeScreen = ({ navigation }) => {
                   extraMinFare = Math.round(extraMins * minRate)
                 }
 
+                // Add-on charges for pets & rooftop carrier
+                let petCharge = Number(activeRide?.pet_charge || 0)
+                if (petCharge <= 0 && (activeRide?.has_pets == 1 || activeRide?.pets == 1 || activeRide?.traveling_with_pets == 1)) {
+                  petCharge = Number(addonSettings.pet_charge || 150)
+                }
+                let rooftopCharge = Number(activeRide?.rooftop_charge || 0)
+                if (rooftopCharge <= 0 && (activeRide?.rooftop_carrier == 1 || activeRide?.roof_carrier == 1 || activeRide?.rooftop == 1)) {
+                  rooftopCharge = Number(addonSettings.rooftop_carrier_charge || 250)
+                }
+
                 // Robust Base Fare fallback checking final_fare, fare, original_fare, fare_estimate, estimated_fare
                 let rawBaseFare = Number(
                   activeRide?.base_package_fare ||
@@ -4720,6 +4802,11 @@ const DriverHomeScreen = ({ navigation }) => {
                   const minFare = Number(activeRide?.minimum_fare || activeRide?.min_fare || 50)
                   const bFare = Number(activeRide?.base_fare || 30)
                   rawBaseFare = Math.max(minFare, Math.round(bFare + (origKm * perKmRate)))
+                } else if (!isHourly) {
+                  const waitChargePreset = Number(activeRide?.waiting_charge || 0)
+                  if (rawBaseFare > (petCharge + rooftopCharge + waitChargePreset)) {
+                    rawBaseFare = Math.max(30, rawBaseFare - petCharge - rooftopCharge - waitChargePreset)
+                  }
                 }
                 const baseFare = rawBaseFare
 
@@ -4729,7 +4816,7 @@ const DriverHomeScreen = ({ navigation }) => {
                 const pickupCharge = (activeRide?.pickup_charge_accepted && activeRide?.pickup_charge) ? Number(activeRide.pickup_charge) : 0
                 const onlinePaid = Number(activeRide?.online_paid || 0)
                 const discount = Number(activeRide?.discount_amount || 0)
-                const totalFinal = Math.max(0, Math.round(baseFare + extraKmFare + extraMinFare + waitCharge + pickupCharge + tollCharge - discount))
+                const totalFinal = Math.max(0, Math.round(baseFare + extraKmFare + extraMinFare + waitCharge + pickupCharge + petCharge + rooftopCharge + tollCharge - discount))
                 const cashToCollect = Math.max(0, Math.round(totalFinal - onlinePaid))
 
                 return (
@@ -4769,6 +4856,24 @@ const DriverHomeScreen = ({ navigation }) => {
                           Waiting Charges ({waitMins} mins)
                         </Text>
                         <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+ ₹{Math.round(waitCharge)}</Text>
+                      </View>
+                    )}
+
+                    {petCharge > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#059669', fontWeight: '600' }}>
+                          🐾 Traveling with Pets Fee
+                        </Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#059669' }}>+ ₹{Math.round(petCharge)}</Text>
+                      </View>
+                    )}
+
+                    {rooftopCharge > 0 && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <Text style={{ fontSize: 12, color: '#B45309', fontWeight: '600' }}>
+                          📦 Rooftop Luggage Carrier (SUV)
+                        </Text>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: '#B45309' }}>+ ₹{Math.round(rooftopCharge)}</Text>
                       </View>
                     )}
 
@@ -6002,93 +6107,107 @@ const styles = StyleSheet.create({
     color: COLORS.gray500,
     marginTop: 2,
   },
-  /* Recent Rides */
-  recentRideCard: {
-    backgroundColor: COLORS.white,
-    padding: 14,
-    borderRadius: RADIUS.xl,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 10,
-    ...SHADOW.small,
-  },
-  recentRideTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  recentRef: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: COLORS.primary,
-    fontFamily: 'monospace',
-  },
-  recentStatusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  recentStatusText: {
-    fontSize: 9.5,
-    fontWeight: '900',
-    letterSpacing: 0.3,
-  },
-  recentRoute: {
-    backgroundColor: '#F8FAFC',
-    padding: 8,
-    borderRadius: RADIUS.md,
-    gap: 4,
-    marginBottom: 8,
-  },
-  recentRouteLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  recentRouteText: {
-    flex: 1,
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.gray700,
-  },
-  recentBottom: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  recentDate: {
-    fontSize: 10.5,
-    fontWeight: '600',
-    color: COLORS.gray500,
-  },
-  recentFare: {
-    fontSize: 14,
-    fontWeight: '900',
-    color: '#0F172A',
-  },
-  emptyRecentCard: {
-    backgroundColor: COLORS.white,
+  /* Official Brand Watermark */
+  brandWatermarkCard: {
     marginHorizontal: 16,
-    padding: 24,
-    borderRadius: RADIUS.xl,
+    marginVertical: 14,
+    paddingVertical: 26,
+    paddingHorizontal: 20,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     alignItems: 'center',
     justifyContent: 'center',
     ...SHADOW.small,
   },
-  emptyRecentTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: COLORS.textPrimary,
-    marginTop: 8,
+  watermarkOuterWrap: {
+    width: 96,
+    height: 96,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
   },
-  emptyRecentSub: {
+  watermarkRadarRing: {
+    position: 'absolute',
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    borderWidth: 2,
+    borderColor: '#F59E0B',
+    backgroundColor: '#FEF3C7',
+  },
+  watermarkEmblemWrap: {
+    width: 82,
+    height: 82,
+    borderRadius: 41,
+    backgroundColor: '#FFFBEB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FDE68A',
+    shadowColor: '#F59E0B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  watermarkEmblem: {
+    width: 62,
+    height: 62,
+    opacity: 0.95,
+  },
+  watermarkBrandTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: 2.2,
+    marginBottom: 3,
+  },
+  watermarkBrandTagline: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 1.2,
+    marginBottom: 10,
+  },
+  watermarkBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  animatedPulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#10B981',
+  },
+  watermarkBadgeText: {
     fontSize: 11,
-    color: COLORS.gray500,
-    marginTop: 2,
-    textAlign: 'center',
+    fontWeight: '700',
+    color: '#475569',
+  },
+  screenWatermarkBg: {
+    position: 'absolute',
+    top: '38%',
+    left: '50%',
+    marginLeft: -110,
+    width: 220,
+    height: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.04,
+    zIndex: 0,
+  },
+  screenWatermarkImg: {
+    width: 220,
+    height: 220,
   },
   viewAllText: {
     fontSize: 12,

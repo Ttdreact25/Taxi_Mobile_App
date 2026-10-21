@@ -58,7 +58,9 @@ export const AuthProvider = ({ children }) => {
           setLoading(false)
           return
         }
-        const res = await authAPI.verify()
+        const verifyPromise = authAPI.verify()
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('init_timeout')), 1800))
+        const res = await Promise.race([verifyPromise, timeoutPromise])
         if (res.data?.status === 'success' && res.data.user) {
           setUser(res.data.user)
         } else {
@@ -66,8 +68,7 @@ export const AuthProvider = ({ children }) => {
           setUser(null)
         }
       } catch {
-        await tokenManager.delete()
-        setUser(null)
+        // If timeout or error, do not block app launch
       } finally {
         setLoading(false)
       }

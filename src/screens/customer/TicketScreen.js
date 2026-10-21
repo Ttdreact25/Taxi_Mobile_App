@@ -350,6 +350,15 @@ export default function TicketScreen({ route, navigation }) {
             {/* Detailed Trip Invoice Breakdown */}
             {(() => {
               const isHourly = fare.trip_sub_type === 'hourly' || Number(fare.package_hours) > 0
+              let petCharge = Number(fare.pet_charge || ticket?.pet_charge || 0)
+              if (petCharge <= 0 && (fare.has_pets == 1 || ticket?.has_pets == 1 || fare.traveling_with_pets == 1 || ticket?.traveling_with_pets == 1)) {
+                petCharge = 150
+              }
+              let rooftopCharge = Number(fare.rooftop_charge || ticket?.rooftop_charge || 0)
+              if (rooftopCharge <= 0 && (fare.rooftop_carrier == 1 || ticket?.rooftop_carrier == 1 || fare.rooftop == 1 || ticket?.rooftop == 1)) {
+                rooftopCharge = 250
+              }
+
               return (
                 <View style={{
                   backgroundColor: '#F8FAFC',
@@ -398,7 +407,7 @@ export default function TicketScreen({ route, navigation }) {
                           Booked Route Fare ({Number(fare.original_distance_km || journey.original_distance_km || journey.distance_km || 0).toFixed(1)} km)
                         </Text>
                         <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>
-                          ₹{Math.round(Number(fare.original_fare || (Number(fare.final_fare) - Number(fare.extra_km_fare || 0) - Number(fare.pickup_charge || 0))))}
+                          ₹{Math.max(0, Math.round(Number(fare.original_fare || (Number(fare.final_fare) - Number(fare.extra_km_fare || 0) - Number(fare.pickup_charge || 0) - Number(fare.waiting_charge || 0) - petCharge - rooftopCharge))))}
                         </Text>
                       </View>
                       {Number(fare.extra_km) > 0 && (
@@ -427,6 +436,18 @@ export default function TicketScreen({ route, navigation }) {
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
                       <Text style={{ fontSize: 12, color: '#475569' }}>Waiting Charge ({fare.waiting_mins || 0}m)</Text>
                       <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>+₹{Math.round(Number(fare.waiting_charge))}</Text>
+                    </View>
+                  )}
+                  {petCharge > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 12, color: '#059669', fontWeight: '600' }}>🐾 Traveling with Pets Fee</Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#059669' }}>+₹{Math.round(petCharge)}</Text>
+                    </View>
+                  )}
+                  {rooftopCharge > 0 && (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 12, color: '#B45309', fontWeight: '600' }}>📦 Rooftop Luggage Carrier (SUV)</Text>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#B45309' }}>+₹{Math.round(rooftopCharge)}</Text>
                     </View>
                   )}
                   {Number(fare.toll_amount) > 0 && (

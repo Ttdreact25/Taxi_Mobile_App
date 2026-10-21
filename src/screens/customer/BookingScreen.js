@@ -25,7 +25,7 @@ import { Ionicons } from '@expo/vector-icons'
 import * as Location from 'expo-location'
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, UrlTile } from 'react-native-maps'
 import Constants from 'expo-constants'
-import { vehicleTypesAPI, bookingsAPI, customerAPI, paymentAPI, couponsAPI, resolveAssetUrl } from '../../api/api'
+import { vehicleTypesAPI, bookingsAPI, customerAPI, paymentAPI, couponsAPI, settingsAPI, resolveAssetUrl } from '../../api/api'
 import { searchPlacesService, reverseGeocodeService, getPopularDestinations, TAMIL_NADU_HUBS } from '../../services/locationSearchService'
 import { fetchRouteDirections, calculateDistanceKm } from '../../services/directionService'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
@@ -282,6 +282,8 @@ export default function BookingScreen({ navigation, route }) {
   const [luggageCount, setLuggageCount] = useState(2) // Number of bags stepper
   const [rooftopCarrier, setRooftopCarrier] = useState(false) // Rooftop carrier toggle (SUV only)
   const [hasPets, setHasPets] = useState(false) // Traveling with pets toggle
+  const [adminPetCharge, setAdminPetCharge] = useState(150) // Admin configured Pet charge
+  const [adminRooftopCharge, setAdminRooftopCharge] = useState(250) // Admin configured Rooftop carrier charge
   const [waitingHours, setWaitingHours] = useState(0) // Driver waiting hours
 
   // Auto-clamp passengerCount to selected vehicle capacity
@@ -462,7 +464,24 @@ export default function BookingScreen({ navigation, route }) {
         console.warn('Failed to fetch vehicle categories:', err)
       }
     }
+
+    const fetchAddonSettings = async () => {
+      try {
+        const res = await settingsAPI.getAll()
+        const s = res.data?.settings || {}
+        if (s.pet_charge !== undefined && s.pet_charge !== null && s.pet_charge !== '') {
+          setAdminPetCharge(Number(s.pet_charge))
+        }
+        if (s.rooftop_carrier_charge !== undefined && s.rooftop_carrier_charge !== null && s.rooftop_carrier_charge !== '') {
+          setAdminRooftopCharge(Number(s.rooftop_carrier_charge))
+        }
+      } catch (err) {
+        console.warn('Failed to fetch addon settings:', err)
+      }
+    }
+
     fetchVehicles()
+    fetchAddonSettings()
   }, [])
 
   // Scatter realistic nearby cabs around the pickup location
@@ -1098,9 +1117,11 @@ export default function BookingScreen({ navigation, route }) {
 
     const waitHourlyRate = parseFloat(selectedVt.waiting_charge_per_hour || (selectedVt.waiting_charge_per_min ? selectedVt.waiting_charge_per_min * 60 : (selectedVt.waiting_charge ? selectedVt.waiting_charge * 60 : 100)))
     const waitingCharge = waitingHours > 0 ? Math.round(waitingHours * waitHourlyRate) : 0
+    const petCharge = hasPets ? adminPetCharge : 0
+    const rooftopCharge = (isSUVSelected && rooftopCarrier) ? adminRooftopCharge : 0
 
     const discountAmount = appliedCoupon?.discount_amount || 0
-    const finalFare = Math.max(30, Math.round(rawFare + waitingCharge - discountAmount))
+    const finalFare = Math.max(30, Math.round(rawFare + waitingCharge + petCharge + rooftopCharge - discountAmount))
 
     setBookingLoading(true)
     try {
@@ -1109,8 +1130,8 @@ export default function BookingScreen({ navigation, route }) {
       if (passengerCount > 0) notesParts.push(`👥 Passengers: ${passengerCount} Person${passengerCount > 1 ? 's' : ''}`)
       if (hasIntermediateStop && intermediateStop?.trim()) notesParts.push(`🛑 Via Stop: ${intermediateStop.trim()}`)
       if (luggageCount > 0) notesParts.push(`🧳 Luggage: ${luggageCount} Bags`)
-      if (hasPets) notesParts.push('🐾 Traveling with Pets: Yes')
-      if (isSUVSelected && rooftopCarrier) notesParts.push('📦 Rooftop Carrier: Yes (Additional Charge)')
+      if (hasPets) notesParts.push(`🐾 Traveling with Pets: Yes (+₹${petCharge})`)
+      if (isSUVSelected && rooftopCarrier) notesParts.push(`📦 Rooftop Carrier: Yes (+₹${rooftopCharge})`)
       if (waitingHours > 0) notesParts.push(`⏱️ Waiting Time: ${waitingHours} hrs (₹${waitingCharge})`)
       if (driverInstructions?.trim()) notesParts.push(`📝 Driver Note: ${driverInstructions.trim()}`)
       if (passengerName?.trim() && passengerName !== user?.name) {
@@ -1164,9 +1185,11 @@ export default function BookingScreen({ navigation, route }) {
         has_pets: hasPets ? 1 : 0,
         pets: hasPets ? 1 : 0,
         traveling_with_pets: hasPets ? 1 : 0,
+        pet_charge: petCharge,
         rooftop_carrier: (isSUVSelected && rooftopCarrier) ? 1 : 0,
         roof_carrier: (isSUVSelected && rooftopCarrier) ? 1 : 0,
         rooftop: (isSUVSelected && rooftopCarrier) ? 1 : 0,
+        rooftop_charge: rooftopCharge,
         waiting_time_hours: waitingHours,
         waiting_hours: waitingHours,
         waiting_charge: waitingCharge,
@@ -1287,13 +1310,57 @@ export default function BookingScreen({ navigation, route }) {
     setCouponError('')
     try {
       const cityName = getDetectedCity()
-      const res = await couponsAPI.active({
-        city: cityName || '',
-        latitude: pickupCoords?.latitude,
-        longitude: pickupCoords?.longitude,
+      const [res, tripsRes] = await Promise.allSettled([
+        couponsAPI.active({
+          city: cityName || '',
+          latitude: pickupCoords?.latitude,
+          longitude: pickupCoords?.longitude,
+        }),
+        bookingsAPI.myTrips({ per_page: 50 }),
+      ])
+
+      const list = res.status === 'fulfilled' ? (res.value.data?.coupons || []) : []
+      const usedCodes = new Set()
+      const usedIds = new Set()
+      if (tripsRes.status === 'fulfilled') {
+        const trips = tripsRes.value?.data?.bookings || tripsRes.value?.data?.trips || []
+        trips.forEach(t => {
+          if (t.status !== 'cancelled') {
+            if (t.coupon_id) usedIds.add(Number(t.coupon_id))
+            if (t.coupon_code) usedCodes.add(String(t.coupon_code).toUpperCase().trim())
+          }
+        })
+      }
+
+      // Strict City Filter on frontend:
+      // If coupon belongs to Madurai (or any specific city), show ONLY if ride city matches!
+      const currentCityLower = (cityName || '').toLowerCase().trim()
+      const filteredByCity = list.filter(c => {
+        if (!c.city_name && (!c.city_id || Number(c.city_id) === 0)) {
+          return true // Global / All-cities coupon
+        }
+        if (!currentCityLower) {
+          return false // If city is unknown, hide city-specific coupons
+        }
+        const cCityLower = String(c.city_name || '').toLowerCase().trim()
+        return currentCityLower.includes(cCityLower) || cCityLower.includes(currentCityLower)
       })
-      const list = res.data?.coupons || []
-      setAvailableCoupons(list)
+
+      const processed = filteredByCity.map(c => {
+        const isUsed = Boolean(
+          c.is_used ||
+          c.is_disabled ||
+          usedIds.has(Number(c.id)) ||
+          usedCodes.has(String(c.code).toUpperCase().trim())
+        )
+        return {
+          ...c,
+          is_used: isUsed,
+          is_disabled: isUsed,
+        }
+      })
+
+      setAvailableCoupons(processed)
     } catch (err) {
       console.warn('Failed to load active coupons:', err)
     } finally {
@@ -2949,24 +3016,31 @@ export default function BookingScreen({ navigation, route }) {
               {availableCoupons.length > 0 ? (
                 availableCoupons.map((c) => {
                   const isCurrent = appliedCoupon?.code === c.code
+                  const isUsed = Boolean(c.is_used || c.is_disabled)
                   const discountTag = c.discount_type === 'percent'
                     ? `${c.discount_value}% OFF`
                     : `FLAT ₹${c.discount_value} OFF`
                   return (
-                    <View key={c.id || c.code} style={[styles.couponCardItem, isCurrent && styles.couponCardItemActive]}>
+                    <View key={c.id || c.code} style={[styles.couponCardItem, isCurrent && styles.couponCardItemActive, isUsed && { opacity: 0.6, backgroundColor: '#F8FAFC' }]}>
                       <View style={{ flex: 1, paddingRight: 8 }}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                          <View style={styles.couponCodeBadge}>
-                            <Text style={styles.couponCodeBadgeText}>{c.code}</Text>
+                          <View style={[styles.couponCodeBadge, isUsed && { backgroundColor: '#E2E8F0', borderColor: '#CBD5E1' }]}>
+                            <Text style={[styles.couponCodeBadgeText, isUsed && { color: '#64748B' }]}>{c.code}</Text>
                           </View>
-                          <View style={styles.couponDiscountBadge}>
-                            <Text style={styles.couponDiscountBadgeText}>{discountTag}</Text>
-                          </View>
+                          {isUsed ? (
+                            <View style={[styles.couponDiscountBadge, { backgroundColor: '#F1F5F9' }]}>
+                              <Text style={[styles.couponDiscountBadgeText, { color: '#64748B' }]}>ALREADY USED</Text>
+                            </View>
+                          ) : (
+                            <View style={styles.couponDiscountBadge}>
+                              <Text style={styles.couponDiscountBadgeText}>{discountTag}</Text>
+                            </View>
+                          )}
                         </View>
-                        <Text style={styles.couponItemDesc} numberOfLines={2}>
-                          {c.description || `Get ${discountTag} on your booking`}
+                        <Text style={[styles.couponItemDesc, isUsed && { color: '#94A3B8' }]} numberOfLines={2}>
+                          {isUsed ? 'Offer valid once per user. Already used on your previous ride.' : (c.description || `Get ${discountTag} on your booking`)}
                         </Text>
-                        {parseFloat(c.min_fare) > 0 && (
+                        {parseFloat(c.min_fare) > 0 && !isUsed && (
                           <Text style={styles.couponMinFareText}>
                             Min booking fare: ₹{c.min_fare}
                           </Text>
@@ -2976,17 +3050,19 @@ export default function BookingScreen({ navigation, route }) {
                       <TouchableOpacity
                         style={[
                           styles.couponItemApplyBtn,
-                          isCurrent && styles.couponItemAppliedBtn
+                          isCurrent && styles.couponItemAppliedBtn,
+                          isUsed && { backgroundColor: '#E2E8F0', elevation: 0 },
                         ]}
-                        disabled={isCurrent || loadingCoupons}
-                        onPress={() => handleValidateAndApplyCoupon(c.code)}
-                        activeOpacity={0.8}
+                        disabled={isCurrent || isUsed || loadingCoupons}
+                        onPress={isUsed ? null : () => handleValidateAndApplyCoupon(c.code)}
+                        activeOpacity={isUsed ? 1 : 0.8}
                       >
                         <Text style={[
                           styles.couponItemApplyBtnText,
-                          isCurrent && styles.couponItemAppliedBtnText
+                          isCurrent && styles.couponItemAppliedBtnText,
+                          isUsed && { color: '#94A3B8' },
                         ]}>
-                          {isCurrent ? 'APPLIED ✓' : 'APPLY'}
+                          {isCurrent ? 'APPLIED ✓' : (isUsed ? 'USED' : 'APPLY')}
                         </Text>
                       </TouchableOpacity>
                     </View>
@@ -3219,14 +3295,14 @@ export default function BookingScreen({ navigation, route }) {
                         borderColor: '#FECDD3'
                       }}>
                         <Text style={{ fontSize: 9, fontWeight: '800', color: '#E11D48' }}>
-                          + Additional Charge
+                          + ₹{adminRooftopCharge}
                         </Text>
                       </View>
                     )}
                   </View>
                   <Text style={reviewStyles.optItemSub}>
                     {isSUVSelected
-                      ? 'Secure roof carrier for extra luggage (Additional carrier charges apply)'
+                      ? `Secure roof carrier for extra luggage (+₹${adminRooftopCharge} carrier charge)`
                       : 'Locked: RTO rules allow roof carrier only on SUV cabs'}
                   </Text>
                 </View>
@@ -3266,8 +3342,8 @@ export default function BookingScreen({ navigation, route }) {
                 ]}>
                   {isSUVSelected
                     ? (rooftopCarrier
-                        ? '⚠️ Rooftop Carrier Enabled: Carrier charge is an additional charge and will be payable extra directly to driver.'
-                        : 'SUV Selected: Rooftop luggage carrier is available. Note: Rooftop carrier charges are additional / extra.')
+                        ? `⚠️ Rooftop Carrier Enabled: Carrier charge (+₹${adminRooftopCharge}) will be added to total ride fare & invoice.`
+                        : `SUV Selected: Rooftop luggage carrier is available (+₹${adminRooftopCharge} additional charge).`)
                     : 'RTO regulations prohibit rooftop carrier on Mini, Sedan & Hatchbacks. Switch vehicle to SUV to enable.'}
                 </Text>
               </View>
@@ -3302,8 +3378,22 @@ export default function BookingScreen({ navigation, route }) {
               <View style={reviewStyles.optItemRow}>
                 <Ionicons name="paw-outline" size={20} color="#0F172A" style={{ marginTop: 2 }} />
                 <View style={{ flex: 1, marginHorizontal: 12 }}>
-                  <Text style={reviewStyles.optItemTitle}>Traveling with Pets</Text>
-                  <Text style={reviewStyles.optItemSub}>Pet-friendly verified cab &amp; driver</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    <Text style={reviewStyles.optItemTitle}>Traveling with Pets</Text>
+                    <View style={{
+                      paddingHorizontal: 6,
+                      paddingVertical: 2,
+                      borderRadius: 4,
+                      backgroundColor: '#ECFDF5',
+                      borderWidth: 1,
+                      borderColor: '#A7F3D0'
+                    }}>
+                      <Text style={{ fontSize: 9, fontWeight: '800', color: '#059669' }}>
+                        + ₹{adminPetCharge}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={reviewStyles.optItemSub}>Pet-friendly verified cab &amp; driver (+₹{adminPetCharge} surcharge)</Text>
                 </View>
                 <Switch
                   value={hasPets}
@@ -3395,8 +3485,10 @@ export default function BookingScreen({ navigation, route }) {
                       if (isSharedTrip) calc *= 0.5
                       const waitHourlyRate = parseFloat(activeV.waiting_charge_per_hour || (activeV.waiting_charge_per_min ? activeV.waiting_charge_per_min * 60 : (activeV.waiting_charge ? activeV.waiting_charge * 60 : 100)))
                       const waitingCharge = waitingHours > 0 ? Math.round(waitingHours * waitHourlyRate) : 0
+                      const petCharge = hasPets ? adminPetCharge : 0
+                      const rooftopCharge = (isSUVSelected && rooftopCarrier) ? adminRooftopCharge : 0
                       const disc = appliedCoupon?.discount_amount || 0
-                      return Math.max(30, Math.round(calc + waitingCharge - disc))
+                      return Math.max(30, Math.round(calc + waitingCharge + petCharge + rooftopCharge - disc))
                     })()}
                   </Text>
                   <Ionicons name="chevron-down" size={16} color="#0F172A" />
@@ -3702,14 +3794,14 @@ export default function BookingScreen({ navigation, route }) {
               </View>
               {rooftopCarrier && (
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={{ fontSize: 13, color: '#DC2626' }}>Rooftop Luggage Carrier</Text>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>Requested 📦 (Extra Charge)</Text>
+                  <Text style={{ fontSize: 13, color: '#DC2626', fontWeight: '600' }}>Rooftop Luggage Carrier (SUV)</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#DC2626' }}>+₹{adminRooftopCharge}</Text>
                 </View>
               )}
               {hasPets && (
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={{ fontSize: 13, color: '#059669' }}>Pets Friendly Cab</Text>
-                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#059669' }}>Included 🐾</Text>
+                  <Text style={{ fontSize: 13, color: '#059669', fontWeight: '600' }}>Traveling with Pets Surcharge</Text>
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#059669' }}>+₹{adminPetCharge}</Text>
                 </View>
               )}
               {waitingHours > 0 && (
@@ -3770,13 +3862,15 @@ export default function BookingScreen({ navigation, route }) {
                     if (isSharedTrip) calc *= 0.5
                     const waitHourlyRate = parseFloat(activeV.waiting_charge_per_hour || (activeV.waiting_charge_per_min ? activeV.waiting_charge_per_min * 60 : (activeV.waiting_charge ? activeV.waiting_charge * 60 : 100)))
                     const waitingCharge = waitingHours > 0 ? Math.round(waitingHours * waitHourlyRate) : 0
+                    const petCharge = hasPets ? adminPetCharge : 0
+                    const rooftopCharge = (isSUVSelected && rooftopCarrier) ? adminRooftopCharge : 0
                     const disc = appliedCoupon?.discount_amount || 0
-                    return Math.max(30, Math.round(calc + waitingCharge - disc))
+                    return Math.max(30, Math.round(calc + waitingCharge + petCharge + rooftopCharge - disc))
                   })()}
                 </Text>
               </View>
               <Text style={{ fontSize: 11, color: '#64748B', textAlign: 'center', marginTop: 8, lineHeight: 16 }}>
-                * Tollgate tolls, parking permit charges{rooftopCarrier ? ' & rooftop luggage carrier charges' : ''} are extra and to be paid directly to driver as per actual receipts.
+                * Tollgate tolls & parking permit charges are extra and to be paid directly to driver as per actual receipts.
               </Text>
             </View>
           </View>

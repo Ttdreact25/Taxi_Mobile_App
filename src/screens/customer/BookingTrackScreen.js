@@ -383,8 +383,8 @@ export default function BookingTrackScreen({ route, navigation }) {
 
   const hasAssignedDriver = Boolean(
     ((assignedDriverId && Number(assignedDriverId) > 0) ||
-    Boolean(driver?.name) ||
-    Boolean(booking?.driver_name)) &&
+      Boolean(driver?.name) ||
+      Boolean(booking?.driver_name)) &&
     isDriverAccepted
   )
 
@@ -403,7 +403,7 @@ export default function BookingTrackScreen({ route, navigation }) {
   useEffect(() => {
     if (isDriverArrived && !hasAlertedArrivalRef.current) {
       hasAlertedArrivalRef.current = true
-      playCustomerTaxiReachedAlert(booking?.id || bookingId, driverName, plateNo || vehicleModel).catch(() => {})
+      playCustomerTaxiReachedAlert(booking?.id || bookingId, driverName, plateNo || vehicleModel).catch(() => { })
     }
   }, [isDriverArrived, booking?.id, bookingId, driverName, plateNo, vehicleModel])
 
@@ -464,24 +464,24 @@ export default function BookingTrackScreen({ route, navigation }) {
   // Step Tracker configuration
   const stepItems = !isDriverAssigned
     ? [
-        { id: 1, label: status === 'driver_assigned' ? 'Connecting' : 'Searching' },
-        { id: 2, label: 'Assigned' },
-        { id: 3, label: 'Arriving' },
-        { id: 4, label: 'Trip Started' },
-      ]
+      { id: 1, label: status === 'driver_assigned' ? 'Connecting' : 'Searching' },
+      { id: 2, label: 'Assigned' },
+      { id: 3, label: 'Arriving' },
+      { id: 4, label: 'Trip Started' },
+    ]
     : (isRoundTrip && (isReturnPickup || isReturnStarted)
       ? [
-          { id: 1, label: '1st Drop Done' },
-          { id: 2, label: 'Return Pickup' },
-          { id: 3, label: 'Returning' },
-          { id: 4, label: 'Completed' },
-        ]
+        { id: 1, label: '1st Drop Done' },
+        { id: 2, label: 'Return Pickup' },
+        { id: 3, label: 'Returning' },
+        { id: 4, label: 'Completed' },
+      ]
       : [
-          { id: 1, label: 'Driver Assigned' },
-          { id: 2, label: 'Arriving' },
-          { id: 3, label: 'On the way' },
-          { id: 4, label: 'Reached' },
-        ])
+        { id: 1, label: 'Driver Assigned' },
+        { id: 2, label: 'Arriving' },
+        { id: 3, label: 'On the way' },
+        { id: 4, label: 'Reached' },
+      ])
 
   let stepIndex = 1
   if (!isDriverAssigned) {
@@ -566,7 +566,7 @@ export default function BookingTrackScreen({ route, navigation }) {
               setNextTurnInstruction(`Route: ${originCoord.address?.split(',')?.[0] || 'Pickup'} to ${destCoord.address?.split(',')?.[0] || 'Destination'}`)
             }
           }
-        } catch {}
+        } catch { }
       }
     })()
   }, [driverCoord.latitude, driverCoord.longitude, status, isDriverAssigned, hasRealDriverCoord, isInTripNavigation, isReturnPickup, isReturnStarted, isRoundTrip, booking?.stops])
@@ -628,7 +628,7 @@ export default function BookingTrackScreen({ route, navigation }) {
       await Share.share({
         message: `I'm tracking my ride using CityOneTaxi! Booking #${booking?.booking_ref || bookingId}: ${destCoord.address}.${driverInfo}`,
       })
-    } catch {}
+    } catch { }
   }
 
   // Cancel Ride - Opens Professional Cancellation Sheet (Only allowed before driver starts heading)
@@ -962,19 +962,19 @@ export default function BookingTrackScreen({ route, navigation }) {
                     {status === 'driver_assigned'
                       ? 'Connecting with Driver...'
                       : (status === 'pending_driver_assignment'
-                          ? 'Driver Assignment in Progress'
-                          : (isOutstationTrip ? 'Driver Assignment Pending' : 'Searching for Driver...'))}
+                        ? 'Driver Assignment in Progress'
+                        : (isOutstationTrip ? 'Driver Assignment Pending' : 'Searching for Driver...'))}
                   </Text>
                   <Text style={styles.searchingSub}>
                     {status === 'driver_assigned'
                       ? 'Driver assigned by Admin. Waiting for driver confirmation...'
                       : (status === 'pending_driver_assignment'
-                          ? (isOutstationTrip
-                              ? 'Admin is assigning the best category driver for your outstation trip.'
-                              : 'Admin is reviewing and assigning a driver. Auto-assign will trigger if unassigned.')
-                          : (isOutstationTrip
-                              ? 'Admin is assigning the best category driver for your outstation trip.'
-                              : 'Looking for nearby drivers. Please hold on...'))}
+                        ? (isOutstationTrip
+                          ? 'Admin is assigning the best category driver for your outstation trip.'
+                          : 'Admin is reviewing and assigning a driver. Auto-assign will trigger if unassigned.')
+                        : (isOutstationTrip
+                          ? 'Admin is assigning the best category driver for your outstation trip.'
+                          : 'Looking for nearby drivers. Please hold on...'))}
                   </Text>
                 </View>
 
@@ -1166,7 +1166,7 @@ export default function BookingTrackScreen({ route, navigation }) {
                       Booked Route Fare ({Number(booking?.original_distance_km || booking?.distance_km || 0).toFixed(1)} km)
                     </Text>
                     <Text style={{ fontSize: 12, fontWeight: '700', color: '#0F172A' }}>
-                      ₹{Math.round(Number(booking?.original_fare || (Number(fareAmount) - Number(booking?.extra_km_fare || 0) - Number(booking?.pickup_charge || 0))))}
+                      ₹{Math.round(Number(booking?.original_fare || (Number(fareAmount) - Number(booking?.extra_km_fare || 0) - Number(booking?.pickup_charge || 0) - Number(booking?.pet_charge || (booking?.has_pets ? 150 : 0)) - Number(booking?.rooftop_charge || (booking?.rooftop_carrier ? 250 : 0)))))}
                     </Text>
                   </View>
                   {Number(booking?.extra_km) > 0 ? (
@@ -1188,6 +1188,20 @@ export default function BookingTrackScreen({ route, navigation }) {
                     Pickup Charge (Extra {booking?.extra_pickup_distance_km || ((Number(booking?.pickup_distance_km) > 2) ? (Number(booking?.pickup_distance_km) - 2).toFixed(1) : 0)} km)
                   </Text>
                   <Text style={{ fontSize: 12, fontWeight: '700', color: '#7C3AED' }}>+₹{Math.round(Number(booking?.pickup_charge))}</Text>
+                </View>
+              ) : null}
+
+              {Number(booking?.pet_charge || (booking?.has_pets ? 150 : 0)) > 0 ? (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 12, color: '#0284C7', fontWeight: '600' }}>🐾 Traveling with Pets Fee</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#0284C7' }}>+₹{Math.round(Number(booking?.pet_charge || (booking?.has_pets ? 150 : 0)))}</Text>
+                </View>
+              ) : null}
+
+              {Number(booking?.rooftop_charge || (booking?.rooftop_carrier ? 250 : 0)) > 0 ? (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 12, color: '#D97706', fontWeight: '600' }}>📦 Rooftop Luggage Carrier (SUV)</Text>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: '#D97706' }}>+₹{Math.round(Number(booking?.rooftop_charge || (booking?.rooftop_carrier ? 250 : 0)))}</Text>
                 </View>
               ) : null}
 

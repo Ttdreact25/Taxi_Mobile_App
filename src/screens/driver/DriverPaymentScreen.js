@@ -165,6 +165,15 @@ const DriverPaymentScreen = ({ navigation, route }) => {
   const isPaid = (booking.payment_status === 'paid' && booking.collection_status === 'collected') || confirmed
   const method = booking.payment_method || 'cash'
   
+  let petCharge = Number(booking.pet_charge || 0)
+  if (petCharge <= 0 && (booking.has_pets == 1 || booking.pets == 1 || booking.traveling_with_pets == 1)) {
+    petCharge = 150
+  }
+  let rooftopCharge = Number(booking.rooftop_charge || 0)
+  if (rooftopCharge <= 0 && (booking.rooftop_carrier == 1 || booking.roof_carrier == 1 || booking.rooftop == 1)) {
+    rooftopCharge = 250
+  }
+
   let computedFare = Math.round(Number(booking.final_fare || booking.fare_estimate || fare?.total || booking.fare || booking.original_fare || 0))
   if (computedFare <= 0) {
     const origKm = Number(booking.original_distance_km || booking.distance_km || 0)
@@ -176,7 +185,7 @@ const DriverPaymentScreen = ({ navigation, route }) => {
     const waitCharge = Math.round(Number(booking.waiting_charge || 0))
     const tollAmt = Math.round(Number(booking.toll_amount || 0))
     const disc = Math.round(Number(booking.discount_amount || 0))
-    computedFare = Math.max(minFare, routeFare + extraKmFare + waitCharge + tollAmt - disc)
+    computedFare = Math.max(minFare, routeFare + extraKmFare + waitCharge + petCharge + rooftopCharge + tollAmt - disc)
   }
   const totalFare = computedFare
   const discountAmount = Math.round(Number(booking.discount_amount || 0))
@@ -272,10 +281,6 @@ const DriverPaymentScreen = ({ navigation, route }) => {
                   <Text style={[styles.detailValue, { color: '#D97706', fontWeight: '700' }]}>+ ₹{Math.round(Number(booking.extra_km_fare || (booking.extra_km * (booking.extra_km_rate || 15))))}</Text>
                 </View>
               )}
-              <View style={styles.detailRow}>
-                <Text style={[styles.detailLabel, { fontWeight: '700' }]}>Total Trip Fare</Text>
-                <Text style={[styles.detailValue, { fontWeight: '800' }]}>₹{totalFare}</Text>
-              </View>
             </>
           ) : (
             <>
@@ -284,7 +289,7 @@ const DriverPaymentScreen = ({ navigation, route }) => {
                   Booked Route Fare ({Number(booking.original_distance_km || (Number(booking.extra_km) > 0 ? (Number(booking.distance_km) - Number(booking.extra_km)) : booking.distance_km) || 0).toFixed(1)} km)
                 </Text>
                 <Text style={styles.detailValue}>
-                  ₹{Math.max(0, Math.round(totalFare - Number(booking.extra_km_fare || 0) - Number(booking.pickup_charge || 0) + discountAmount))}
+                  ₹{Math.max(0, Math.round(totalFare - Number(booking.extra_km_fare || 0) - Number(booking.pickup_charge || 0) - Number(booking.waiting_charge || 0) - petCharge - rooftopCharge + discountAmount))}
                 </Text>
               </View>
               {Number(booking.extra_km) > 0 && (
@@ -297,12 +302,9 @@ const DriverPaymentScreen = ({ navigation, route }) => {
                   </Text>
                 </View>
               )}
-              <View style={styles.detailRow}>
-                <Text style={[styles.detailLabel, { fontWeight: '700' }]}>Total Trip Fare</Text>
-                <Text style={[styles.detailValue, { fontWeight: '800' }]}>₹{totalFare}</Text>
-              </View>
             </>
           )}
+
           {Number(booking.pickup_charge) > 0 && (
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>
@@ -323,6 +325,26 @@ const DriverPaymentScreen = ({ navigation, route }) => {
               </Text>
             </View>
           )}
+          {petCharge > 0 && (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>
+                🐾 Traveling with Pets Fee
+              </Text>
+              <Text style={[styles.detailValue, { color: '#059669', fontWeight: '700' }]}>
+                + ₹{Math.round(petCharge)}
+              </Text>
+            </View>
+          )}
+          {rooftopCharge > 0 && (
+            <View style={styles.detailRow}>
+              <Text style={styles.detailLabel}>
+                📦 Rooftop Luggage Carrier (SUV)
+              </Text>
+              <Text style={[styles.detailValue, { color: '#B45309', fontWeight: '700' }]}>
+                + ₹{Math.round(rooftopCharge)}
+              </Text>
+            </View>
+          )}
           {Number(booking.toll_amount) > 0 && (
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Toll / Parking Charges</Text>
@@ -337,6 +359,11 @@ const DriverPaymentScreen = ({ navigation, route }) => {
               <Text style={[styles.detailValue, { color: '#10B981' }]}>- ₹{discountAmount}</Text>
             </View>
           )}
+
+          <View style={[styles.detailRow, { borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingTop: 8, marginTop: 4 }]}>
+            <Text style={[styles.detailLabel, { fontWeight: '800', color: '#0F172A' }]}>Total Trip Fare</Text>
+            <Text style={[styles.detailValue, { fontWeight: '900', color: '#16A34A', fontSize: 16 }]}>₹{totalFare}</Text>
+          </View>
           <View style={styles.detailRow}>
             <Text style={styles.detailLabel}>Already Paid Online (Advance)</Text>
             <Text style={[styles.detailValue, { color: COLORS.primary, fontWeight: '700' }]}>

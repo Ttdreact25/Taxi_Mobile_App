@@ -1148,18 +1148,24 @@ const DriverProfileScreen = ({ navigation }) => {
           </TouchableOpacity>
 
           {[
+            { icon: 'star-outline', label: 'Our Reviews', color: '#F59E0B', badge: `${driver?.rating || '5.0'} ★`, action: () => navigation.navigate('DriverReviews') },
             { icon: 'cash-outline', label: 'Earnings & Payout Settlements', color: '#10B981', action: () => navigation.navigate('Earnings') },
             { icon: 'key-outline', label: 'Change Security Password', color: '#B45309', action: () => setPwModalVisible(true) },
             { icon: 'notifications-outline', label: 'Trip Notifications', color: '#2563EB', action: () => navigation.navigate('DriverNotifications') },
             { icon: 'headset-outline', label: 'Help, Safety & 24x7 SOS Support', color: '#EA580C', action: () => navigation.navigate('DriverSupport') },
             { icon: 'document-text-outline', label: 'Privacy Policy', color: '#D97706', action: () => navigation.navigate('PrivacyPolicy') },
             { icon: 'newspaper-outline', label: 'Terms & Conditions', color: '#64748B', action: () => navigation.navigate('Terms') },
-          ].map((item, idx) => (
-            <TouchableOpacity key={idx} style={[styles.menuRow, idx < 5 && styles.rowBorder]} onPress={item.action} activeOpacity={0.8}>
+          ].map((item, idx, arr) => (
+            <TouchableOpacity key={idx} style={[styles.menuRow, idx < arr.length - 1 && styles.rowBorder]} onPress={item.action} activeOpacity={0.8}>
               <View style={[styles.menuIconWrap, { backgroundColor: item.color + '15' }]}>
                 <Ionicons name={item.icon} size={18} color={item.color} />
               </View>
               <Text style={styles.menuLabel}>{item.label}</Text>
+              {item.badge && (
+                <View style={{ backgroundColor: '#FEF3C7', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10, marginRight: 8, borderWidth: 1, borderColor: '#FDE68A' }}>
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: '#B45309' }}>{item.badge}</Text>
+                </View>
+              )}
               <Ionicons name="chevron-forward" size={16} color={COLORS.gray400} />
             </TouchableOpacity>
           ))}

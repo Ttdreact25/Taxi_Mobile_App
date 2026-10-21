@@ -16,6 +16,11 @@ export const SplashScreen = ({
   subtitle = 'Your Journey, Our Responsibility',
   onFinish,
 }) => {
+  const onFinishRef = useRef(onFinish)
+  useEffect(() => {
+    onFinishRef.current = onFinish
+  }, [onFinish])
+
   const fadeAnim = useRef(new Animated.Value(0)).current
   const logoScale = useRef(new Animated.Value(0.78)).current
   const pulseAnim = useRef(new Animated.Value(1)).current
@@ -27,11 +32,11 @@ export const SplashScreen = ({
     const finishSafely = () => {
       if (!finished) {
         finished = true
-        if (onFinish) onFinish()
+        if (onFinishRef.current) onFinishRef.current()
       }
     }
 
-    const fallbackTimer = setTimeout(finishSafely, 3200)
+    const fallbackTimer = setTimeout(finishSafely, 3600)
 
     try {
       // 1. Entrance animation (fade in + logo spring)
@@ -70,28 +75,30 @@ export const SplashScreen = ({
         ])
       ).start()
 
-      // 3. Progress bar animation + graceful exit fade
+      // 3. Progress bar animation - 2800ms full smooth fill-up
       Animated.timing(progressAnim, {
         toValue: 1,
-        duration: 2200,
+        duration: 2800,
         useNativeDriver: false,
-      }).start(() => {
-        Animated.timing(fadeAnim, {
-          toValue: 0,
-          duration: 300,
-          useNativeDriver: true,
-        }).start(() => finishSafely())
+      }).start(({ finished: animFinished }) => {
+        if (animFinished) {
+          Animated.timing(fadeAnim, {
+            toValue: 0,
+            duration: 200,
+            useNativeDriver: true,
+          }).start(() => finishSafely())
+        }
       })
     } catch {
       finishSafely()
     }
 
     return () => clearTimeout(fallbackTimer)
-  }, [onFinish])
+  }, [])
 
   const progressWidth = progressAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, 160],
+    outputRange: [0, 200],
   })
 
   return (
@@ -359,8 +366,8 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   progressBarTrack: {
-    width: 160,
-    height: 5,
+    width: 200,
+    height: 6,
     borderRadius: 3,
     backgroundColor: 'rgba(255, 255, 255, 0.22)',
     overflow: 'hidden',

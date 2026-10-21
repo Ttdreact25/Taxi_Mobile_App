@@ -7,6 +7,7 @@ import { COLORS, RADIUS } from '../constants/theme'
 
 // Customer screens
 import HomeScreen                 from '../screens/customer/HomeScreen'
+import OffersScreen               from '../screens/customer/OffersScreen'
 import BookingScreen              from '../screens/customer/BookingScreen'
 import LongTripScreen             from '../screens/customer/LongTripScreen'
 import SharedTripsScreen          from '../screens/customer/SharedTripsScreen'
@@ -38,6 +39,14 @@ const HomeStack = () => (
     <Stack.Screen name="Support"              component={SupportScreen} />
     <Stack.Screen name="PrivacyPolicy"        component={PrivacyPolicyScreen} />
     <Stack.Screen name="Terms"                component={TermsScreen} />
+  </Stack.Navigator>
+)
+
+const OffersStack = () => (
+  <Stack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
+    <Stack.Screen name="OffersMain"           component={OffersScreen} />
+    <Stack.Screen name="Booking"              component={BookingScreen} />
+    <Stack.Screen name="SharedTrips"          component={SharedTripsScreen} />
   </Stack.Navigator>
 )
 
@@ -81,16 +90,17 @@ const ProfileStack = () => (
 
 const TabIcon = ({ routeName, focused }) => {
   const icons = {
-    Home:    focused ? 'home'   : 'home-outline',
-    Trips:   focused ? 'time'   : 'time-outline',
-    Profile: focused ? 'person' : 'person-outline',
+    Home:    focused ? 'home'      : 'home-outline',
+    Offers:  focused ? 'pricetag'  : 'pricetag-outline',
+    Trips:   focused ? 'time'      : 'time-outline',
+    Profile: focused ? 'person'    : 'person-outline',
   }
   
   return (
     <View style={[styles.iconPill, focused && styles.iconPillActive]}>
       <Ionicons
         name={icons[routeName] || 'ellipse'}
-        size={26}
+        size={25}
         color={focused ? '#D97706' : COLORS.gray400}
       />
     </View>
@@ -131,6 +141,7 @@ const CustomerTabs = () => {
       })}
     >
       <Tab.Screen name="Home"    component={HomeStack}    options={{ title: 'Home' }} />
+      <Tab.Screen name="Offers"  component={OffersStack}  options={{ title: 'Offers' }} />
       <Tab.Screen name="Trips"   component={TripsStack}   options={{ title: 'My Trips' }} />
       <Tab.Screen name="Profile" component={ProfileStack} options={{ title: 'Profile' }} />
     </Tab.Navigator>

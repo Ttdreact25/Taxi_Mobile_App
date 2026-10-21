@@ -33,12 +33,16 @@ const AppNavigator = () => {
     PushNotificationService.registerForPushNotifications().catch(() => {})
   }, [user])
 
+  const handleSplashFinish = React.useCallback(() => {
+    setSplashFinished(true)
+  }, [])
+
   const showSplash = loading || !splashFinished
 
   if (showSplash) {
     return (
       <View style={styles.container}>
-        <SplashScreen onFinish={() => setSplashFinished(true)} />
+        <SplashScreen onFinish={handleSplashFinish} />
       </View>
     )
   }

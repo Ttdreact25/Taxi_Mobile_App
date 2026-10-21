@@ -8,26 +8,21 @@ import {
   RefreshControl,
   ScrollView,
   Alert,
-  Image,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
-import { notifAPI, reviewsAPI, resolveAssetUrl } from '../../api/api'
-import { useAuth } from '../../context/AuthContext'
+import { notifAPI } from '../../api/api'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import { SkeletonList } from '../../components/common/Skeleton'
 import EmptyState from '../../components/common/EmptyState'
 
 const FILTERS = [
-  { id: 'all',       label: 'All Updates',       icon: 'layers-outline',            activeIcon: 'layers' },
-  { id: 'bookings',  label: 'Ride Dispatches',   icon: 'car-sport-outline',         activeIcon: 'car-sport' },
-  { id: 'completed', label: 'Completed Trips',   icon: 'checkmark-circle-outline',  activeIcon: 'checkmark-circle' },
-  { id: 'reviews',   label: 'Customer Reviews',  icon: 'star-outline',              activeIcon: 'star' },
+  { id: 'all',    label: 'All Broadcasts', icon: 'megaphone-outline',   activeIcon: 'megaphone' },
+  { id: 'unread', label: 'Unread Only',    icon: 'mail-unread-outline', activeIcon: 'mail-unread' },
 ]
 
 const DriverNotifScreen = ({ navigation }) => {
-  const { user } = useAuth()
   const [notifications, setNotifications] = useState([])
   const [filter, setFilter] = useState('all')
   const [loading, setLoading] = useState(true)
@@ -36,60 +31,44 @@ const DriverNotifScreen = ({ navigation }) => {
   const loadNotifications = useCallback(async (isPull = false) => {
     if (!isPull) setLoading(true)
     try {
-      const [notifRes, revRes] = await Promise.allSettled([
-        notifAPI.list(false),
-        user?.id ? reviewsAPI.listForUser(user.id, 'driver') : Promise.resolve({ data: { reviews: [] } })
-      ])
+      const res = await notifAPI.list(false)
+      const rawNotifs = res.data?.notifications || res.data?.data?.notifications || res.data?.data || []
 
-      const rawNotifs = notifRes.status === 'fulfilled'
-        ? (notifRes.value.data?.notifications || notifRes.value.data?.data?.notifications || notifRes.value.data?.data || [])
-        : []
-
-      // Filter strictly: Keep ONLY 1. Bookings, 2. Completions, and 3. Customer Reviews
-      const relevantNotifs = rawNotifs.filter(n => {
+      // Filter strictly: Keep ONLY Admin Broadcasts and Official Announcements
+      const broadcastNotifs = (Array.isArray(rawNotifs) ? rawNotifs : []).filter(n => {
         const text = `${n.title || ''} ${n.body || ''} ${n.type || ''}`.toLowerCase()
-        // Strictly exclude non-trip system events
-        if (text.includes('otp') || text.includes('kyc') || text.includes('registration') || text.includes('broadcast') || text.includes('support') || text.includes('payout') || text.includes('cancel')) {
+        // Strictly exclude internal transactional noise
+        if (
+          text.includes('otp') ||
+          text.includes('kyc') ||
+          text.includes('registration') ||
+          text.includes('dispatch') ||
+          text.includes('pickup alert') ||
+          text.includes('booking') ||
+          text.includes('completed')
+        ) {
           return false
         }
-        const isBooking = text.includes('booking') || text.includes('assign') || text.includes('pickup alert') || text.includes('dispatch') || text.includes('new ride')
-        const isCompleted = text.includes('complete') || (n.type === 'payment' && !text.includes('recharge') && !text.includes('topup'))
-        const isReview = text.includes('review') || text.includes('rated') || text.includes('star')
-        return isBooking || isCompleted || isReview
+        return (
+          n.type === 'broadcast' ||
+          n.type === 'admin_broadcast' ||
+          text.includes('broadcast') ||
+          text.includes('announcement') ||
+          text.includes('notice') ||
+          text.includes('admin')
+        )
       })
 
-      // Normalize reviews from reviewsAPI as rich review items
-      const rawReviews = revRes.status === 'fulfilled' ? (revRes.value.data?.reviews || []) : []
-      const reviewCards = rawReviews.map(r => ({
-        id: `rev_${r.id}`,
-        is_review: true,
-        rating: Number(r.rating || 5),
-        comment: r.comment || '',
-        customer_name: r.reviewer_name || 'Passenger',
-        customer_avatar: r.reviewer_avatar || null,
-        booking_ref: r.booking_ref || `Trip #${r.booking_id}`,
-        pickup_address: r.pickup_address,
-        dest_address: r.dest_address,
-        created_at: r.created_at,
-        title: `${r.rating}/5 Customer Rating`,
-        body: r.comment || 'Passenger gave you a 5-star rating for this ride!',
-        type: 'review',
-        is_read: 1,
-      }))
-
-      // Combine notifications & reviews, avoiding duplicate review IDs if backend already created notif
-      const combined = [...relevantNotifs, ...reviewCards]
       // Sort newest first
-      combined.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
-
-      setNotifications(combined)
+      broadcastNotifs.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0))
+      setNotifications(broadcastNotifs)
     } catch {
       setNotifications([])
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [user?.id])
+  }, [])
 
   useEffect(() => {
     loadNotifications()
@@ -102,7 +81,6 @@ const DriverNotifScreen = ({ navigation }) => {
   )
 
   const handleMarkRead = async (id) => {
-    if (String(id).startsWith('rev_')) return
     try {
       await notifAPI.markRead(id)
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: 1 } : n))
@@ -113,147 +91,82 @@ const DriverNotifScreen = ({ navigation }) => {
     try {
       await notifAPI.markRead()
       setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })))
-      Alert.alert('Done', 'All notifications marked as read.')
+      Alert.alert('Done', 'All broadcasts marked as read.')
     } catch {}
   }
 
   const filteredNotifs = notifications.filter(n => {
-    const text = `${n.title || ''} ${n.body || ''} ${n.type || ''}`.toLowerCase()
-    if (filter === 'bookings') {
-      return !n.is_review && (text.includes('booking') || text.includes('assign') || text.includes('ride') || text.includes('pickup alert') || text.includes('dispatch')) && !text.includes('complete')
-    }
-    if (filter === 'completed') {
-      return !n.is_review && (text.includes('complete') || (n.type === 'payment' && !text.includes('recharge')))
-    }
-    if (filter === 'reviews') {
-      return n.is_review || text.includes('review') || text.includes('rated') || text.includes('star')
+    if (filter === 'unread') {
+      return Number(n.is_read) === 0 || !n.is_read
     }
     return true
   })
 
+  const unreadCount = notifications.filter(n => Number(n.is_read) === 0 || !n.is_read).length
+
   const renderItem = ({ item }) => {
-    // 1. Customer Review Card Display
-    if (item.is_review) {
-      const stars = Math.min(5, Math.max(1, Math.round(item.rating || 5)))
-      return (
-        <View style={styles.reviewCard}>
-          <View style={styles.reviewHeader}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-              <View style={styles.reviewAvatarWrap}>
-                {resolveAssetUrl(item.customer_avatar) ? (
-                  <Image source={{ uri: resolveAssetUrl(item.customer_avatar) }} style={styles.reviewAvatarImg} />
-                ) : (
-                  <Text style={styles.reviewAvatarText}>{(item.customer_name?.[0] || 'C').toUpperCase()}</Text>
-                )}
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                  <Text style={styles.reviewCustName} numberOfLines={1}>{item.customer_name}</Text>
-                  <Ionicons name="checkmark-circle" size={13} color="#10B981" />
-                </View>
-                <Text style={styles.reviewRefText}>{item.booking_ref}</Text>
-              </View>
-            </View>
-            <View style={styles.starBadgePill}>
-              <Ionicons name="star" size={13} color="#F59E0B" />
-              <Text style={styles.starBadgeText}>{item.rating.toFixed(1)}</Text>
-            </View>
-          </View>
-
-          {item.comment ? (
-            <View style={styles.reviewCommentBox}>
-              <Text style={styles.reviewCommentText}>"{item.comment}"</Text>
-            </View>
-          ) : (
-            <View style={styles.reviewCommentBox}>
-              <Text style={[styles.reviewCommentText, { fontStyle: 'italic', color: '#94A3B8' }]}>Rated {item.rating} stars for a smooth journey</Text>
-            </View>
-          )}
-
-          <View style={styles.reviewFooterRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-              {[1, 2, 3, 4, 5].map(s => (
-                <Ionicons
-                  key={s}
-                  name={s <= stars ? "star" : "star-outline"}
-                  size={14}
-                  color={s <= stars ? "#F59E0B" : "#CBD5E1"}
-                />
-              ))}
-            </View>
-            <Text style={styles.timeText}>
-              {item.created_at ? new Date(item.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Recently'}
-            </Text>
-          </View>
-        </View>
-      )
-    }
-
-    // 2. Regular Booking or Completion Notification Card with Corporate Icon Badges
-    const isUnread = item.is_read == 0 || !item.is_read
-    const text = `${item.title || ''} ${item.body || ''}`.toLowerCase()
-    const isReviewNotif = text.includes('review') || text.includes('rated') || text.includes('star')
-    const isCompleted = text.includes('complete')
-
-    let iconCfg = {
-      icon: 'car-sport',
-      color: '#2563EB',
-      bg: '#EFF6FF',
-      border: '#BFDBFE',
-      tag: 'DISPATCH ALERT',
-      tagColor: '#1D4ED8',
-      tagBg: '#DBEAFE',
-    }
-    if (isReviewNotif) {
-      iconCfg = {
-        icon: 'star',
-        color: '#D97706',
-        bg: '#FFFBEB',
-        border: '#FDE68A',
-        tag: 'PASSENGER REVIEW',
-        tagColor: '#B45309',
-        tagBg: '#FEF3C7',
-      }
-    } else if (isCompleted) {
-      iconCfg = {
-        icon: 'shield-checkmark',
-        color: '#059669',
-        bg: '#ECFDF5',
-        border: '#A7F3D0',
-        tag: 'TRIP COMPLETED',
-        tagColor: '#047857',
-        tagBg: '#D1FAE5',
-      }
-    }
+    const isUnread = Number(item.is_read) === 0 || !item.is_read
+    const createdDate = item.created_at ? new Date(item.created_at) : null
+    const formattedDate = createdDate
+      ? createdDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+      : 'Today'
+    const formattedTime = createdDate
+      ? createdDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : ''
 
     return (
       <TouchableOpacity
-        style={[styles.notifCard, isUnread ? styles.notifCardUnread : styles.notifCardRead]}
+        style={[styles.card, isUnread ? styles.cardUnread : styles.cardRead]}
         onPress={() => handleMarkRead(item.id)}
-        activeOpacity={0.82}
+        activeOpacity={0.88}
       >
-        <View style={[styles.iconWrap, { backgroundColor: iconCfg.bg, borderColor: iconCfg.border }]}>
-          <Ionicons name={iconCfg.icon} size={22} color={iconCfg.color} />
+        <View style={styles.cardHeader}>
+          <View style={styles.badgeRow}>
+            <View style={styles.badgeWrap}>
+              <Ionicons name="megaphone" size={13} color="#B45309" />
+              <Text style={styles.badgeText}>ADMIN BROADCAST</Text>
+            </View>
+            {isUnread && (
+              <View style={styles.newBadgeWrap}>
+                <View style={styles.newDot} />
+                <Text style={styles.newBadgeText}>NEW</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.dateText}>
+            {formattedDate} {formattedTime ? `• ${formattedTime}` : ''}
+          </Text>
         </View>
 
-        <View style={{ flex: 1, marginLeft: 14 }}>
-          <View style={styles.cardHeaderTop}>
-            <View style={[styles.categoryPill, { backgroundColor: iconCfg.tagBg }]}>
-              <Text style={[styles.categoryPillText, { color: iconCfg.tagColor }]}>{iconCfg.tag}</Text>
+        <View style={styles.titleRow}>
+          <Text style={[styles.title, isUnread && styles.titleBold]}>
+            {item.title || 'Official Announcement'}
+          </Text>
+        </View>
+
+        <Text style={styles.bodyText}>
+          {item.body || item.message || ''}
+        </Text>
+
+        <View style={styles.cardFooter}>
+          <View style={styles.senderWrap}>
+            <Ionicons name="shield-checkmark" size={13} color="#10B981" />
+            <Text style={styles.senderText}>CityOne Taxi Admin Official</Text>
+          </View>
+          {isUnread ? (
+            <TouchableOpacity
+              style={styles.markReadBtn}
+              onPress={() => handleMarkRead(item.id)}
+            >
+              <Ionicons name="checkmark" size={13} color="#0284C7" />
+              <Text style={styles.markReadText}>Mark read</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.readIndicator}>
+              <Ionicons name="checkmark-done" size={14} color="#94A3B8" />
+              <Text style={styles.readText}>Read</Text>
             </View>
-            <Text style={styles.timeText}>
-              {item.created_at ? new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Now'}
-            </Text>
-          </View>
-
-          <View style={styles.titleRow}>
-            <Text style={[styles.notifTitle, isUnread && styles.notifTitleBold]}>
-              {item.title || 'Trip Dispatch Alert'}
-            </Text>
-            {isUnread && <View style={styles.unreadDot} />}
-          </View>
-
-          <Text style={styles.notifMessage} numberOfLines={3}>{item.body || item.message}</Text>
+          )}
         </View>
       </TouchableOpacity>
     )
@@ -266,10 +179,17 @@ const DriverNotifScreen = ({ navigation }) => {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={COLORS.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Trip Notifications</Text>
-        <TouchableOpacity style={styles.markAllBtn} onPress={handleMarkAllRead}>
-          <Ionicons name="checkmark-done" size={18} color={COLORS.primary} />
-        </TouchableOpacity>
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text style={styles.headerTitle}>Driver Notifications</Text>
+          <Text style={styles.headerSubtitle}>
+            {unreadCount > 0 ? `${unreadCount} new broadcast${unreadCount > 1 ? 's' : ''}` : 'Official Admin Broadcasts'}
+          </Text>
+        </View>
+        {unreadCount > 0 && (
+          <TouchableOpacity style={styles.markAllBtn} onPress={handleMarkAllRead} title="Mark all read">
+            <Ionicons name="checkmark-done" size={18} color="#B45309" />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Filter Tabs */}
@@ -277,6 +197,7 @@ const DriverNotifScreen = ({ navigation }) => {
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
           {FILTERS.map(f => {
             const active = filter === f.id
+            const count = f.id === 'unread' ? unreadCount : notifications.length
             return (
               <TouchableOpacity
                 key={f.id}
@@ -290,16 +211,18 @@ const DriverNotifScreen = ({ navigation }) => {
                   color={active ? '#0F172A' : '#64748B'}
                   style={{ marginRight: 6 }}
                 />
-                <Text style={[styles.filterText, active && styles.filterTextActive]}>{f.label}</Text>
+                <Text style={[styles.filterText, active && styles.filterTextActive]}>
+                  {f.label} {count > 0 ? `(${count})` : ''}
+                </Text>
               </TouchableOpacity>
             )
           })}
         </ScrollView>
       </View>
 
-      {/* List */}
+      {/* Broadcasts List */}
       {loading ? (
-        <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
           <SkeletonList count={4} />
         </View>
       ) : (
@@ -320,18 +243,14 @@ const DriverNotifScreen = ({ navigation }) => {
           }
           ListEmptyComponent={
             <EmptyState
-              icon="notifications-off-outline"
-              title="No Notifications"
+              icon="megaphone-outline"
+              title="No Broadcasts Right Now"
               subtitle={
-                filter === 'reviews'
-                  ? 'No passenger reviews received yet. Passenger feedback will appear here!'
-                  : filter === 'bookings'
-                  ? 'No incoming booking notifications.'
-                  : filter === 'completed'
-                  ? 'No completed trip notifications.'
-                  : 'New booking alerts and passenger reviews will appear here.'
+                filter === 'unread'
+                  ? 'All admin announcements have been marked as read.'
+                  : 'When CityOne Taxi Admin broadcasts updates or notices to drivers, they will appear here.'
               }
-              actionLabel="Go to Dashboard"
+              actionLabel="Return to Dashboard"
               onAction={() => navigation.navigate('Dashboard')}
             />
           }
@@ -349,7 +268,6 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 14,
     backgroundColor: COLORS.white,
@@ -358,25 +276,33 @@ const styles = StyleSheet.create({
     ...SHADOW.small,
   },
   backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
-    color: COLORS.textPrimary,
+    color: '#0F172A',
+  },
+  headerSubtitle: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#64748B',
+    marginTop: 1,
   },
   markAllBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#FEF3C7',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
   },
   filterBar: {
     paddingVertical: 10,
@@ -409,175 +335,138 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
     gap: 12,
   },
-  notifCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: COLORS.white,
+  card: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    padding: 14,
+    padding: 16,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     ...SHADOW.small,
   },
-  notifCardUnread: {
-    backgroundColor: '#FFFDF5',
-    borderColor: '#FDE68A',
+  cardUnread: {
+    backgroundColor: '#FFFDF7',
+    borderColor: '#FCD34D',
+    borderLeftWidth: 4,
+    borderLeftColor: '#F59E0B',
   },
-  notifCardRead: {
-    backgroundColor: COLORS.white,
+  cardRead: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
   },
-  iconWrap: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  cardHeaderTop: {
+  cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: 10,
   },
-  categoryPill: {
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  categoryPillText: {
-    fontSize: 9.5,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
-  titleRow: {
+  badgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
     gap: 6,
   },
-  notifTitle: {
-    fontSize: 13.5,
-    color: COLORS.textPrimary,
-    fontWeight: '700',
-    flex: 1,
-  },
-  notifTitleBold: {
-    fontWeight: '900',
-    color: '#0F172A',
-  },
-  timeText: {
-    fontSize: 11,
-    color: COLORS.gray500,
-    marginLeft: 8,
-  },
-  notifMessage: {
-    fontSize: 12.5,
-    color: COLORS.gray600,
-    lineHeight: 18,
-  },
-  unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: COLORS.primary,
-    marginLeft: 8,
-    marginTop: 6,
-  },
-
-  // Customer Review Card Styles
-  reviewCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: RADIUS.lg,
-    padding: 14,
-    borderWidth: 1.5,
-    borderColor: '#FEF08A',
-    shadowColor: '#F59E0B',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  reviewHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  reviewAvatarWrap: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#FEF3C7',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-  },
-  reviewAvatarImg: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-  },
-  reviewAvatarText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#B45309',
-  },
-  reviewCustName: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  reviewRefText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#64748B',
-    marginTop: 1,
-  },
-  starBadgePill: {
+  badgeWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     backgroundColor: '#FEF3C7',
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 12,
+    borderRadius: 6,
     borderWidth: 1,
     borderColor: '#FDE68A',
   },
-  starBadgeText: {
-    fontSize: 12,
+  badgeText: {
+    fontSize: 10,
     fontWeight: '800',
-    color: '#B45309',
+    color: '#92400E',
+    letterSpacing: 0.4,
   },
-  reviewCommentBox: {
-    backgroundColor: '#FFFBEB',
-    borderRadius: 10,
-    padding: 10,
-    marginVertical: 6,
-    borderLeftWidth: 3,
-    borderLeftColor: '#F59E0B',
+  newBadgeWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#DC2626',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 5,
   },
-  reviewCommentText: {
-    fontSize: 13,
-    color: '#78350F',
+  newDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#FFFFFF',
+  },
+  newBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+  dateText: {
+    fontSize: 11,
+    color: '#64748B',
     fontWeight: '600',
-    lineHeight: 18,
   },
-  reviewFooterRow: {
+  titleRow: {
+    marginBottom: 6,
+  },
+  title: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1E293B',
+    lineHeight: 21,
+  },
+  titleBold: {
+    fontWeight: '900',
+    color: '#0F172A',
+  },
+  bodyText: {
+    fontSize: 13,
+    color: '#475569',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  cardFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 6,
-    paddingTop: 6,
+    paddingTop: 10,
     borderTopWidth: 1,
     borderTopColor: '#F1F5F9',
+  },
+  senderWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  senderText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  markReadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#E0F2FE',
+  },
+  markReadText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0284C7',
+  },
+  readIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  readText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#94A3B8',
   },
 })
 

@@ -217,6 +217,23 @@ export const playDriverAlertSound = playDriverBookingAlert
 export const playDriverBookingReceived = playDriverBookingAlert
 
 /**
+ * Reset played driver booking alert cache so re-assigned bookings trigger alert sounds again
+ */
+export const resetPlayedDriverBookingAlert = (bookingIdOrRef = '') => {
+  if (!bookingIdOrRef) {
+    playedDriverBookingIds.clear()
+    lastDriverSoundTime = 0
+    isPlayingDriverSound = false
+    return
+  }
+  const idStr = String(bookingIdOrRef).trim()
+  playedDriverBookingIds.delete(idStr)
+  playedDriverBookingIds.delete(String(Number(idStr)))
+  lastDriverSoundTime = 0
+  isPlayingDriverSound = false
+}
+
+/**
  * Play pleasant Booking Notification Sound
  */
 export const playBookingNotificationSound = async () => {
@@ -355,6 +372,7 @@ export const stopActiveSound = async () => {
 export default {
   playDriverAlertSound,
   playDriverBookingReceived,
+  resetPlayedDriverBookingAlert,
   playBookingNotificationSound,
   playCustomerTaxiReachedAlert,
   playAudioFile,

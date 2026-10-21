@@ -613,17 +613,12 @@ export const uploadAPI = {
   removeAvatar: () => api.post('/?endpoint=upload&action=remove_avatar'),
 }
 
-export const getInvoiceUrl = async (bookingId, autoPrint = true, bookingRef = null) => {
-  try {
-    const token = await SecureStore.getItemAsync(TOKEN_KEY)
-    const base = API_BASE_URL.replace(/\/+$/, '')
-    const refParam = bookingRef ? `&ref=${encodeURIComponent(bookingRef)}` : ''
-    return `${base}/?endpoint=payments&action=download_invoice&id=${bookingId || 0}${refParam}&token=${encodeURIComponent(token || '')}${autoPrint ? '&print=1' : ''}`
-  } catch {
-    const base = API_BASE_URL.replace(/\/+$/, '')
-    const refParam = bookingRef ? `&ref=${encodeURIComponent(bookingRef)}` : ''
-    return `${base}/?endpoint=payments&action=download_invoice&id=${bookingId || 0}${refParam}${autoPrint ? '&print=1' : ''}`
-  }
+export const getInvoiceUrl = (bookingId, autoPrint = true, bookingRef = null) => {
+  const base = API_BASE_URL.replace(/\/+$/, '')
+  const idParam = bookingId ? `&id=${bookingId}` : ''
+  const refParam = bookingRef ? `&ref=${encodeURIComponent(bookingRef)}` : ''
+  const printParam = autoPrint ? '&print=1' : ''
+  return `${base}/?endpoint=payments&action=download_invoice${idParam}${refParam}${printParam}`
 }
 
 export default api

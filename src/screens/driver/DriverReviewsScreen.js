@@ -135,7 +135,7 @@ const DriverReviewsScreen = ({ navigation, route }) => {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
           <Ionicons name="arrow-back" size={22} color={COLORS.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Customer Reviews</Text>
+        <Text style={styles.headerTitle}>Our Reviews</Text>
         <View style={styles.countPill}>
           <Text style={styles.countPillText}>{totalReviews}</Text>
         </View>
