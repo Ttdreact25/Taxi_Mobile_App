@@ -278,6 +278,7 @@ export default function BookingTrackScreen({ route, navigation }) {
   const [acceptingPickup, setAcceptingPickup] = useState(false)
   const [pickupChargeDismissed, setPickupChargeDismissed] = useState(false)
   const [showDriverProfileModal, setShowDriverProfileModal] = useState(false)
+  const [showRideQrModal, setShowRideQrModal] = useState(false)
 
   // Safe navigation back to Customer Home screen
   const returnToCustomerHome = useCallback(() => {
@@ -961,27 +962,19 @@ export default function BookingTrackScreen({ route, navigation }) {
                   <Text style={styles.searchingTitle} numberOfLines={2}>
                     {status === 'driver_assigned'
                       ? 'Connecting with Driver...'
-                      : (status === 'pending_driver_assignment'
-                        ? 'Driver Assignment in Progress'
-                        : (isOutstationTrip ? 'Driver Assignment Pending' : 'Searching for Driver...'))}
+                      : 'Trip Confirmed!'}
                   </Text>
                   <Text style={styles.searchingSub}>
                     {status === 'driver_assigned'
-                      ? 'Driver assigned by Admin. Waiting for driver confirmation...'
-                      : (status === 'pending_driver_assignment'
-                        ? (isOutstationTrip
-                          ? 'Admin is assigning the best category driver for your outstation trip.'
-                          : 'Admin is reviewing and assigning a driver. Auto-assign will trigger if unassigned.')
-                        : (isOutstationTrip
-                          ? 'Admin is assigning the best category driver for your outstation trip.'
-                          : 'Looking for nearby drivers. Please hold on...'))}
+                      ? 'Waiting for driver confirmation...'
+                      : 'Searching for Driver...'}
                   </Text>
                 </View>
 
                 <View style={styles.searchingBadge}>
                   <DispatchLivePulseDot />
                   <Text style={styles.searchingBadgeText}>
-                    {status === 'driver_assigned' ? 'Connecting' : (status === 'pending_driver_assignment' ? 'Assigning' : 'Searching')}
+                    {status === 'driver_assigned' ? 'Connecting' : 'Searching'}
                   </Text>
                 </View>
               </View>
@@ -1060,10 +1053,20 @@ export default function BookingTrackScreen({ route, navigation }) {
             </View>
           )}
 
-          {/* Prominent OTP / PIN Display (Stage 6) */}
-          {Boolean(otpCode) && !isInTripNavigation && !isCompleted && !isReturnPickup && (
+          {/* Prominent OTP / PIN & Scannable QR Display (Stage 6 - strictly once driver is assigned) */}
+          {Boolean(otpCode) && isDriverAssigned && !isInTripNavigation && !isCompleted && !isReturnPickup && (
             <View style={styles.otpPinCard}>
-              <Text style={styles.otpPinLabel}>Start your order with PIN</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 10 }}>
+                <Text style={styles.otpPinLabel}>Start your ride with PIN or QR</Text>
+                <TouchableOpacity
+                  onPress={() => setShowRideQrModal(true)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EFF6FF', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: '#BFDBFE' }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="qr-code" size={13} color="#2563EB" />
+                  <Text style={{ fontSize: 11, fontWeight: '800', color: '#1D4ED8' }}>Show QR</Text>
+                </TouchableOpacity>
+              </View>
               <View style={styles.otpBoxesRow}>
                 {String(otpCode).split('').map((digit, idx) => (
                   <View key={`otp-${idx}`} style={styles.otpBox}>
@@ -1103,14 +1106,16 @@ export default function BookingTrackScreen({ route, navigation }) {
 
           {/* Action Buttons: Share Live Location & Cancel Ride */}
           <View style={styles.actionsColumn}>
-            <TouchableOpacity
-              style={styles.shareLocationBtn}
-              onPress={handleShareLocation}
-              activeOpacity={0.88}
-            >
-              <Ionicons name="share-social-outline" size={18} color="#D97706" />
-              <Text style={styles.shareLocationBtnText}>Share Live Location</Text>
-            </TouchableOpacity>
+            {isDriverAssigned && (
+              <TouchableOpacity
+                style={styles.shareLocationBtn}
+                onPress={handleShareLocation}
+                activeOpacity={0.88}
+              >
+                <Ionicons name="share-social-outline" size={18} color="#D97706" />
+                <Text style={styles.shareLocationBtnText}>Share Live Location</Text>
+              </TouchableOpacity>
+            )}
 
             {canCustomerCancel && (
               <TouchableOpacity
@@ -1640,6 +1645,72 @@ export default function BookingTrackScreen({ route, navigation }) {
                 </Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── DRIVER SCAN RIDE BOARDING QR MODAL ── */}
+      <Modal
+        visible={showRideQrModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowRideQrModal(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalContentCard, { padding: 22, alignItems: 'center', maxWidth: 360 }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginBottom: 14 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="qr-code" size={18} color="#0F172A" />
+                <Text style={{ fontSize: 15, fontWeight: '800', color: '#0F172A' }}>Driver Scan QR</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowRideQrModal(false)} style={{ padding: 4 }}>
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={{ fontSize: 12, color: '#64748B', textAlign: 'center', marginBottom: 14 }}>
+              Show this QR code to your driver to scan and verify your boarding.
+            </Text>
+
+            <View style={{
+              width: 210,
+              height: 210,
+              backgroundColor: '#FFFFFF',
+              borderRadius: 14,
+              borderWidth: 2,
+              borderColor: '#E2E8F0',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 8,
+              marginBottom: 16,
+            }}>
+              <Image
+                source={{
+                  uri: `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=6&data=${encodeURIComponent(
+                    booking?.qr_code_data || JSON.stringify({ booking_ref: booking?.booking_ref, otp: otpCode })
+                  )}`
+                }}
+                style={{ width: 190, height: 190 }}
+                resizeMode="contain"
+              />
+            </View>
+
+            <View style={{ width: '100%', backgroundColor: '#F8FAFC', padding: 12, borderRadius: 10, alignItems: 'center', borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 14 }}>
+              <Text style={{ fontSize: 11, color: '#64748B', fontWeight: '700', marginBottom: 4 }}>
+                BOARDING OTP / PIN
+              </Text>
+              <Text style={{ fontSize: 24, fontWeight: '900', color: '#0F172A', letterSpacing: 4 }}>
+                {otpCode}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              onPress={() => setShowRideQrModal(false)}
+              style={{ width: '100%', backgroundColor: '#0F172A', paddingVertical: 12, borderRadius: 10, alignItems: 'center' }}
+              activeOpacity={0.85}
+            >
+              <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>Done</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>

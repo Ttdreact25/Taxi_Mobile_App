@@ -158,6 +158,7 @@ export const authAPI = {
   updateProfile: (data) => api.post('/?endpoint=auth&action=update_profile', data),
   changePassword:(data) => api.post('/?endpoint=auth&action=change_password', data),
   deleteAccount: (data) => api.post('/?endpoint=auth&action=delete_account', data),
+  updateFcmToken: (fcmToken) => api.post('/?endpoint=auth&action=update_fcm_token', { fcm_token: fcmToken }),
 }
 
 // ── Vehicles ──────────────────────────────────────────────────
@@ -400,6 +401,7 @@ export const paymentAPI = {
   verifyRazorpay:              (data) => api.post('/?endpoint=payment&action=verify_razorpay', data),
   confirmCash:                 (bookingId) => api.post('/?endpoint=payment&action=confirm_cash', { booking_id: bookingId }),
   confirmQR:                   (bookingId) => api.post('/?endpoint=payment&action=confirm_qr', { booking_id: bookingId }),
+  confirmAdvanceQR:            (data) => api.post('/?endpoint=payment&action=confirm_advance_qr', data),
   getDriverQR:                 (driverId) => api.get(`/?endpoint=payment&action=driver_qr&driver_id=${driverId}`),
 }
 
@@ -445,6 +447,18 @@ export const longTripAPI = {
   completeDrop:           (data) => api.post('/?endpoint=long_trips&action=complete_passenger_drop', data),
   assignedScheduledTrips: () => api.get('/?endpoint=driver&action=assigned_scheduled_trips'),
   respondScheduledTrip:   (id, action, reason) => api.post('/?endpoint=driver&action=respond_scheduled_trip', { id, action, reason }),
+}
+
+// ── Wallet & Top-ups ──────────────────────────────────────────
+export const walletAPI = {
+  get:                  () => api.get('/?endpoint=wallet&action=get'),
+  transactions:         (page = 1, perPage = 20) => api.get(`/?endpoint=wallet&action=transactions&page=${page}&per_page=${perPage}`),
+  initiateTopUp:        (amount) => api.post('/?endpoint=wallet&action=initiate_topup', { amount }),
+  verifyTopUp:          (data) => api.post('/?endpoint=wallet&action=verify_topup', data),
+  createRazorpayOrder:  (amount) => api.post('/?endpoint=wallet&action=create_razorpay_order', { amount }),
+  verifyRazorpayTopUp:  (data) => api.post('/?endpoint=wallet&action=verify_razorpay_topup', data),
+  confirmQRPayment:     (data) => api.post('/?endpoint=wallet&action=confirm_qr', data),
+  addFunds:             (amount, notes = '') => api.post('/?endpoint=wallet&action=add_funds', { amount, notes }),
 }
 
 // ── Drivers Proximity ─────────────────────────────────────────

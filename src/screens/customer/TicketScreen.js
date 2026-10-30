@@ -328,20 +328,51 @@ export default function TicketScreen({ route, navigation }) {
               </View>
             </View>
 
-            {/* OTP Security Strip */}
+            {/* OTP & QR Security Strip */}
             <View style={styles.otpCard}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <Ionicons name="lock-closed" size={14} color="#D97706" />
-                <Text style={styles.otpCardTitle}>BOARDING VERIFICATION OTP</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="lock-closed" size={14} color="#D97706" />
+                  <Text style={styles.otpCardTitle}>BOARDING SECURITY OTP &amp; QR</Text>
+                </View>
+                <View style={{ backgroundColor: 'rgba(217, 119, 6, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                  <Text style={{ fontSize: 9.5, fontWeight: '800', color: '#D97706' }}>DRIVER SCAN</Text>
+                </View>
               </View>
-              <Text style={styles.otpCardSub}>Show this code to driver when cab arrives</Text>
-              <View style={styles.otpDigitsRow}>
-                {boarding.otp.split('').map((d, i) => (
-                  <View key={i} style={styles.otpDigitBox}>
-                    <Text style={styles.otpDigitText}>{d}</Text>
-                  </View>
-                ))}
+              <Text style={styles.otpCardSub}>Show this PIN or scan QR when cab arrives</Text>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginVertical: 8 }}>
+                <View style={[styles.otpDigitsRow, { flex: 1, marginVertical: 0 }]}>
+                  {boarding.otp.split('').map((d, i) => (
+                    <View key={i} style={styles.otpDigitBox}>
+                      <Text style={styles.otpDigitText}>{d}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                {/* QR Code thumbnail */}
+                <View style={{
+                  backgroundColor: '#FFFFFF',
+                  padding: 4,
+                  borderRadius: 8,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderWidth: 1,
+                  borderColor: '#E2E8F0',
+                }}>
+                  <Image
+                    source={{
+                      uri: `https://api.qrserver.com/v1/create-qr-code/?size=140x140&margin=4&data=${encodeURIComponent(
+                        boarding.qr_code_data || JSON.stringify({ booking_ref: ticket.booking_ref, otp: boarding.otp })
+                      )}`
+                    }}
+                    style={{ width: 64, height: 64 }}
+                    resizeMode="contain"
+                  />
+                  <Text style={{ fontSize: 8, fontWeight: '800', color: '#0F172A', marginTop: 2 }}>SCAN</Text>
+                </View>
               </View>
+
               <Text style={[styles.boardStatus, { color: boarding.is_boarded ? '#4ADE80' : '#FCD34D' }]}>
                 {boarding.is_boarded ? '✓ Passenger Boarded' : 'Awaiting Boarding Verification'}
               </Text>

@@ -1,6 +1,8 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { Alert } from 'react-native'
+import * as SecureStore from 'expo-secure-store'
 import { authAPI, tokenManager, setOnUnauthorized } from '../api/api'
+import PushNotificationService from '../services/PushNotificationService'
 
 const AuthContext = createContext(null)
 
@@ -50,6 +52,13 @@ export const AuthProvider = ({ children }) => {
     return () => clearInterval(timer)
   }, [user, logout])
 
+  // Register device push token with backend on login/boot
+  useEffect(() => {
+    if (user?.id) {
+      PushNotificationService.registerForPushNotifications().catch(() => {})
+    }
+  }, [user?.id])
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -62,7 +71,14 @@ export const AuthProvider = ({ children }) => {
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('init_timeout')), 1800))
         const res = await Promise.race([verifyPromise, timeoutPromise])
         if (res.data?.status === 'success' && res.data.user) {
-          setUser(res.data.user)
+          const u = res.data.user
+          try {
+            const cachedBal = await SecureStore.getItemAsync('driver_wallet_balance')
+            if (cachedBal !== null && !isNaN(Number(cachedBal))) {
+              u.wallet_balance = Number(cachedBal)
+            }
+          } catch {}
+          setUser(u)
         } else {
           await tokenManager.delete()
           setUser(null)
@@ -90,8 +106,15 @@ export const AuthProvider = ({ children }) => {
     }
     if (res.data?.status === 'success') {
       await tokenManager.save(res.data.token)
-      setUser(res.data.user)
-      return res.data.user
+      const u = res.data.user || {}
+      try {
+        const cachedBal = await SecureStore.getItemAsync('driver_wallet_balance')
+        if (cachedBal !== null && !isNaN(Number(cachedBal))) {
+          u.wallet_balance = Number(cachedBal)
+        }
+      } catch {}
+      setUser(u)
+      return u
     }
     throw new Error(res.data?.message || 'Login failed')
   }
@@ -100,8 +123,15 @@ export const AuthProvider = ({ children }) => {
     try {
       const res = await authAPI.verify()
       if (res.data?.status === 'success' && res.data.user) {
-        setUser(res.data.user)
-        return res.data.user
+        const u = res.data.user
+        try {
+          const cachedBal = await SecureStore.getItemAsync('driver_wallet_balance')
+          if (cachedBal !== null && !isNaN(Number(cachedBal))) {
+            u.wallet_balance = Number(cachedBal)
+          }
+        } catch {}
+        setUser(u)
+        return u
       }
     } catch {}
     return null

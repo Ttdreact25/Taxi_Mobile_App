@@ -18,14 +18,20 @@ import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
 import * as SecureStore from 'expo-secure-store'
-import { driverAPI, authAPI, uploadAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
+import { driverAPI, authAPI, uploadAPI, settingsAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
+import RazorpayCheckoutModal from '../../components/common/RazorpayCheckoutModal'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 
 const DriverProfileScreen = ({ navigation }) => {
   const { user, logout, updateUser, deleteAccount } = useAuth()
   const [driver, setDriver] = useState(null)
   const [loading, setLoading] = useState(true)
+
+  // Outstation Wallet & Current Balance State
+  const [storedBalance, setStoredBalance] = useState(null)
+  const [razorpayModalVisible, setRazorpayModalVisible] = useState(false)
+  const [razorpayPaymentData, setRazorpayPaymentData] = useState(null)
 
   // Photo Upload State
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
@@ -49,15 +55,37 @@ const DriverProfileScreen = ({ navigation }) => {
 
   const loadProfile = useCallback(async () => {
     try {
-      const res = await driverAPI.profile()
-      if (res.data?.driver || res.data) {
-        const d = res.data.driver || res.data
+      try {
+        const cachedBal = await SecureStore.getItemAsync('driver_wallet_balance')
+        if (cachedBal !== null && !isNaN(Number(cachedBal))) {
+          setStoredBalance(Number(cachedBal))
+        }
+      } catch { }
+
+      const [res, sysRes] = await Promise.allSettled([
+        driverAPI.profile(),
+        settingsAPI.list()
+      ])
+      const profData = res.status === 'fulfilled' ? res.value?.data : null
+      const sysSettings = sysRes.status === 'fulfilled' ? (sysRes.value?.data?.settings || {}) : {}
+
+      if (profData?.driver || profData) {
+        const d = profData.driver || profData
         try {
           const cachedCaps = await SecureStore.getItemAsync('@driver_accepted_capacities')
           if (cachedCaps && !d.accepted_capacities) {
             d.accepted_capacities = cachedCaps
           }
-        } catch {}
+        } catch { }
+
+        const dynamicMinWallet = Number(
+          sysSettings.min_wallet_for_outstation
+          ?? sysSettings.driver_min_wallet_balance
+          ?? profData?.min_wallet_required
+          ?? d.min_wallet_required
+          ?? 500
+        )
+        d.min_wallet_required = dynamicMinWallet
         setDriver(d)
         setName(d.name || user?.name || '')
         setEmail(d.email || user?.email || '')
@@ -66,7 +94,7 @@ const DriverProfileScreen = ({ navigation }) => {
         setVehicleModel(d.vehicle_model || (d.make ? `${d.make} ${d.model}` : ''))
         setLicenseNo(d.license_no || '')
       }
-    } catch {}
+    } catch { }
     finally {
       setLoading(false)
     }
@@ -148,7 +176,7 @@ const DriverProfileScreen = ({ navigation }) => {
 
     try {
       await SecureStore.setItemAsync('@driver_accepted_capacities', nextCapStr)
-    } catch {}
+    } catch { }
 
     setUpdatingCapacities(true)
     try {
@@ -170,27 +198,146 @@ const DriverProfileScreen = ({ navigation }) => {
 
   const [updatingServices, setUpdatingServices] = useState(false)
 
-  const parseActiveServices = (raw) => {
-    const str = raw || 'local_drop,hourly_package,outstation_oneway,outstation_round'
-    const parts = str.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+  const checkIsLocalAllowed = (d) => {
+    if (!d) return false
+    // 1. Explicit disable from admin in local_trip_enabled or local_trip_alert
+    if (d.local_trip_enabled === 0 || d.local_trip_enabled === '0' || d.local_trip_enabled === false) {
+      return false
+    }
+    if (Boolean(d.local_trip_alert)) {
+      return false
+    }
+    const raw = String(d.service_types || '').toLowerCase()
+    if (raw.includes('local_disabled')) {
+      return false
+    }
+    // 2. If local_trip_enabled is explicitly 1, admin turned it on
+    if (Number(d.local_trip_enabled) === 1) {
+      return true
+    }
+    // 3. For legacy backend without local_trip_enabled column, check if admin assigned local services
+    const hasLocalTokens = raw.includes('local_drop') || raw.includes('hourly_package') || raw.includes('local') || raw.includes('hourly')
+    return hasLocalTokens
+  }
+
+  const parseActiveServices = (raw, isLocalAllowed = true) => {
+    if (!raw) {
+      return isLocalAllowed ? ['local_drop', 'hourly_package'] : []
+    }
+    const parts = String(raw).split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
     const set = new Set()
+
+    const hasGranularLocal = parts.includes('local_drop') || parts.includes('hourly_package')
+    const hasGranularOutstation = parts.includes('outstation_oneway') || parts.includes('outstation_round')
+
     parts.forEach(p => {
-      if (p === 'local') {
-        set.add('local_drop')
-      } else if (p === 'hourly' || p === 'rental') {
-        set.add('hourly_package')
-      } else if (p === 'outstation') {
-        set.add('outstation_oneway')
-        set.add('outstation_round')
-      } else {
+      if (p === 'local_drop' || p === 'hourly_package') {
+        if (isLocalAllowed) set.add(p)
+      } else if (p === 'outstation_oneway' || p === 'outstation_round') {
         set.add(p)
+      } else if (p === 'local') {
+        // Only expand legacy 'local' if driver has no granular local keys configured and admin permits local
+        if (isLocalAllowed && !hasGranularLocal) {
+          set.add('local_drop')
+          set.add('hourly_package')
+        }
+      } else if (p === 'hourly' || p === 'rental') {
+        if (isLocalAllowed && !hasGranularLocal) {
+          set.add('hourly_package')
+        }
+      } else if (p === 'outstation') {
+        // Only expand legacy 'outstation' if driver has no granular outstation keys configured
+        if (!hasGranularOutstation) {
+          set.add('outstation_oneway')
+          set.add('outstation_round')
+        }
+      } else if (p === 'oneway' || p === 'one_way') {
+        set.add('outstation_oneway')
+      } else if (p === 'round' || p === 'round_trip') {
+        set.add('outstation_round')
       }
     })
+
     return Array.from(set)
   }
 
-  const saveServices = async (list) => {
-    const newTypesStr = list.join(',')
+  const openRazorpayTopUpModal = (suggestedAmount = 500) => {
+    const amt = Math.max(100, Number(suggestedAmount) || 500)
+    setRazorpayPaymentData({
+      order_id: `order_topup_${Date.now().toString(36)}`,
+      amount: amt * 100,
+      amount_rupees: amt,
+      key_id: 'rzp_test_TsVWNKaYfW13sp',
+      booking_ref: 'OUTSTATION_WALLET',
+      description: `Outstation Wallet Recharge (₹${amt})`,
+      user: {
+        name: name || user?.name || 'Driver',
+        phone: phone || user?.phone || '',
+        email: email || user?.email || '',
+      }
+    })
+    setRazorpayModalVisible(true)
+  }
+
+  const handlePaymentSuccess = async (rzpResponse) => {
+    setRazorpayModalVisible(false)
+    const paidAmt = Number(razorpayPaymentData?.amount_rupees || 500)
+    const curBal = Number(storedBalance !== null ? storedBalance : (driver?.wallet_balance ?? user?.wallet_balance ?? 0))
+    const newBal = curBal + paidAmt
+    setStoredBalance(newBal)
+    try {
+      await SecureStore.setItemAsync('driver_wallet_balance', String(newBal))
+    } catch { }
+
+    setDriver(prev => ({ ...(prev || {}), wallet_balance: newBal }))
+    if (updateUser) updateUser(prev => ({ ...(prev || {}), wallet_balance: newBal }))
+
+    try {
+      await driverAPI.updateProfile({ wallet_balance: newBal })
+    } catch (_) { }
+
+    const minWallet = Number(driver?.min_wallet_required || user?.min_wallet_required || 500)
+    if (newBal >= minWallet) {
+      const isLocalAllowed = checkIsLocalAllowed(driver)
+      const currentActive = parseActiveServices(driver?.service_types, isLocalAllowed)
+      const nextActive = Array.from(new Set([...currentActive, 'outstation_oneway', 'outstation_round']))
+      await saveServices(nextActive, newBal)
+      Alert.alert(
+        'Recharge Successful 🎉',
+        `₹${paidAmt} credited to Current Balance! Current Balance is now ₹${newBal.toLocaleString('en-IN')}.\n\nOutstation Trips have been ENABLED successfully!`
+      )
+    } else {
+      Alert.alert(
+        'Recharge Successful 🎉',
+        `₹${paidAmt} credited to Current Balance! Current Balance is now ₹${newBal.toLocaleString('en-IN')}.\n\n(Admin minimum required is ₹${minWallet}. Short by ₹${minWallet - newBal} to activate Outstation).`
+      )
+    }
+  }
+
+  const saveServices = async (list, overrideBalance = null) => {
+    const isLocalAllowed = checkIsLocalAllowed(driver)
+    let sanitizedList = [...list]
+    if (!isLocalAllowed) {
+      // Driver CANNOT self-assign local trips under any circumstance if admin paused it
+      sanitizedList = sanitizedList.filter(s => s !== 'local_drop' && s !== 'hourly_package' && s !== 'local' && s !== 'hourly' && s !== 'rental')
+      sanitizedList.push('local_disabled')
+    }
+
+    const effectiveBalance = overrideBalance !== null
+      ? Number(overrideBalance)
+      : Number(storedBalance !== null ? storedBalance : (driver?.wallet_balance ?? user?.wallet_balance ?? 0))
+    const minWallet = Number(driver?.min_wallet_required || user?.min_wallet_required || 500)
+    if (effectiveBalance < minWallet) {
+      sanitizedList = sanitizedList.filter(s => !s.startsWith('outstation') && s !== 'oneway' && s !== 'round')
+    }
+
+    // Retain any existing capacity tokens in service_types string (e.g. cap_3_1, cap_4_1, etc.)
+    const existingRaw = driver?.service_types || ''
+    let capTags = String(existingRaw).split(',').map(s => s.trim()).filter(s => s.startsWith('cap_'))
+    if (capTags.length === 0) capTags = ['cap_3_1']
+    const allTokens = Array.from(new Set([...sanitizedList, ...capTags]))
+    const newTypesStr = allTokens.join(',')
+
     setDriver(prev => ({ ...prev, service_types: newTypesStr }))
     if (updateUser) {
       updateUser(prev => ({ ...prev, service_types: newTypesStr }))
@@ -199,7 +346,10 @@ const DriverProfileScreen = ({ navigation }) => {
     try {
       const res = await driverAPI.updateProfile({ service_types: newTypesStr })
       if (res.data?.status === 'success' || res.data?.status === true) {
-        // Saved successfully
+        if (res.data?.service_types) {
+          setDriver(prev => ({ ...prev, service_types: res.data.service_types }))
+          if (updateUser) updateUser(prev => ({ ...prev, service_types: res.data.service_types }))
+        }
       } else {
         throw new Error(res.data?.message || 'Could not update service preferences.')
       }
@@ -213,18 +363,21 @@ const DriverProfileScreen = ({ navigation }) => {
   }
 
   const handleToggleParentGroup = async (groupKey) => {
-    const currentActive = parseActiveServices(driver?.service_types)
+    const isLocalAllowed = checkIsLocalAllowed(driver)
+    const currentActive = parseActiveServices(driver?.service_types, isLocalAllowed)
     let nextActive = [...currentActive]
 
     if (groupKey === 'local') {
+      if (!isLocalAllowed) {
+        Alert.alert(
+          'Local Rides Locked 🔒',
+          'Local rides are currently paused by Admin due to pending monthly subscription payment.\n\nPlease contact Admin or pay via GPay to activate Local Rides.'
+        )
+        return
+      }
       const isLocalActive = nextActive.includes('local_drop') || nextActive.includes('hourly_package')
       if (isLocalActive) {
-        const remaining = nextActive.filter(s => s !== 'local_drop' && s !== 'hourly_package')
-        if (remaining.length === 0) {
-          Alert.alert('Required Service', 'You must keep at least one operating trip category active.')
-          return
-        }
-        nextActive = remaining
+        nextActive = nextActive.filter(s => s !== 'local_drop' && s !== 'hourly_package')
       } else {
         if (!nextActive.includes('local_drop')) nextActive.push('local_drop')
         if (!nextActive.includes('hourly_package')) nextActive.push('hourly_package')
@@ -232,13 +385,25 @@ const DriverProfileScreen = ({ navigation }) => {
     } else if (groupKey === 'outstation') {
       const isOutstationActive = nextActive.includes('outstation_oneway') || nextActive.includes('outstation_round')
       if (isOutstationActive) {
-        const remaining = nextActive.filter(s => s !== 'outstation_oneway' && s !== 'outstation_round')
-        if (remaining.length === 0) {
-          Alert.alert('Required Service', 'You must keep at least one operating trip category active.')
+        nextActive = nextActive.filter(s => s !== 'outstation_oneway' && s !== 'outstation_round')
+      } else {
+        // Driver is enabling outstation: check minimum wallet balance!
+        const walletBalance = Number(storedBalance !== null ? storedBalance : (driver?.wallet_balance ?? user?.wallet_balance ?? 0))
+        const minWallet = Number(driver?.min_wallet_required || user?.min_wallet_required || 500)
+        if (walletBalance < minWallet) {
+          Alert.alert(
+            'Outstation Minimum Wallet Required ⚠️',
+            `Outstation trip enable பண்ண குறைந்தபட்சம் ₹${minWallet} wallet balance தேவை.\n\nதயவுசெய்து Earnings சென்று Wallet Recharge செய்யவும்.`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Recharge',
+                onPress: () => navigation.navigate('Earnings')
+              }
+            ]
+          )
           return
         }
-        nextActive = remaining
-      } else {
         if (!nextActive.includes('outstation_oneway')) nextActive.push('outstation_oneway')
         if (!nextActive.includes('outstation_round')) nextActive.push('outstation_round')
       }
@@ -248,16 +413,40 @@ const DriverProfileScreen = ({ navigation }) => {
   }
 
   const handleToggleSubService = async (serviceKey) => {
-    const currentActive = parseActiveServices(driver?.service_types)
+    const isLocalAllowed = checkIsLocalAllowed(driver)
+    if (serviceKey === 'local_drop' || serviceKey === 'hourly_package') {
+      if (!isLocalAllowed) {
+        Alert.alert(
+          'Local Rides Locked 🔒',
+          'Local rides are currently paused by Admin due to pending monthly subscription payment.\n\nPlease contact Admin or pay via GPay to activate Local Rides.'
+        )
+        return
+      }
+    }
+    const currentActive = parseActiveServices(driver?.service_types, isLocalAllowed)
     let nextActive
 
     if (currentActive.includes(serviceKey)) {
-      if (currentActive.length <= 1) {
-        Alert.alert('Selection Required', 'You must keep at least one active operating service.')
-        return
-      }
       nextActive = currentActive.filter(s => s !== serviceKey)
     } else {
+      if (serviceKey === 'outstation_oneway' || serviceKey === 'outstation_round') {
+        const walletBalance = Number(storedBalance !== null ? storedBalance : (driver?.wallet_balance ?? user?.wallet_balance ?? 0))
+        const minWallet = Number(driver?.min_wallet_required || user?.min_wallet_required || 500)
+        if (walletBalance < minWallet) {
+          Alert.alert(
+            'Outstation Minimum Wallet Required ⚠️',
+            `Outstation trip இயக்க குறைந்தபட்சம் ₹${minWallet} wallet balance தேவை.\n\nதயவுசெய்து Earnings சென்று Wallet Recharge செய்யவும்.`,
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Recharge',
+                onPress: () => navigation.navigate('Earnings')
+              }
+            ]
+          )
+          return
+        }
+      }
       nextActive = [...currentActive, serviceKey]
     }
 
@@ -278,6 +467,7 @@ const DriverProfileScreen = ({ navigation }) => {
   const [photoModalVisible, setPhotoModalVisible] = useState(false)
 
   // Capture or Pick Photo
+  
   const capturePhoto = async (useCamera) => {
     setPhotoModalVisible(false)
     try {
@@ -303,9 +493,9 @@ const DriverProfileScreen = ({ navigation }) => {
       const result = useCamera
         ? await ImagePicker.launchCameraAsync(imageOptions)
         : await ImagePicker.launchImageLibraryAsync({
-            ...imageOptions,
-            mediaTypes: ['images'],
-          })
+          ...imageOptions,
+          mediaTypes: ['images'],
+        })
 
       if (result.canceled || !result.assets || !result.assets[0]?.uri) return
       uploadPhoto(result.assets[0].uri, result.assets[0])
@@ -478,7 +668,7 @@ const DriverProfileScreen = ({ navigation }) => {
         onPress: async () => {
           try {
             await driverAPI.toggleOnline({ is_online: 0 })
-          } catch {}
+          } catch { }
           logout()
         }
       }
@@ -613,7 +803,6 @@ const DriverProfileScreen = ({ navigation }) => {
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
             {((
-              (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
               (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
               (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
               (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
@@ -838,43 +1027,116 @@ const DriverProfileScreen = ({ navigation }) => {
         </View>
 
         {(() => {
-          const activeList = parseActiveServices(driver?.service_types)
-          const isLocalActive = activeList.includes('local_drop') || activeList.includes('hourly_package')
-          const isOutstationActive = activeList.includes('outstation_oneway') || activeList.includes('outstation_round')
+          const isLocalEnabledByAdmin = checkIsLocalAllowed(driver)
+          const activeList = parseActiveServices(driver?.service_types, isLocalEnabledByAdmin)
+          const isLocalActive = isLocalEnabledByAdmin && (activeList.includes('local_drop') || activeList.includes('hourly_package'))
+          const walletBalance = Number(storedBalance !== null ? storedBalance : (driver?.wallet_balance ?? user?.wallet_balance ?? 0))
+          const minWallet = Number(driver?.min_wallet_required || user?.min_wallet_required || 500)
+          const hasOutstationWallet = walletBalance >= minWallet
+          const isOutstationActive = hasOutstationWallet && (activeList.includes('outstation_oneway') || activeList.includes('outstation_round'))
 
           return (
             <View style={{ gap: 12 }}>
               {/* 1. Local Trip Master Card */}
-              <View style={[styles.card, { padding: 14, borderWidth: 1.5, borderColor: isLocalActive ? '#818CF8' : '#E2E8F0', backgroundColor: isLocalActive ? '#F8FAFC' : '#FFFFFF' }]}>
+              <View style={[
+                styles.card,
+                {
+                  padding: 14,
+                  borderWidth: 1.5,
+                  borderColor: !isLocalEnabledByAdmin ? '#FCA5A5' : (isLocalActive ? '#818CF8' : '#E2E8F0'),
+                  backgroundColor: !isLocalEnabledByAdmin ? '#FFFBFB' : (isLocalActive ? '#F8FAFC' : '#FFFFFF')
+                }
+              ]}>
                 {/* Master Header */}
                 <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                    <View style={{ width: 40, height: 40, borderRadius: 10, backgroundColor: isLocalActive ? '#EEF2FF' : '#F1F5F9', alignItems: 'center', justifyContent: 'center' }}>
-                      <Ionicons name="car" size={22} color={isLocalActive ? '#4F46E5' : '#64748B'} />
+                    <View style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 10,
+                      backgroundColor: !isLocalEnabledByAdmin ? '#FEE2E2' : (isLocalActive ? '#EEF2FF' : '#F1F5F9'),
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}>
+                      <Ionicons
+                        name={!isLocalEnabledByAdmin ? "lock-closed" : "car"}
+                        size={22}
+                        color={!isLocalEnabledByAdmin ? '#DC2626' : (isLocalActive ? '#4F46E5' : '#64748B')}
+                      />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={{ fontSize: 15, fontWeight: '800', color: isLocalActive ? '#1E1B4B' : '#64748B' }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <Text style={{ fontSize: 15, fontWeight: '800', color: !isLocalEnabledByAdmin ? '#991B1B' : (isLocalActive ? '#1E1B4B' : '#64748B') }}>
                           Local Trip
                         </Text>
-                        <View style={{ backgroundColor: isLocalActive ? '#4F46E5' : '#E2E8F0', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>
-                          <Text style={{ fontSize: 9, fontWeight: '800', color: isLocalActive ? '#FFFFFF' : '#64748B' }}>
-                            CITY
-                          </Text>
-                        </View>
+                        {!isLocalEnabledByAdmin ? (
+                          <View style={{ backgroundColor: '#FEE2E2', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4, borderWidth: 1, borderColor: '#FCA5A5' }}>
+                            <Text style={{ fontSize: 9, fontWeight: '900', color: '#DC2626' }}>
+                              🔒 PAUSED (DUE)
+                            </Text>
+                          </View>
+                        ) : (
+                          <View style={{ backgroundColor: isLocalActive ? '#4F46E5' : '#E2E8F0', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>
+                            <Text style={{ fontSize: 9, fontWeight: '800', color: isLocalActive ? '#FFFFFF' : '#64748B' }}>
+                              CITY
+                            </Text>
+                          </View>
+                        )}
                       </View>
-                      <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>
-                        City point-to-point rides & hourly rentals
+                      <Text style={{ fontSize: 11, color: !isLocalEnabledByAdmin ? '#B91C1C' : '#64748B', marginTop: 2 }}>
+                        {!isLocalEnabledByAdmin ? 'Monthly fee pending. Contact Admin via GPay to activate.' : 'City point-to-point rides & hourly rentals'}
                       </Text>
                     </View>
                   </View>
-                  <Switch
-                    value={isLocalActive}
-                    onValueChange={() => handleToggleParentGroup('local')}
-                    trackColor={{ false: '#CBD5E1', true: '#4F46E5' }}
-                    thumbColor="#FFFFFF"
-                  />
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      if (!isLocalEnabledByAdmin) {
+                        Alert.alert(
+                          'Local Rides Locked 🔒',
+                          'Local rides are currently paused by Admin due to pending monthly subscription payment.\n\nPlease contact Admin or pay via GPay to activate Local Rides.'
+                        )
+                      }
+                    }}
+                  >
+                    <Switch
+                      value={isLocalActive}
+                      disabled={!isLocalEnabledByAdmin}
+                      onValueChange={() => {
+                        if (!isLocalEnabledByAdmin) {
+                          Alert.alert(
+                            'Local Rides Locked 🔒',
+                            'Local rides are currently paused by Admin due to pending monthly subscription payment.\n\nPlease contact Admin or pay via GPay to activate Local Rides.'
+                          )
+                          return
+                        }
+                        handleToggleParentGroup('local')
+                      }}
+                      trackColor={{ false: '#CBD5E1', true: '#4F46E5' }}
+                      thumbColor="#FFFFFF"
+                    />
+                  </TouchableOpacity>
                 </View>
+
+                {/* Notice banner when admin disabled */}
+                {!isLocalEnabledByAdmin && (
+                  <View style={{
+                    marginTop: 10,
+                    padding: 10,
+                    backgroundColor: '#FEF2F2',
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: '#FECACA',
+                    flexDirection: 'row',
+                    alignItems: 'flex-start',
+                    gap: 8
+                  }}>
+                    <Ionicons name="alert-circle" size={16} color="#DC2626" style={{ marginTop: 1 }} />
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#991B1B', flex: 1, lineHeight: 16 }}>
+                      Local rides are currently paused by Admin due to pending monthly subscription payment. Please pay via GPay to Admin. Once approved, Admin will reactivate this service.
+                    </Text>
+                  </View>
+                )}
 
                 {/* Sub Options (Local Drop & Hourly Package) */}
                 {isLocalActive && (
@@ -911,9 +1173,12 @@ const DriverProfileScreen = ({ navigation }) => {
                             </View>
                             <Text style={styles.profileSvcSub}>One-way direct city drop</Text>
                           </View>
-                          <View style={[styles.profileSvcToggle, isDropActive && { backgroundColor: '#4F46E5', borderColor: '#4F46E5' }]}>
-                            <Ionicons name={isDropActive ? "checkmark" : "close"} size={14} color={isDropActive ? "#FFFFFF" : "#94A3B8"} />
-                          </View>
+                          <Switch
+                            value={isDropActive}
+                            onValueChange={() => handleToggleSubService('local_drop')}
+                            trackColor={{ false: '#CBD5E1', true: '#4F46E5' }}
+                            thumbColor="#FFFFFF"
+                          />
                         </TouchableOpacity>
                       )
                     })()}
@@ -946,9 +1211,12 @@ const DriverProfileScreen = ({ navigation }) => {
                             </View>
                             <Text style={styles.profileSvcSub}>Multi-hour city rentals (1h, 2h, 4h, etc.)</Text>
                           </View>
-                          <View style={[styles.profileSvcToggle, isHourlyActive && { backgroundColor: '#D97706', borderColor: '#D97706' }]}>
-                            <Ionicons name={isHourlyActive ? "checkmark" : "close"} size={14} color={isHourlyActive ? "#FFFFFF" : "#94A3B8"} />
-                          </View>
+                          <Switch
+                            value={isHourlyActive}
+                            onValueChange={() => handleToggleSubService('hourly_package')}
+                            trackColor={{ false: '#CBD5E1', true: '#D97706' }}
+                            thumbColor="#FFFFFF"
+                          />
                         </TouchableOpacity>
                       )
                     })()}
@@ -969,9 +1237,9 @@ const DriverProfileScreen = ({ navigation }) => {
                         <Text style={{ fontSize: 15, fontWeight: '800', color: isOutstationActive ? '#064E3B' : '#64748B' }}>
                           Outstation Trip
                         </Text>
-                        <View style={{ backgroundColor: isOutstationActive ? '#059669' : '#E2E8F0', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>
-                          <Text style={{ fontSize: 9, fontWeight: '800', color: isOutstationActive ? '#FFFFFF' : '#64748B' }}>
-                            LONG TRIP
+                        <View style={{ backgroundColor: isOutstationActive ? '#059669' : (hasOutstationWallet ? '#E2E8F0' : '#FEE2E2'), paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 }}>
+                          <Text style={{ fontSize: 9, fontWeight: '800', color: isOutstationActive ? '#FFFFFF' : (hasOutstationWallet ? '#64748B' : '#DC2626') }}>
+                            {isOutstationActive ? 'LONG TRIP' : (hasOutstationWallet ? 'LONG TRIP' : `MIN WALLET ₹${minWallet}`)}
                           </Text>
                         </View>
                       </View>
@@ -1023,9 +1291,12 @@ const DriverProfileScreen = ({ navigation }) => {
                             </View>
                             <Text style={styles.profileSvcSub}>Single destination outstation drop</Text>
                           </View>
-                          <View style={[styles.profileSvcToggle, isOneWayActive && { backgroundColor: '#059669', borderColor: '#059669' }]}>
-                            <Ionicons name={isOneWayActive ? "checkmark" : "close"} size={14} color={isOneWayActive ? "#FFFFFF" : "#94A3B8"} />
-                          </View>
+                          <Switch
+                            value={isOneWayActive}
+                            onValueChange={() => handleToggleSubService('outstation_oneway')}
+                            trackColor={{ false: '#CBD5E1', true: '#059669' }}
+                            thumbColor="#FFFFFF"
+                          />
                         </TouchableOpacity>
                       )
                     })()}
@@ -1058,9 +1329,12 @@ const DriverProfileScreen = ({ navigation }) => {
                             </View>
                             <Text style={styles.profileSvcSub}>Outstation return & multi-day journeys</Text>
                           </View>
-                          <View style={[styles.profileSvcToggle, isRoundActive && { backgroundColor: '#0284C7', borderColor: '#0284C7' }]}>
-                            <Ionicons name={isRoundActive ? "checkmark" : "close"} size={14} color={isRoundActive ? "#FFFFFF" : "#94A3B8"} />
-                          </View>
+                          <Switch
+                            value={isRoundActive}
+                            onValueChange={() => handleToggleSubService('outstation_round')}
+                            trackColor={{ false: '#CBD5E1', true: '#0284C7' }}
+                            thumbColor="#FFFFFF"
+                          />
                         </TouchableOpacity>
                       )
                     })()}
@@ -1085,12 +1359,11 @@ const DriverProfileScreen = ({ navigation }) => {
             </View>
             {(() => {
               const isApproved =
-                (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
                 (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
                 (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
                 (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
-              const isRejected = (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'rejected' || (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'rejected'
-              const hasSubmitted = Boolean(driver?.license_front_image || driver?.verification_status === 'pending')
+              const isRejected = (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'rejected'
+              const hasSubmitted = Boolean(driver?.has_kyc_submitted || driver?.license_front_image || driver?.verification_status === 'pending')
 
               return (
                 <>
@@ -1100,10 +1373,10 @@ const DriverProfileScreen = ({ navigation }) => {
                       {isApproved
                         ? 'All documents verified'
                         : isRejected
-                        ? 'Correction required · Tap to re-upload'
-                        : hasSubmitted
-                        ? 'Documents in Admin review'
-                        : 'Action required · Submit government IDs'}
+                          ? 'Correction required · Tap to re-upload'
+                          : hasSubmitted
+                            ? 'Documents in Admin review'
+                            : 'Action required · Submit government IDs'}
                     </Text>
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -1113,10 +1386,10 @@ const DriverProfileScreen = ({ navigation }) => {
                         backgroundColor: isApproved
                           ? '#D1FAE5'
                           : isRejected
-                          ? '#FEE2E2'
-                          : hasSubmitted
-                          ? '#FEF3C7'
-                          : '#FFF8E7'
+                            ? '#FEE2E2'
+                            : hasSubmitted
+                              ? '#FEF3C7'
+                              : '#FFF8E7'
                       }
                     ]}>
                       <Text style={[
@@ -1125,19 +1398,19 @@ const DriverProfileScreen = ({ navigation }) => {
                           color: isApproved
                             ? '#059669'
                             : isRejected
-                            ? '#DC2626'
-                            : hasSubmitted
-                            ? '#B45309'
-                            : '#D97706'
+                              ? '#DC2626'
+                              : hasSubmitted
+                                ? '#B45309'
+                                : '#D97706'
                         }
                       ]}>
                         {isApproved
                           ? 'VERIFIED'
                           : isRejected
-                          ? 'REJECTED'
-                          : hasSubmitted
-                          ? 'IN REVIEW'
-                          : 'SUBMIT KYC'}
+                            ? 'REJECTED'
+                            : hasSubmitted
+                              ? 'IN REVIEW'
+                              : 'SUBMIT KYC'}
                       </Text>
                     </View>
                     <Ionicons name="chevron-forward" size={16} color={COLORS.gray400} />
@@ -1354,6 +1627,18 @@ const DriverProfileScreen = ({ navigation }) => {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Razorpay In-App Top-Up Modal */}
+      <RazorpayCheckoutModal
+        visible={razorpayModalVisible}
+        onClose={() => setRazorpayModalVisible(false)}
+        onSuccess={handlePaymentSuccess}
+        onFailure={(err) => {
+          setRazorpayModalVisible(false)
+          Alert.alert('Payment Failed', err?.message || 'Recharge was cancelled or could not be processed.')
+        }}
+        paymentData={razorpayPaymentData}
+      />
     </SafeAreaView>
   )
 }
@@ -1893,3 +2178,4 @@ const styles = StyleSheet.create({
 })
 
 export default DriverProfileScreen
+

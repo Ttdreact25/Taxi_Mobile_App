@@ -74,7 +74,7 @@ const TabIcon = ({ routeName, focused }) => {
   const icons = {
     Dashboard: { active: 'speedometer',   inactive: 'speedometer-outline' },
     Trips:     { active: 'list',          inactive: 'list-outline' },
-    Earnings:  { active: 'wallet',        inactive: 'wallet-outline' },
+    Earnings:  { active: 'cash',          inactive: 'cash-outline' },
     Profile:   { active: 'person',        inactive: 'person-outline' },
   }
 

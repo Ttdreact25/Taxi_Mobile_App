@@ -1,10 +1,20 @@
-import React, { Component } from 'react'
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native'
+import React, { Component, useEffect } from 'react'
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, LogBox } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider } from './src/context/AuthContext'
 import { CorporateAlertProvider } from './src/components/common/CorporateAlertProvider'
 import AppNavigator from './src/navigation/AppNavigator'
+import PushNotificationService from './src/services/PushNotificationService'
+import './src/services/DriverForegroundService'
+
+LogBox.ignoreLogs([
+  'Error registering for push notifications',
+  'expo-notifications: Android Push notifications',
+  'Android Push notifications (remote notifications)',
+  'was removed from Expo Go with the release of SDK 53',
+  'Push notification permission was denied',
+])
 
 class GlobalErrorBoundary extends Component {
   state = { hasError: false, error: null }
@@ -110,6 +120,9 @@ import * as ExpoSplashScreen from 'expo-splash-screen'
 ExpoSplashScreen.preventAutoHideAsync().catch(() => {})
 
 export default function App() {
+  useEffect(() => {
+    PushNotificationService.setupAndroidNotificationChannels().catch(() => {})
+  }, [])
 
   return (
     <GlobalErrorBoundary>

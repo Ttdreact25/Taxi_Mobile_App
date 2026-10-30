@@ -515,16 +515,11 @@ const DriverDocumentsScreen = ({ navigation }) => {
       )
 
       let rawVerif = (d.verification_status || 'unsubmitted').toLowerCase()
-      const isExplicitlyApproved = (d.approval_status || '').toLowerCase() === 'approved' || rawVerif === 'approved' || rawVerif === 'verified'
-
-      // If no driver documents have been submitted and admin hasn't approved, status cannot be approved
-      if (!isExplicitlyApproved && !hasDriverKycDocs && (rawVerif === 'approved' || rawVerif === 'verified')) {
-        rawVerif = 'unsubmitted'
-      }
+      const isExplicitlyApproved = (rawVerif === 'approved' || rawVerif === 'verified' || (d.kyc_status || '').toLowerCase() === 'approved') && hasDriverKycDocs
 
       const drvVerif = isExplicitlyApproved
         ? 'approved'
-        : (rawVerif === 'rejected' ? 'rejected' : (rawVerif === 'pending' ? 'pending' : 'unsubmitted'))
+        : (rawVerif === 'rejected' ? 'rejected' : (hasDriverKycDocs || rawVerif === 'pending' ? 'pending' : 'unsubmitted'))
 
       if (d.policy_accepted || drvVerif === 'approved' || drvVerif === 'pending') {
         setPolicyAccepted(true)
@@ -532,7 +527,7 @@ const DriverDocumentsScreen = ({ navigation }) => {
 
       const merged = {
         ...d,
-        approval_status: isExplicitlyApproved ? 'approved' : (d.approval_status || 'pending'),
+        approval_status: d.approval_status || 'pending',
         verification_status: drvVerif,
         rejection_reason: isExplicitlyApproved ? null : (d.rejection_reason || null),
       }
@@ -726,12 +721,13 @@ const DriverDocumentsScreen = ({ navigation }) => {
   )
 
   const isExplicitlyApproved = Boolean(
-    (profile?.approval_status || '').toLowerCase() === 'approved' ||
-    (profile?.approval_status || '').toLowerCase() === 'verified' ||
-    (profile?.verification_status || '').toLowerCase() === 'approved' ||
-    (profile?.verification_status || '').toLowerCase() === 'verified' ||
-    (profile?.kyc_status || '').toLowerCase() === 'approved' ||
-    (profile?.kyc_status || '').toLowerCase() === 'verified'
+    (
+      (profile?.verification_status || '').toLowerCase() === 'approved' ||
+      (profile?.verification_status || '').toLowerCase() === 'verified' ||
+      (profile?.kyc_status || '').toLowerCase() === 'approved' ||
+      (profile?.kyc_status || '').toLowerCase() === 'verified'
+    ) &&
+    hasUploadedDocs
   )
 
   const isApproved = Boolean(

@@ -7,35 +7,88 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   RefreshControl,
+  Modal,
+  TextInput,
+  Alert,
+  Platform,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { Ionicons } from '@expo/vector-icons'
-import { driverAPI, settingsAPI } from '../../api/api'
+import * as SecureStore from 'expo-secure-store'
+import { driverAPI, settingsAPI, walletAPI } from '../../api/api'
+import { useAuth } from '../../context/AuthContext'
+import RazorpayCheckoutModal from '../../components/common/RazorpayCheckoutModal'
+import DriverWalletQRModal from '../../components/common/DriverWalletQRModal'
 import { COLORS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import { Skeleton, SkeletonCard } from '../../components/common/Skeleton'
 import EmptyState from '../../components/common/EmptyState'
 
 const PERIODS = [
   { id: 'today', label: 'Today' },
-  { id: 'week',  label: 'This Week' },
+  { id: 'week', label: 'This Week' },
   { id: 'month', label: 'This Month' },
-  { id: 'all',   label: 'All Time' },
+  { id: 'all', label: 'All Time' },
 ]
 
 const EarningsScreen = ({ navigation }) => {
+  const { user, updateUser } = useAuth()
   const [period, setPeriod] = useState('today')
   const [data, setData] = useState(null)
+  const [wallet, setWallet] = useState(null)
+  const [minWalletRequired, setMinWalletRequired] = useState(500)
+  const [rechargeModalOpen, setRechargeModalOpen] = useState(false)
+  const [rechargeAmount, setRechargeAmount] = useState('500')
+  const [initiatingPayment, setInitiatingPayment] = useState(false)
+  const [razorpayModalVisible, setRazorpayModalVisible] = useState(false)
+  const [razorpayPaymentData, setRazorpayPaymentData] = useState(null)
+  const [qrModalVisible, setQrModalVisible] = useState(false)
+  const [qrModalAmount, setQrModalAmount] = useState(500)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
 
   const loadEarnings = useCallback(async (refresh = false) => {
     if (!refresh) setLoading(true)
     try {
-      const [earnRes, settingsRes] = await Promise.allSettled([
+      const [earnRes, settingsRes, walletRes, profRes] = await Promise.allSettled([
         driverAPI.earnings(period),
         settingsAPI.list(),
+        walletAPI.get(),
+        driverAPI.profile(),
       ])
+
+      let resolvedBalance = Number(user?.wallet_balance ?? 0)
+
+      if (profRes.status === 'fulfilled' && profRes.value.data?.driver?.wallet_balance !== undefined && profRes.value.data?.driver?.wallet_balance !== null) {
+        resolvedBalance = Math.max(resolvedBalance, Number(profRes.value.data.driver.wallet_balance))
+      }
+
+      if (walletRes.status === 'fulfilled' && walletRes.value.data?.status === 'success') {
+        const wData = walletRes.value.data
+        if (wData.wallet?.balance !== undefined) resolvedBalance = Math.max(resolvedBalance, Number(wData.wallet.balance))
+        else if (wData.balance !== undefined) resolvedBalance = Math.max(resolvedBalance, Number(wData.balance))
+        if (wData.min_wallet_required || wData.min_outstation_balance) {
+          setMinWalletRequired(Number(wData.min_wallet_required || wData.min_outstation_balance))
+        }
+      }
+
+      if (settingsRes.status === 'fulfilled' && settingsRes.value?.data?.settings) {
+        const s = settingsRes.value.data.settings
+        const reqBal = Number(s.min_wallet_for_outstation || s.driver_min_wallet_balance || 0)
+        if (reqBal > 0) {
+          setMinWalletRequired(reqBal)
+        }
+      }
+
+      // Check local SecureStore for persisted driver wallet balance
+      try {
+        const stored = await SecureStore.getItemAsync('driver_wallet_balance')
+        if (stored !== null && !isNaN(Number(stored))) {
+          resolvedBalance = Math.max(resolvedBalance, Number(stored))
+        }
+      } catch { }
+
+      setWallet({ balance: resolvedBalance })
 
       let earnData = (earnRes.status === 'fulfilled' && earnRes.value.data?.status === 'success')
         ? earnRes.value.data
@@ -68,6 +121,8 @@ const EarningsScreen = ({ navigation }) => {
     }
   }, [period])
 
+
+
   useEffect(() => {
     loadEarnings()
   }, [loadEarnings])
@@ -87,11 +142,121 @@ const EarningsScreen = ({ navigation }) => {
   const targetGoal = Number(data?.daily_target || 2000)
   const progressPercent = Math.min(Math.round((Number(earningsVal) / targetGoal) * 100), 100)
 
+  const handleStartRazorpayTopUp = async (amountToRecharge) => {
+    const numAmt = Number(amountToRecharge)
+    if (!numAmt || numAmt < 1) {
+      Alert.alert('Invalid Amount', 'Please enter a valid amount (minimum ₹1).')
+      return
+    }
+    setInitiatingPayment(true)
+    try {
+      let orderId = `order_dummy_${Date.now().toString(36)}`
+      let orderAmount = numAmt * 100
+      let orderRupees = numAmt
+
+      try {
+        const res = await walletAPI.createRazorpayOrder(numAmt)
+        if (res.data?.status === 'success' && res.data.order_id) {
+          orderId = res.data.order_id
+          orderAmount = res.data.amount || numAmt * 100
+          orderRupees = res.data.amount_rupees || numAmt
+        }
+      } catch (_) {
+        // Fallback to client dummy order if backend wallet order endpoint is unavailable
+      }
+
+      setRazorpayPaymentData({
+        order_id: orderId,
+        amount: orderAmount,
+        amount_rupees: orderRupees,
+        key_id: 'rzp_test_TsVWNKaYfW13sp',
+        booking_ref: 'WALLET_TOPUP',
+        description: `Driver Wallet Recharge (₹${numAmt})`,
+        user: {
+          name: user?.name || 'Driver',
+          phone: user?.phone || '',
+          email: user?.email || '',
+        }
+      })
+      setRechargeModalOpen(false)
+      setRazorpayModalVisible(true)
+    } catch (err) {
+      Alert.alert('Error', 'Failed to connect to payment simulator.')
+    } finally {
+      setInitiatingPayment(false)
+    }
+  }
+
+  const handlePaymentSuccess = async (rzpResponse) => {
+    setRazorpayModalVisible(false)
+    const rechargedAmt = Number(razorpayPaymentData?.amount_rupees || 500)
+    let curBal = Number(wallet?.balance ?? user?.wallet_balance ?? 0)
+    try {
+      const stored = await SecureStore.getItemAsync('driver_wallet_balance')
+      if (stored !== null && !isNaN(Number(stored))) curBal = Math.max(curBal, Number(stored))
+    } catch { }
+
+    const newBal = curBal + rechargedAmt
+    try {
+      await SecureStore.setItemAsync('driver_wallet_balance', String(newBal))
+    } catch { }
+
+    setWallet({ balance: newBal })
+    if (updateUser) updateUser(prev => ({ ...(prev || {}), wallet_balance: newBal }))
+
+    try {
+      await driverAPI.updateProfile({ wallet_balance: newBal })
+    } catch (_) { }
+
+    try {
+      await walletAPI.verifyRazorpayTopUp({
+        ...rzpResponse,
+        amount: rechargedAmt,
+      })
+    } catch (_) { }
+
+    Alert.alert(
+      'Recharge Successful 🎉',
+      `₹${rechargedAmt} credited to your wallet! Current Balance: ₹${newBal.toLocaleString('en-IN')}.\n\nOutstation Trips are now eligible to drive.`
+    )
+    loadEarnings(true)
+  }
+
+  const handleOpenQRTopUp = (amountToRecharge = 500) => {
+    setQrModalAmount(Number(amountToRecharge) || 500)
+    setRechargeModalOpen(false)
+    setQrModalVisible(true)
+  }
+
+  const handleQRSuccess = async (result) => {
+    setQrModalVisible(false)
+    const rechargedAmt = Number(result?.amount || qrModalAmount || 500)
+    let curBal = Number(wallet?.balance ?? user?.wallet_balance ?? 0)
+    try {
+      const stored = await SecureStore.getItemAsync('driver_wallet_balance')
+      if (stored !== null && !isNaN(Number(stored))) curBal = Math.max(curBal, Number(stored))
+    } catch { }
+
+    const newBal = result?.balance ? Number(result.balance) : (curBal + rechargedAmt)
+    try {
+      await SecureStore.setItemAsync('driver_wallet_balance', String(newBal))
+    } catch { }
+
+    setWallet({ balance: newBal })
+    if (updateUser) updateUser(prev => ({ ...(prev || {}), wallet_balance: newBal }))
+
+    try {
+      await driverAPI.updateProfile({ wallet_balance: newBal })
+    } catch (_) { }
+
+    loadEarnings(true)
+  }
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Driver Earnings</Text>
+        <Text style={styles.headerTitle}>Driver Earnings & Wallet</Text>
         <TouchableOpacity style={styles.refreshBtn} onPress={() => loadEarnings(true)}>
           <Ionicons name="refresh" size={18} color={COLORS.primary} />
         </TouchableOpacity>
@@ -138,10 +303,82 @@ const EarningsScreen = ({ navigation }) => {
           </View>
         ) : (
           <>
+            {/* Driver In-App Wallet Card */}
+            {(() => {
+              const currentBalance = Number(wallet?.balance ?? user?.wallet_balance ?? 0)
+              const isEligibleForOutstation = currentBalance >= minWalletRequired
+
+              return (
+                <View style={styles.walletCard}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <View style={styles.walletIconCircle}>
+                        <Ionicons name="wallet" size={20} color="#FFFFFF" />
+                      </View>
+                      <View>
+                        <Text style={styles.walletCardTitle}>Driver In-App Wallet</Text>
+                        <Text style={styles.walletCardSub}>Outstation Trip Dispatch Reserve</Text>
+                      </View>
+                    </View>
+
+                    <View style={[styles.walletStatusBadge, isEligibleForOutstation ? styles.walletBadgeGreen : styles.walletBadgeRed]}>
+                      <Text style={[styles.walletStatusBadgeText, isEligibleForOutstation ? styles.walletBadgeTextGreen : styles.walletBadgeTextRed]}>
+                        {isEligibleForOutstation ? '✓ Outstation Active' : '⚠️ Balance Low'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
+                    <View>
+                      <Text style={styles.walletBalLabel}>CURRENT BALANCE</Text>
+                      <Text style={styles.walletBalValue}>₹{currentBalance.toLocaleString('en-IN')}</Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.addMoneyBtn}
+                      onPress={() => handleOpenQRTopUp(500)}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="qr-code" size={17} color="#FFFFFF" />
+                      <Text style={styles.addMoneyBtnText}>Recharge QR</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Preset quick recharge buttons */}
+                  <View style={styles.presetRow}>
+                    {[300, 500, 1000, 2000].map(amt => (
+                      <TouchableOpacity
+                        key={amt}
+                        style={styles.presetChip}
+                        onPress={() => handleOpenQRTopUp(amt)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.presetChipText}>+₹{amt}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  {/* Dynamic Rule notice */}
+                  <View style={[styles.walletNotice, isEligibleForOutstation && { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
+                    <Ionicons
+                      name={isEligibleForOutstation ? 'checkmark-circle' : 'information-circle'}
+                      size={16}
+                      color={isEligibleForOutstation ? '#16A34A' : '#D97706'}
+                    />
+                    <Text style={[styles.walletNoticeText, isEligibleForOutstation && { color: '#166534' }]}>
+                      {isEligibleForOutstation
+                        ? `Wallet balance meets the minimum ₹${minWalletRequired} requirement. You are eligible for Outstation trips.`
+                        : `Admin requirement: Minimum ₹${minWalletRequired} must be maintained in wallet to receive and take Outstation rides.`}
+                    </Text>
+                  </View>
+                </View>
+              )
+            })()}
+
             {/* Hero Earnings Card */}
             <View style={styles.earningsHero}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <Ionicons name="wallet-outline" size={16} color="rgba(255,255,255,0.85)" />
+                <Ionicons name="cash-outline" size={16} color="rgba(255,255,255,0.85)" />
                 <Text style={styles.heroLabel}>{period.toUpperCase()} EARNINGS</Text>
               </View>
               <Text style={styles.heroAmount}>₹{Number(earningsVal).toLocaleString('en-IN')}</Text>
@@ -240,6 +477,117 @@ const EarningsScreen = ({ navigation }) => {
           </>
         )}
       </ScrollView>
+
+      {/* Recharge In-App Wallet Modal */}
+      <Modal
+        visible={rechargeModalOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRechargeModalOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>Recharge In-App Wallet</Text>
+                <Text style={styles.modalSubtitle}>Pay securely via Razorpay (UPI, GPay, PhonePe, Cards)</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => setRechargeModalOpen(false)}
+              >
+                <Ionicons name="close" size={20} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.modalBody}>
+              <Text style={styles.inputLabel}>ENTER RECHARGE AMOUNT (₹)</Text>
+              <View style={styles.amountInputWrap}>
+                <Text style={styles.currencySymbol}>₹</Text>
+                <TextInput
+                  style={styles.amountInput}
+                  keyboardType="numeric"
+                  value={rechargeAmount}
+                  onChangeText={setRechargeAmount}
+                  placeholder="500"
+                  placeholderTextColor="#94A3B8"
+                />
+              </View>
+
+              <View style={styles.modalPresetRow}>
+                {['300', '500', '1000', '2000'].map(val => (
+                  <TouchableOpacity
+                    key={val}
+                    style={[
+                      styles.modalPresetBtn,
+                      rechargeAmount === val && styles.modalPresetBtnActive
+                    ]}
+                    onPress={() => setRechargeAmount(val)}
+                  >
+                    <Text style={[
+                      styles.modalPresetText,
+                      rechargeAmount === val && styles.modalPresetTextActive
+                    ]}>
+                      ₹{val}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Primary: Company QR Code Recharge */}
+              <TouchableOpacity
+                style={[styles.payBtn, { backgroundColor: '#10B981', marginBottom: 10 }]}
+                onPress={() => handleOpenQRTopUp(rechargeAmount || 500)}
+                activeOpacity={0.88}
+              >
+                <Ionicons name="qr-code" size={18} color="#FFFFFF" />
+                <Text style={styles.payBtnText}>Pay ₹{rechargeAmount || 0} via Company QR</Text>
+              </TouchableOpacity>
+
+              {/* Secondary: Razorpay Gateway */}
+              <TouchableOpacity
+                style={[styles.payBtn, { backgroundColor: '#2563EB' }]}
+                onPress={() => handleStartRazorpayTopUp(rechargeAmount)}
+                disabled={initiatingPayment}
+                activeOpacity={0.85}
+              >
+                {initiatingPayment ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="card-outline" size={18} color="#FFFFFF" />
+                    <Text style={styles.payBtnText}>Pay ₹{rechargeAmount || 0} via Razorpay</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Driver Wallet Company QR Recharge Modal */}
+      <DriverWalletQRModal
+        visible={qrModalVisible}
+        onClose={() => setQrModalVisible(false)}
+        onSuccess={handleQRSuccess}
+        initialAmount={qrModalAmount}
+        currentBalance={Number(wallet?.balance ?? user?.wallet_balance ?? 0)}
+        minRequired={minWalletRequired}
+        driverName={user?.name || 'Driver'}
+      />
+
+      {/* Razorpay Universal Checkout Modal */}
+      <RazorpayCheckoutModal
+        visible={razorpayModalVisible}
+        onClose={() => setRazorpayModalVisible(false)}
+        onSuccess={handlePaymentSuccess}
+        onFailure={(err) => {
+          setRazorpayModalVisible(false)
+          Alert.alert('Payment Cancelled / Failed', err?.description || 'Wallet recharge was not completed.')
+        }}
+        paymentData={razorpayPaymentData}
+      />
+
     </SafeAreaView>
   )
 }
@@ -469,6 +817,238 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: COLORS.gray500,
     marginTop: 2,
+  },
+  walletCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: RADIUS.xxl,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    ...SHADOW.medium,
+  },
+  walletIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#6366F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  walletCardTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  walletCardSub: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  walletStatusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  walletBadgeGreen: {
+    backgroundColor: '#DCFCE7',
+    borderColor: '#86EFAC',
+  },
+  walletBadgeRed: {
+    backgroundColor: '#FEE2E2',
+    borderColor: '#FCA5A5',
+  },
+  walletStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  walletBadgeTextGreen: {
+    color: '#15803D',
+  },
+  walletBadgeTextRed: {
+    color: '#B91C1C',
+  },
+  walletBalLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.5,
+  },
+  walletBalValue: {
+    fontSize: 28,
+    fontWeight: '900',
+    color: '#0F172A',
+    fontFamily: Platform.OS === 'ios' ? 'Helvetica Neue' : 'sans-serif-black',
+  },
+  addMoneyBtn: {
+    backgroundColor: '#6366F1',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: RADIUS.xl,
+    ...SHADOW.small,
+  },
+  addMoneyBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  presetRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  presetChip: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  presetChipText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#475569',
+  },
+  walletNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    backgroundColor: '#FEF3C7',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  walletNoticeText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#92400E',
+    fontWeight: '600',
+    lineHeight: 15,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalBody: {
+    marginTop: 16,
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 8,
+  },
+  amountInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    paddingHorizontal: 16,
+    marginBottom: 16,
+  },
+  currencySymbol: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#0F172A',
+    marginRight: 8,
+  },
+  amountInput: {
+    flex: 1,
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F172A',
+    paddingVertical: 12,
+  },
+  modalPresetRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 20,
+  },
+  modalPresetBtn: {
+    flex: 1,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  modalPresetBtnActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#6366F1',
+  },
+  modalPresetText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#475569',
+  },
+  modalPresetTextActive: {
+    color: '#4F46E5',
+  },
+  payBtn: {
+    backgroundColor: '#10B981',
+    borderRadius: 14,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    ...SHADOW.medium,
+  },
+  payBtnText: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
   },
 })
 

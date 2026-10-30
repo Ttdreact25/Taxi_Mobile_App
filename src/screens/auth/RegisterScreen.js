@@ -14,8 +14,17 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
-import { authAPI, citiesAPI } from '../../api/api'
+import { authAPI, citiesAPI, resolveAssetUrl } from '../../api/api'
 import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
+
+const getCityImageUrl = (city) => {
+  if (!city) return null
+  const raw = city.city_logo_url || city.icon_url || city.city_logo || city.icon
+  if (!raw || typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (trimmed.endsWith('/u') || trimmed.endsWith('/up') || trimmed === '🏙️' || trimmed.length <= 4) return null
+  return resolveAssetUrl(trimmed) || trimmed
+}
 
 const RegisterScreen = ({ navigation }) => {
   const [role, setRole] = useState('customer')
@@ -25,22 +34,6 @@ const RegisterScreen = ({ navigation }) => {
   const [focusedField, setFocusedField] = useState(null)
   const [cities, setCities] = useState([])
   const [selectedCity, setSelectedCity] = useState(null)
-  const [selectedServices, setSelectedServices] = useState(['local_drop', 'hourly_package', 'outstation_oneway', 'outstation_round'])
-
-  const toggleService = (key) => {
-    setSelectedServices(prev => {
-      if (prev.includes(key)) {
-        if (prev.length === 1) {
-          Alert.alert('Required Selection', 'You must select at least one service category you operate.')
-          return prev
-        }
-        return prev.filter(s => s !== key)
-      } else {
-        return [...prev, key]
-      }
-    })
-  }
-
   const refs = {
     name: useRef(null),
     email: useRef(null),
@@ -77,10 +70,6 @@ const RegisterScreen = ({ navigation }) => {
       Alert.alert('Operating City Required', 'Please select your operating city / territory.')
       return
     }
-    if (role === 'driver' && selectedServices.length === 0) {
-      Alert.alert('Service Category Required', 'Please select at least one service type you operate (Local drop, Out station, or Hourly package).')
-      return
-    }
     if (form.password.length < 6) {
       Alert.alert('Weak Password', 'Password must be at least 6 characters long.')
       return
@@ -95,7 +84,6 @@ const RegisterScreen = ({ navigation }) => {
         role: role,
         license_no: role === 'driver' ? form.license_no.trim() : undefined,
         city_id: role === 'driver' ? form.city_id : undefined,
-        service_types: role === 'driver' ? selectedServices.join(',') : undefined,
       }
       const res = await authAPI.register(payload)
       if (res.data?.status === 'success') {
@@ -168,9 +156,9 @@ const RegisterScreen = ({ navigation }) => {
             >
               <Ionicons
                 name="person"
-                size={16}
-                color={role === 'customer' ? COLORS.primary : COLORS.gray500}
-                style={{ marginRight: 6 }}
+                size={20}
+                color={role === 'customer' ? (COLORS.primaryDark || '#D97706') : '#64748B'}
+                style={{ marginRight: 8 }}
               />
               <Text style={[styles.roleTabText, role === 'customer' && styles.roleTabTextActive]}>
                 Passenger / Rider
@@ -184,9 +172,9 @@ const RegisterScreen = ({ navigation }) => {
             >
               <Ionicons
                 name="car-sport"
-                size={16}
-                color={role === 'driver' ? COLORS.primary : COLORS.gray500}
-                style={{ marginRight: 6 }}
+                size={21}
+                color={role === 'driver' ? (COLORS.primaryDark || '#D97706') : '#64748B'}
+                style={{ marginRight: 8 }}
               />
               <Text style={[styles.roleTabText, role === 'driver' && styles.roleTabTextActive]}>
                 Driver Partner
@@ -303,8 +291,8 @@ const RegisterScreen = ({ navigation }) => {
                   {/* Highlighted Chosen Location Banner with City Image */}
                   <View style={styles.citySelectedCard}>
                     <View style={styles.citySelectedIconBox}>
-                      {selectedCity && (selectedCity.icon_url || (selectedCity.icon && (selectedCity.icon.startsWith('http') || selectedCity.icon.startsWith('/uploads') || selectedCity.icon.startsWith('cities/')))) ? (
-                        <Image source={{ uri: selectedCity.icon_url || selectedCity.icon }} style={{ width: 28, height: 28, borderRadius: 6 }} resizeMode="cover" />
+                      {getCityImageUrl(selectedCity) ? (
+                        <Image source={{ uri: getCityImageUrl(selectedCity) }} style={{ width: 28, height: 28, borderRadius: 6 }} resizeMode="cover" />
                       ) : (
                         <Ionicons name="business-outline" size={22} color="#6366F1" />
                       )}
@@ -330,7 +318,7 @@ const RegisterScreen = ({ navigation }) => {
                   >
                     {cities.map(c => {
                       const isSel = (form.city_id === c.id) || (selectedCity?.id === c.id)
-                      const hasImg = Boolean(c.icon_url || (c.icon && (c.icon.startsWith('http') || c.icon.startsWith('/uploads') || c.icon.startsWith('cities/'))))
+                      const cImg = getCityImageUrl(c)
                       return (
                         <TouchableOpacity
                           key={c.id}
@@ -341,8 +329,8 @@ const RegisterScreen = ({ navigation }) => {
                           }}
                           style={[styles.cityChip, isSel && styles.cityChipActive]}
                         >
-                          {hasImg ? (
-                            <Image source={{ uri: c.icon_url || c.icon }} style={{ width: 16, height: 16, borderRadius: 4, marginRight: 6 }} />
+                          {cImg ? (
+                            <Image source={{ uri: cImg }} style={{ width: 16, height: 16, borderRadius: 4, marginRight: 6 }} />
                           ) : (
                             <Ionicons name="location-outline" size={14} color={isSel ? '#4F46E5' : '#64748B'} style={{ marginRight: 4 }} />
                           )}
@@ -387,94 +375,6 @@ const RegisterScreen = ({ navigation }) => {
                   </TouchableOpacity>
                 </View>
 
-                {/* Operating Service Categories (Driver only) */}
-                <View style={styles.inputGroup}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <Text style={styles.inputLabel}>OPERATING SERVICE TYPES</Text>
-                    <View style={styles.serviceCountBadge}>
-                      <Text style={styles.serviceCountBadgeText}>{selectedServices.length}/3 ACTIVE</Text>
-                    </View>
-                  </View>
-                  <Text style={styles.serviceHintText}>
-                    Choose trip types you accept. Trips will be auto-assigned & manually dispatched strictly to matching drivers.
-                  </Text>
-
-                  <View style={styles.serviceListWrapper}>
-                    {[
-                      {
-                        key: 'local_drop',
-                        title: 'Local Drop',
-                        subtitle: 'Point-to-point one-way city rides',
-                        icon: 'car-outline',
-                        badge: 'City Taxi',
-                        color: '#4F46E5',
-                        bgLight: '#EEF2FF',
-                      },
-                      {
-                        key: 'hourly_package',
-                        title: 'Hourly Package',
-                        subtitle: 'Multi-hour city rentals (1h, 2h, 4h, 8h...)',
-                        icon: 'time-outline',
-                        badge: 'Rental',
-                        color: '#D97706',
-                        bgLight: '#FFFBEB',
-                      },
-                      {
-                        key: 'outstation_oneway',
-                        title: 'One Way Trip',
-                        subtitle: 'Single destination inter-city drop',
-                        icon: 'arrow-forward-outline',
-                        badge: 'Outstation Drop',
-                        color: '#059669',
-                        bgLight: '#ECFDF5',
-                      },
-                      {
-                        key: 'outstation_round',
-                        title: 'Round Trip',
-                        subtitle: 'Inter-city round trips & return journeys',
-                        icon: 'repeat-outline',
-                        badge: 'Round Trip',
-                        color: '#0284C7',
-                        bgLight: '#F0F9FF',
-                      },
-                    ].map(svc => {
-                      const isSelected = selectedServices.includes(svc.key)
-                      return (
-                        <TouchableOpacity
-                          key={svc.key}
-                          activeOpacity={0.82}
-                          onPress={() => toggleService(svc.key)}
-                          style={[
-                            styles.serviceCard,
-                            isSelected && { borderColor: svc.color, backgroundColor: svc.bgLight }
-                          ]}
-                        >
-                          <View style={[styles.serviceIconBox, { backgroundColor: isSelected ? svc.color : '#F1F5F9' }]}>
-                            <Ionicons name={svc.icon} size={20} color={isSelected ? '#FFFFFF' : '#64748B'} />
-                          </View>
-                          <View style={{ flex: 1, marginHorizontal: 10 }}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                              <Text style={[styles.serviceCardTitle, isSelected && { color: '#0F172A' }]}>
-                                {svc.title}
-                              </Text>
-                              <View style={[styles.serviceTypeBadge, { backgroundColor: isSelected ? '#FFFFFF' : '#E2E8F0' }]}>
-                                <Text style={[styles.serviceTypeBadgeText, { color: isSelected ? svc.color : '#64748B' }]}>
-                                  {svc.badge}
-                                </Text>
-                              </View>
-                            </View>
-                            <Text style={styles.serviceCardSubtitle} numberOfLines={2}>
-                              {svc.subtitle}
-                            </Text>
-                          </View>
-                          <View style={[styles.checkboxBox, isSelected && { backgroundColor: svc.color, borderColor: svc.color }]}>
-                            {isSelected && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
-                          </View>
-                        </TouchableOpacity>
-                      )
-                    })}
-                  </View>
-                </View>
               </>
             )}
 
@@ -611,32 +511,38 @@ const styles = StyleSheet.create({
   },
   roleTabsContainer: {
     flexDirection: 'row',
-    backgroundColor: COLORS.gray100,
-    borderRadius: RADIUS.xl,
-    padding: 4,
-    marginBottom: SPACING.lg,
-    borderWidth: 1,
-    borderColor: COLORS.gray200,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 22,
+    padding: 5,
+    marginBottom: SPACING.lg + 2,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
   },
   roleTab: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: RADIUS.lg,
+    paddingVertical: 13,
+    borderRadius: 18,
   },
   roleTabActive: {
     backgroundColor: COLORS.white,
-    ...SHADOW.xs,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 5,
+    elevation: 3,
   },
   roleTabText: {
-    fontSize: 12,
+    fontSize: 14.5,
     fontWeight: '700',
-    color: COLORS.textMuted,
+    color: '#64748B',
+    letterSpacing: 0.2,
   },
   roleTabTextActive: {
-    color: COLORS.primary,
+    color: COLORS.primaryDark || '#D97706',
+    fontWeight: '900',
   },
   card: {
     backgroundColor: COLORS.white,
@@ -807,75 +713,6 @@ const styles = StyleSheet.create({
   },
   cityChipTextActive: {
     color: COLORS.white,
-  },
-  serviceCountBadge: {
-    backgroundColor: '#EEF2FF',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: RADIUS.full || 99,
-    borderWidth: 1,
-    borderColor: '#C7D2FE',
-  },
-  serviceCountBadgeText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#4F46E5',
-    letterSpacing: 0.5,
-  },
-  serviceHintText: {
-    fontSize: 11,
-    color: COLORS.textSecondary || '#64748B',
-    marginBottom: 10,
-    lineHeight: 16,
-  },
-  serviceListWrapper: {
-    gap: 10,
-  },
-  serviceCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: RADIUS.lg,
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#FFFFFF',
-  },
-  serviceIconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: RADIUS.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  serviceCardTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  serviceTypeBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  serviceTypeBadgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-  },
-  serviceCardSubtitle: {
-    fontSize: 11,
-    color: '#64748B',
-    marginTop: 2,
-  },
-  checkboxBox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    borderColor: '#CBD5E1',
-    backgroundColor: '#F8FAFC',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 })
 

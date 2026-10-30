@@ -32,6 +32,8 @@ import { COLORS, FONTS, RADIUS, SPACING, SHADOW } from '../../constants/theme'
 import { useAuth } from '../../context/AuthContext'
 import ModernBottomSheet from '../../components/common/ModernBottomSheet'
 import UniversalRouteMap from '../../components/common/UniversalRouteMap'
+import RazorpayCheckoutModal from '../../components/common/RazorpayCheckoutModal'
+import AdvancePaymentQRModal from '../../components/common/AdvancePaymentQRModal'
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window')
 
@@ -278,13 +280,34 @@ export default function BookingScreen({ navigation, route }) {
 
   // ── Ride Preferences & Review Screen (Matching Screenshot Alignment) ──
   const [showReviewScreen, setShowReviewScreen] = useState(false)
-  const [passengerCount, setPassengerCount] = useState(1) // Number of persons traveling
+  const [passengerCount, setPassengerCount] = useState(1) // Number of adults traveling
+  const [childrenCount, setChildrenCount] = useState(0) // Number of children traveling
   const [luggageCount, setLuggageCount] = useState(2) // Number of bags stepper
   const [rooftopCarrier, setRooftopCarrier] = useState(false) // Rooftop carrier toggle (SUV only)
   const [hasPets, setHasPets] = useState(false) // Traveling with pets toggle
   const [adminPetCharge, setAdminPetCharge] = useState(150) // Admin configured Pet charge
   const [adminRooftopCharge, setAdminRooftopCharge] = useState(250) // Admin configured Rooftop carrier charge
   const [waitingHours, setWaitingHours] = useState(0) // Driver waiting hours
+
+  // ── UPI QR & Online Advance Payment System ──
+  const [showAdvanceQRModal, setShowAdvanceQRModal] = useState(false)
+  const [advancePaymentData, setAdvancePaymentData] = useState(null)
+  const [showRazorpayModal, setShowRazorpayModal] = useState(false)
+  const [razorpayOrderData, setRazorpayOrderData] = useState(null)
+  const [pendingBookingId, setPendingBookingId] = useState(null)
+  const [pendingBookingData, setPendingBookingData] = useState(null)
+  const [pendingBookingPayload, setPendingBookingPayload] = useState(null)
+  const [commissionSettings, setCommissionSettings] = useState({
+    commission_local_drop_type: 'percentage',
+    commission_local_drop_val: 0,
+    commission_hourly_type: 'percentage',
+    commission_hourly_val: 0,
+    commission_oneway_type: 'percentage',
+    commission_oneway_val: 0,
+    commission_round_type: 'percentage',
+    commission_round_val: 0,
+    razorpay_enabled: '1'
+  })
 
   // Auto-clamp passengerCount to selected vehicle capacity
   useEffect(() => {
@@ -474,6 +497,16 @@ export default function BookingScreen({ navigation, route }) {
         }
         if (s.rooftop_carrier_charge !== undefined && s.rooftop_carrier_charge !== null && s.rooftop_carrier_charge !== '') {
           setAdminRooftopCharge(Number(s.rooftop_carrier_charge))
+        }
+        if (s) {
+          setCommissionSettings(prev => ({
+            ...prev,
+            ...s,
+            commission_local_drop_val: (s.commission_local_drop_val !== undefined && s.commission_local_drop_val !== null) ? Number(s.commission_local_drop_val) : (s.commission_local_val !== undefined && s.commission_local_val !== null ? Number(s.commission_local_val) : 0),
+            commission_hourly_val: (s.commission_hourly_val !== undefined && s.commission_hourly_val !== null) ? Number(s.commission_hourly_val) : (s.commission_local_val !== undefined && s.commission_local_val !== null ? Number(s.commission_local_val) : 0),
+            commission_oneway_val: (s.commission_oneway_val !== undefined && s.commission_oneway_val !== null) ? Number(s.commission_oneway_val) : (s.commission_long_val !== undefined && s.commission_long_val !== null ? Number(s.commission_long_val) : 0),
+            commission_round_val: (s.commission_round_val !== undefined && s.commission_round_val !== null) ? Number(s.commission_round_val) : (s.commission_long_val !== undefined && s.commission_long_val !== null ? Number(s.commission_long_val) : 0),
+          }))
         }
       } catch (err) {
         console.warn('Failed to fetch addon settings:', err)
@@ -1046,6 +1079,179 @@ export default function BookingScreen({ navigation, route }) {
     )
   }
 
+  // ── Calculate Category and Online Advance Breakdown ──
+  const getTripCategoryAndAdvance = (totalFare) => {
+    let category = 'local_drop'
+    let label = 'Local Drop'
+    const isHourlyLocal = (!isOutstationTrip && localTripSubType === 'hourly')
+    if (isHourlyLocal || tripTypeCategory === 'hourly') {
+      category = 'hourly_package'
+      label = 'Hourly Rental'
+    } else if (isRoundTrip || tripTypeCategory === 'round_trip') {
+      category = 'outstation_round'
+      label = 'Outstation Round Trip'
+    } else if (isOutstationTrip || tripTypeCategory === 'outstation') {
+      category = 'outstation_oneway'
+      label = 'Outstation One-Way'
+    }
+
+    const typeKey = `commission_${category}_type`
+    const valKey = `commission_${category}_val`
+    const commType = commissionSettings[typeKey] || 'percentage'
+    
+    let commVal = 0
+    if (commissionSettings[valKey] !== undefined && commissionSettings[valKey] !== null && commissionSettings[valKey] !== '') {
+      commVal = Math.max(0, Number(commissionSettings[valKey]))
+    }
+
+    let advance = 0
+    if (commVal > 0) {
+      advance = commType === 'percentage'
+        ? Math.max(1, Math.round(((totalFare * commVal) / 100)))
+        : Math.min(totalFare, Math.round(commVal))
+    }
+    const cashPending = Math.max(0, Math.round(totalFare - advance))
+
+    return { category, label, commType, commVal, advance, cashPending }
+  }
+
+  const handleAdvanceQRSuccess = async (result) => {
+    try {
+      setBookingLoading(false)
+      setShowAdvanceQRModal(false)
+      const confirmedBookingId = result?.booking_id || pendingBookingId
+      const amountPaid = result?.amount || advancePaymentData?.amount_rupees || 0
+      setPendingBookingId(null)
+      setPendingBookingData(null)
+      setPendingBookingPayload(null)
+      setShowReviewScreen(false)
+
+      Alert.alert(
+        'Advance Payment Received & Booking Confirmed! 🎉',
+        `₹${amountPaid} advance payment proof uploaded successfully! Your booking is now submitted to Admin CRM and drivers are being assigned.`,
+        [
+          {
+            text: 'Track My Ride 📍',
+            onPress: () => navigation.navigate('BookingTrack', { bookingId: confirmedBookingId })
+          }
+        ]
+      )
+    } catch (e) {
+      console.warn('Post QR confirm error:', e)
+    }
+  }
+
+  const handleAdvanceQRDismiss = async () => {
+    setShowAdvanceQRModal(false)
+    if (pendingBookingId) {
+      try {
+        await bookingsAPI.cancel(pendingBookingId, { reason: 'Advance UPI QR payment cancelled by customer' })
+      } catch (e) {
+        console.warn('Could not cancel pending booking:', e)
+      }
+      setPendingBookingId(null)
+      setPendingBookingData(null)
+    }
+    setPendingBookingPayload(null)
+    // Booking was never created in backend, so Admin CRM stays clean!
+    Alert.alert(
+      'Payment Cancelled ⚠️',
+      'Advance QR payment seiyavillai. Ungal booking admin CRM-kku anuppappadavillai. Neengal eppothu vendumaanalum meendum try seiyalam.',
+      [{ text: 'OK' }]
+    )
+  }
+
+  const handleRazorpaySuccess = async (paymentResult) => {
+    try {
+      setBookingLoading(true)
+      setShowRazorpayModal(false)
+
+      if (!paymentResult?.razorpay_payment_id || !paymentResult?.razorpay_signature) {
+        throw new Error('Payment was not completed on Razorpay gateway.')
+      }
+
+      // Call backend verification endpoint (strictly verifies HMAC-SHA256 signature with secret key)
+      const verifyRes = await paymentAPI.verifyRazorpay({
+        booking_id: pendingBookingId,
+        razorpay_order_id: paymentResult.razorpay_order_id,
+        razorpay_payment_id: paymentResult.razorpay_payment_id,
+        razorpay_signature: paymentResult.razorpay_signature
+      })
+
+      if (verifyRes.data?.status === 'success') {
+        const confirmedBookingId = pendingBookingId
+        setPendingBookingId(null)
+        setPendingBookingData(null)
+        setShowReviewScreen(false)
+
+        Alert.alert(
+          'Payment Successful & Booking Confirmed! 🎉',
+          `Advance payment of ₹${razorpayOrderData?.amount_rupees || 'required amount'} received in Razorpay! We are now dispatching your ride to nearby verified drivers.`,
+          [
+            {
+              text: 'Track My Ride 📍',
+              onPress: () => navigation.navigate('BookingTrack', { bookingId: confirmedBookingId })
+            }
+          ]
+        )
+      } else {
+        throw new Error(verifyRes.data?.message || 'Payment signature could not be verified by server.')
+      }
+    } catch (err) {
+      const errMsg = err?.response?.data?.message || err?.message || 'Could not verify payment with Razorpay.'
+      Alert.alert('Payment Verification Failed ❌', errMsg + '\n\nYour ride was NOT confirmed.')
+      if (pendingBookingId) {
+        try {
+          await bookingsAPI.cancel(pendingBookingId, { reason: 'Payment verification failed: ' + errMsg })
+        } catch (e) {
+          console.warn('Could not cancel unverified booking:', e)
+        }
+        setPendingBookingId(null)
+        setPendingBookingData(null)
+      }
+    } finally {
+      setBookingLoading(false)
+    }
+  }
+
+  const handleRazorpayDismiss = async () => {
+    setShowRazorpayModal(false)
+    if (pendingBookingId) {
+      try {
+        await bookingsAPI.cancel(pendingBookingId, { reason: 'Advance payment cancelled by customer' })
+      } catch (e) {
+        console.warn('Could not cancel pending booking:', e)
+      }
+      setPendingBookingId(null)
+      setPendingBookingData(null)
+    }
+    setShowReviewScreen(false)
+    Alert.alert(
+      'Payment Cancelled ⚠️',
+      'Razorpay payment cancel seiyappattadhu. Payment complete aagaatha varai ungal ride confirm aagaadhu matrum driver assign aagaadhu.',
+      [{ text: 'OK' }]
+    )
+  }
+
+  const handleRazorpayFailure = async (errorMsg) => {
+    setShowRazorpayModal(false)
+    if (pendingBookingId) {
+      try {
+        await bookingsAPI.cancel(pendingBookingId, { reason: 'Payment failed: ' + (errorMsg || 'Gateway decline') })
+      } catch (e) {
+        console.warn('Could not cancel failed booking:', e)
+      }
+      setPendingBookingId(null)
+      setPendingBookingData(null)
+    }
+    setShowReviewScreen(false)
+    Alert.alert(
+      'Payment Failed ❌',
+      (errorMsg || 'Payment was declined or cancelled.') + '\n\nUnga account-il amount edukkappadaadhu matrum intha ride confirm aagaadhu.',
+      [{ text: 'OK' }]
+    )
+  }
+
   // Confirm and Create Booking
   const handleBookRide = async () => {
     if (!pickupCoords || !pickup?.trim()) {
@@ -1127,7 +1333,10 @@ export default function BookingScreen({ navigation, route }) {
     try {
       // Build structured preferences note string to guarantee display on all Admin panels & driver sheets
       const notesParts = []
-      if (passengerCount > 0) notesParts.push(`👥 Passengers: ${passengerCount} Person${passengerCount > 1 ? 's' : ''}`)
+      const totalPassengers = passengerCount + childrenCount
+      if (passengerCount > 0) notesParts.push(`👤 Adults: ${passengerCount}`)
+      if (childrenCount > 0) notesParts.push(`👶 Children: ${childrenCount}`)
+      if (totalPassengers > 0) notesParts.push(`👥 Total Pax: ${totalPassengers}`)
       if (hasIntermediateStop && intermediateStop?.trim()) notesParts.push(`🛑 Via Stop: ${intermediateStop.trim()}`)
       if (luggageCount > 0) notesParts.push(`🧳 Luggage: ${luggageCount} Bags`)
       if (hasPets) notesParts.push(`🐾 Traveling with Pets: Yes (+₹${petCharge})`)
@@ -1138,6 +1347,9 @@ export default function BookingScreen({ navigation, route }) {
         notesParts.push(`👤 Passenger: ${passengerName.trim()}${passengerPhone ? ` (${passengerPhone.trim()})` : ''}`)
       }
       const compiledNotes = notesParts.join(' | ')
+
+      const { advance: calculatedAdvance, cashPending: calculatedCashPending } = getTripCategoryAndAdvance(finalFare)
+      const isAdvanceNeeded = calculatedAdvance > 0
 
       const payload = {
         vehicle_type_id: selectedVt.id,
@@ -1152,7 +1364,11 @@ export default function BookingScreen({ navigation, route }) {
         duration_min: routeDurationMins || (isHourlyLocal ? (hourlyPackageHours * 60) : 15),
         fare: finalFare,
         final_fare: finalFare,
-        payment_method: paymentMethod,
+        advance_payment_amount: calculatedAdvance,
+        advance_online_payment: calculatedAdvance,
+        remaining_amount_to_driver: calculatedCashPending,
+        cash_pending: calculatedCashPending,
+        payment_method: (paymentMethod === 'cash' || !effectiveOutstation) ? 'cash' : (isAdvanceNeeded ? 'razorpay' : 'cash'),
         is_round_trip: isRoundTrip,
         is_emergency: 0,
         priority: 'standard',
@@ -1177,9 +1393,13 @@ export default function BookingScreen({ navigation, route }) {
         discount_amount: appliedCoupon?.discount_amount || 0,
         city_name: getDetectedCity() || '',
         notes: compiledNotes || null,
-        passenger_count: passengerCount,
-        passengers_count: passengerCount,
-        passengers: passengerCount,
+        passenger_count: totalPassengers,
+        passengers_count: totalPassengers,
+        passengers: totalPassengers,
+        adults_count: passengerCount,
+        adults: passengerCount,
+        children_count: childrenCount,
+        children: childrenCount,
         luggage_count: luggageCount,
         bags_count: luggageCount,
         has_pets: hasPets ? 1 : 0,
@@ -1209,6 +1429,30 @@ export default function BookingScreen({ navigation, route }) {
         }] : null,
       }
 
+      // Check if UPI QR advance payment is required
+      if (calculatedAdvance > 0) {
+        setBookingLoading(false)
+        setPendingBookingPayload(payload)
+        setAdvancePaymentData({
+          booking_id: null,
+          booking_ref: 'NEW_BOOKING',
+          amount_rupees: calculatedAdvance,
+          amount: calculatedAdvance,
+          upi_id: commissionSettings?.upi_id || 'vigneshbala2013@okaxis',
+          merchant_name: 'VIGNESH B',
+          banking_name: 'VIGNESH B',
+          payload: payload,
+          user: {
+            name: passengerName || user?.name || 'Customer',
+            email: passengerEmail || user?.email || 'customer@cabtaxi.com',
+            phone: passengerPhone || user?.phone || '9876543210'
+          }
+        })
+        setShowAdvanceQRModal(true)
+        return
+      }
+
+      // If ZERO advance is required (e.g. Local drop or 100% Cash to Driver), create booking directly
       const res = await bookingsAPI.create(payload)
       if (res.data?.status === 'success' && res.data?.booking_id) {
         setShowReviewScreen(false)
@@ -1661,22 +1905,52 @@ export default function BookingScreen({ navigation, route }) {
               </View>
 
               {/* Payment Method & Offers Row */}
-              <View style={styles.paymentOffersRow}>
-                <TouchableOpacity
-                  style={styles.methodSelectorPill}
-                  onPress={() => setShowPaymentModal(true)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name={paymentMethod === 'cash' ? 'cash-outline' : paymentMethod === 'razorpay' ? 'card-outline' : 'wallet-outline'}
-                    size={16}
-                    color="#0F172A"
-                  />
-                  <Text style={styles.methodSelectorText}>
-                    {paymentMethod === 'cash' ? 'Cash on Drop' : paymentMethod === 'razorpay' ? 'Razorpay Online' : 'Wallet'}
-                  </Text>
-                  <Ionicons name="chevron-forward" size={12} color="#64748B" />
-                </TouchableOpacity>
+              {(() => {
+                const bFare = parseFloat(selectedVt?.base_fare || 80)
+                const kRate = isRoundTrip
+                  ? parseFloat(selectedVt?.round_trip_per_km || selectedVt?.price_per_km || 20)
+                  : isOutstationTrip
+                    ? parseFloat(selectedVt?.one_way_per_km || selectedVt?.price_per_km || 18)
+                    : parseFloat(selectedVt?.price_per_km || 15)
+                const mRate = parseFloat(selectedVt?.price_per_min || 1.5)
+                const bDist = isRoundTrip ? routeDistanceKm * 2 : routeDistanceKm
+                const bMins = isRoundTrip ? routeDurationMins * 2 : routeDurationMins
+                let calc = (selectedVt && fareEstimates[selectedVt.id]) ? fareEstimates[selectedVt.id] : Math.round(bFare + (bDist * kRate) + (bMins * mRate))
+                if (isSharedTrip) calc *= 0.5
+                const disc = appliedCoupon?.discount_amount || 0
+                const curTotalFare = Math.max(30, Math.round(calc - disc))
+                const { advance, cashPending } = getTripCategoryAndAdvance(curTotalFare)
+
+                return (
+                  <View style={styles.paymentOffersRow}>
+                    <TouchableOpacity
+                      style={styles.methodSelectorPill}
+                      onPress={() => setShowPaymentModal(true)}
+                      activeOpacity={0.8}
+                    >
+                      {advance > 0 ? (
+                        <>
+                          <Ionicons name="qr-code-outline" size={15} color="#2563EB" />
+                          <Text style={[styles.methodSelectorText, { color: '#0F172A', fontWeight: '700' }]}>
+                            Advance: <Text style={{ color: '#2563EB', fontWeight: '800' }}>₹{advance}</Text>
+                          </Text>
+                          <View style={{ backgroundColor: '#EFF6FF', paddingHorizontal: 5, paddingVertical: 1.5, borderRadius: 4, marginLeft: 2 }}>
+                            <Text style={{ fontSize: 9.5, fontWeight: '800', color: '#1D4ED8' }}>UPI QR</Text>
+                          </View>
+                        </>
+                      ) : (
+                        <>
+                          <Ionicons name="cash" size={16} color="#16A34A" />
+                          <Text style={[styles.methodSelectorText, { color: '#0F172A', fontWeight: '700' }]}>
+                            Pay to Driver: <Text style={{ color: '#16A34A', fontWeight: '800' }}>₹{curTotalFare}</Text>
+                          </Text>
+                          <View style={{ backgroundColor: '#F0FDF4', paddingHorizontal: 5, paddingVertical: 1.5, borderRadius: 4, marginLeft: 2 }}>
+                            <Text style={{ fontSize: 9.5, fontWeight: '800', color: '#15803D' }}>Zero Adv</Text>
+                          </View>
+                        </>
+                      )}
+                      <Ionicons name="chevron-forward" size={12} color="#64748B" />
+                    </TouchableOpacity>
 
                 <TouchableOpacity
                   style={[
@@ -1714,6 +1988,8 @@ export default function BookingScreen({ navigation, route }) {
                   )}
                 </TouchableOpacity>
               </View>
+                )
+              })()}
 
               {/* Tollgate & Parking Notice Banner */}
               <View style={{
@@ -2891,35 +3167,102 @@ export default function BookingScreen({ navigation, route }) {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalContentCard}>
             <View style={styles.modalHeaderRow}>
-              <Text style={styles.modalTitle}>Choose Payment Method</Text>
+              <Text style={styles.modalTitle}>Payment Breakdown & Method</Text>
               <TouchableOpacity onPress={() => setShowPaymentModal(false)}>
                 <Ionicons name="close" size={20} color="#64748B" />
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              style={[styles.payOptionItem, paymentMethod === 'cash' && styles.payOptionItemSelected]}
-              onPress={() => { setPaymentMethod('cash'); setShowPaymentModal(false); }}
-            >
-              <Ionicons name="cash-outline" size={20} color="#10B981" />
-              <View style={{ marginLeft: 12, flex: 1 }}>
-                <Text style={styles.payOptionTitle}>Cash on Drop</Text>
-                <Text style={styles.payOptionSub}>Pay driver after completing your trip</Text>
-              </View>
-              {paymentMethod === 'cash' && <Ionicons name="checkmark-circle" size={20} color="#D97706" />}
-            </TouchableOpacity>
+            {(() => {
+              const bFare = parseFloat(selectedVt?.base_fare || 80)
+              const kRate = isRoundTrip
+                ? parseFloat(selectedVt?.round_trip_per_km || selectedVt?.price_per_km || 20)
+                : isOutstationTrip
+                  ? parseFloat(selectedVt?.one_way_per_km || selectedVt?.price_per_km || 18)
+                  : parseFloat(selectedVt?.price_per_km || 15)
+              const mRate = parseFloat(selectedVt?.price_per_min || 1.5)
+              const bDist = isRoundTrip ? routeDistanceKm * 2 : routeDistanceKm
+              const bMins = isRoundTrip ? routeDurationMins * 2 : routeDurationMins
+              let calc = (selectedVt && fareEstimates[selectedVt.id]) ? fareEstimates[selectedVt.id] : Math.round(bFare + (bDist * kRate) + (bMins * mRate))
+              if (isSharedTrip) calc *= 0.5
+              const disc = appliedCoupon?.discount_amount || 0
+              const curTotalFare = Math.max(30, Math.round(calc - disc))
+              const { label, commType, commVal, advance, cashPending } = getTripCategoryAndAdvance(curTotalFare)
 
-            <TouchableOpacity
-              style={[styles.payOptionItem, paymentMethod === 'razorpay' && styles.payOptionItemSelected]}
-              onPress={() => { setPaymentMethod('razorpay'); setShowPaymentModal(false); }}
-            >
-              <Ionicons name="card-outline" size={20} color="#D97706" />
-              <View style={{ marginLeft: 12, flex: 1 }}>
-                <Text style={styles.payOptionTitle}>Online Payment (Razorpay)</Text>
-                <Text style={styles.payOptionSub}>UPI, Google Pay, PhonePe, Cards, Netbanking</Text>
-              </View>
-              {paymentMethod === 'razorpay' && <Ionicons name="checkmark-circle" size={20} color="#D97706" />}
-            </TouchableOpacity>
+              if (advance > 0) {
+                return (
+                  <View style={{ gap: 10 }}>
+                    {/* Advance online UPI QR card */}
+                    <View style={{ padding: 14, backgroundColor: '#EFF6FF', borderRadius: 12, borderWidth: 1.5, borderColor: '#3B82F6' }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Ionicons name="qr-code" size={18} color="#2563EB" />
+                          <Text style={{ fontSize: 13, fontWeight: '800', color: '#1E40AF' }}>
+                            UPI QR Advance: ₹{advance}
+                          </Text>
+                        </View>
+                        <View style={{ paddingHorizontal: 6, paddingVertical: 1.5, backgroundColor: '#DBEAFE', borderRadius: 4 }}>
+                          <Text style={{ fontSize: 10, fontWeight: '800', color: '#1E40AF' }}>
+                            {commType === 'percentage' ? `${commVal}%` : `₹${commVal}`} Required
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={{ fontSize: 11, color: '#3B82F6', lineHeight: 16 }}>
+                        Pay advance ₹{advance} instantly using UPI QR Code (Google Pay, PhonePe, Paytm) to confirm your booking and assign the nearest driver.
+                      </Text>
+                    </View>
+
+                    {/* Driver cash pending card */}
+                    <View style={{ padding: 14, backgroundColor: '#F8FAFC', borderRadius: 12, borderWidth: 1, borderColor: '#CBD5E1' }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                        <Ionicons name="cash-outline" size={18} color="#059669" />
+                        <Text style={{ fontSize: 13, fontWeight: '800', color: '#0F172A' }}>
+                          Balance to Driver on Drop: ₹{cashPending}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 11, color: '#64748B', lineHeight: 16 }}>
+                        Pay the remaining ₹{cashPending} balance directly to your driver via Cash or UPI upon reaching your destination.
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={{ marginTop: 8, paddingVertical: 12, backgroundColor: '#0F172A', borderRadius: 10, alignItems: 'center' }}
+                      onPress={() => setShowPaymentModal(false)}
+                    >
+                      <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>Got It</Text>
+                    </TouchableOpacity>
+                  </View>
+                )
+              }
+
+              return (
+                <View style={{ gap: 10 }}>
+                  <View style={{ padding: 14, backgroundColor: '#F0FDF4', borderRadius: 12, borderWidth: 1.5, borderColor: '#16A34A' }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons name="cash" size={18} color="#16A34A" />
+                        <Text style={{ fontSize: 13, fontWeight: '800', color: '#166534' }}>
+                          Pay Full Fare to Driver: ₹{curTotalFare}
+                        </Text>
+                      </View>
+                      <View style={{ paddingHorizontal: 6, paddingVertical: 1.5, backgroundColor: '#DCFCE7', borderRadius: 4 }}>
+                        <Text style={{ fontSize: 10, fontWeight: '800', color: '#166534' }}>Zero Advance</Text>
+                      </View>
+                    </View>
+                    <Text style={{ fontSize: 11, color: '#15803D', lineHeight: 16 }}>
+                      Zero advance required for this ride! Driver will collect the total ₹{curTotalFare} trip fare in cash or QR upon drop.
+                    </Text>
+                  </View>
+
+                  <TouchableOpacity
+                    style={{ marginTop: 8, paddingVertical: 12, backgroundColor: '#0F172A', borderRadius: 10, alignItems: 'center' }}
+                    onPress={() => setShowPaymentModal(false)}
+                  >
+                    <Text style={{ color: '#FFFFFF', fontSize: 13, fontWeight: '800' }}>Got It</Text>
+                  </TouchableOpacity>
+                </View>
+              )
+            })()}
           </View>
         </View>
       </Modal>
@@ -3209,12 +3552,12 @@ export default function BookingScreen({ navigation, route }) {
                 </TouchableOpacity>
               </View>
 
-              {/* Item: Total Persons / Passengers Stepper */}
+              {/* Item: Adults Stepper */}
               <View style={reviewStyles.optItemRow}>
-                <Ionicons name="people-outline" size={20} color="#0F172A" style={{ marginTop: 2 }} />
+                <Ionicons name="person-outline" size={20} color="#0F172A" style={{ marginTop: 2 }} />
                 <View style={{ flex: 1, marginHorizontal: 12 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <Text style={reviewStyles.optItemTitle}>Total Persons / Passengers</Text>
+                    <Text style={reviewStyles.optItemTitle}>Adults (12+ yrs)</Text>
                     <View style={{
                       paddingHorizontal: 6,
                       paddingVertical: 2,
@@ -3228,7 +3571,7 @@ export default function BookingScreen({ navigation, route }) {
                       </Text>
                     </View>
                   </View>
-                  <Text style={reviewStyles.optItemSub}>Total people traveling in this ride</Text>
+                  <Text style={reviewStyles.optItemSub}>Adult travelers</Text>
                 </View>
                 <View style={reviewStyles.stepperWrap}>
                   <TouchableOpacity
@@ -3238,15 +3581,48 @@ export default function BookingScreen({ navigation, route }) {
                   >
                     <Ionicons name="remove" size={16} color="#0F172A" />
                   </TouchableOpacity>
-                  <Text style={reviewStyles.stepperVal}>{passengerCount} {passengerCount === 1 ? 'Person' : 'Persons'}</Text>
+                  <Text style={reviewStyles.stepperVal}>{passengerCount} {passengerCount === 1 ? 'Adult' : 'Adults'}</Text>
                   <TouchableOpacity
                     onPress={() => {
                       const maxPax = selectedVt?.passenger_capacity || (isSUVSelected ? 7 : (selectedVt?.name?.includes('3') ? 3 : 4))
-                      if (passengerCount >= maxPax) {
+                      if (passengerCount + childrenCount >= maxPax) {
                         Alert.alert('Vehicle Capacity Limit', `Selected vehicle (${selectedVt?.name || 'Cab'}) seats up to ${maxPax} passengers.`)
                         return
                       }
                       setPassengerCount(passengerCount + 1)
+                    }}
+                    style={[reviewStyles.stepperBtn, { backgroundColor: '#FEF3C7' }]}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="add" size={16} color="#D97706" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Item: Children Stepper */}
+              <View style={reviewStyles.optItemRow}>
+                <Ionicons name="happy-outline" size={20} color="#0F172A" style={{ marginTop: 2 }} />
+                <View style={{ flex: 1, marginHorizontal: 12 }}>
+                  <Text style={reviewStyles.optItemTitle}>Children</Text>
+                  <Text style={reviewStyles.optItemSub}>Kids traveling with family</Text>
+                </View>
+                <View style={reviewStyles.stepperWrap}>
+                  <TouchableOpacity
+                    onPress={() => setChildrenCount(Math.max(0, childrenCount - 1))}
+                    style={reviewStyles.stepperBtn}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="remove" size={16} color="#0F172A" />
+                  </TouchableOpacity>
+                  <Text style={reviewStyles.stepperVal}>{childrenCount} {childrenCount === 1 ? 'Child' : 'Children'}</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      const maxPax = selectedVt?.passenger_capacity || (isSUVSelected ? 7 : (selectedVt?.name?.includes('3') ? 3 : 4))
+                      if (passengerCount + childrenCount >= maxPax) {
+                        Alert.alert('Vehicle Capacity Limit', `Selected vehicle (${selectedVt?.name || 'Cab'}) seats up to ${maxPax} passengers.`)
+                        return
+                      }
+                      setChildrenCount(childrenCount + 1)
                     }}
                     style={[reviewStyles.stepperBtn, { backgroundColor: '#FEF3C7' }]}
                     activeOpacity={0.7}
@@ -3460,70 +3836,125 @@ export default function BookingScreen({ navigation, route }) {
 
           {/* Sticky Bottom Bar */}
           <View style={[reviewStyles.bottomStickyBar, { paddingBottom: Math.max(16, insets.bottom + 8) }]}>
-            <View style={reviewStyles.bottomActionRow}>
-              <TouchableOpacity
-                onPress={() => setShowFareDetailModal(true)}
-                style={{ flex: 1 }}
-                activeOpacity={0.8}
-              >
-                <Text style={reviewStyles.totalFareLabel}>Total Fare</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                  <Text style={reviewStyles.totalFareAmount}>
-                    ₹{(() => {
-                      const activeV = vehicleTypes.find(v => v.id === selectedType) || vehicleTypes[0]
-                      if (!activeV) return 7215
-                      const bFare = parseFloat(activeV.base_fare || 80)
-                      const kRate = isRoundTrip
-                        ? parseFloat(activeV.round_trip_per_km || activeV.price_per_km || 20)
-                        : isOutstationTrip
-                          ? parseFloat(activeV.one_way_per_km || activeV.price_per_km || 18)
-                          : parseFloat(activeV.price_per_km || 15)
-                      const mRate = parseFloat(activeV.price_per_min || 1.5)
-                      const bDist = isRoundTrip ? routeDistanceKm * 2 : routeDistanceKm
-                      const bMins = isRoundTrip ? routeDurationMins * 2 : routeDurationMins
-                      let calc = fareEstimates[activeV.id] || Math.round(bFare + (bDist * kRate) + (bMins * mRate))
-                      if (isSharedTrip) calc *= 0.5
-                      const waitHourlyRate = parseFloat(activeV.waiting_charge_per_hour || (activeV.waiting_charge_per_min ? activeV.waiting_charge_per_min * 60 : (activeV.waiting_charge ? activeV.waiting_charge * 60 : 100)))
-                      const waitingCharge = waitingHours > 0 ? Math.round(waitingHours * waitHourlyRate) : 0
-                      const petCharge = hasPets ? adminPetCharge : 0
-                      const rooftopCharge = (isSUVSelected && rooftopCarrier) ? adminRooftopCharge : 0
-                      const disc = appliedCoupon?.discount_amount || 0
-                      return Math.max(30, Math.round(calc + waitingCharge + petCharge + rooftopCharge - disc))
-                    })()}
-                  </Text>
-                  <Ionicons name="chevron-down" size={16} color="#0F172A" />
-                </View>
-                <Text style={{ fontSize: 10, color: '#D97706', fontWeight: '800', marginTop: 2 }}>
-                  * Tollgate &amp; parking extra
-                </Text>
-              </TouchableOpacity>
+            {(() => {
+              const activeV = vehicleTypes.find(v => v.id === selectedType) || vehicleTypes[0]
+              if (!activeV) return null
+              const bFare = parseFloat(activeV.base_fare || 80)
+              const kRate = isRoundTrip
+                ? parseFloat(activeV.round_trip_per_km || activeV.price_per_km || 20)
+                : isOutstationTrip
+                  ? parseFloat(activeV.one_way_per_km || activeV.price_per_km || 18)
+                  : parseFloat(activeV.price_per_km || 15)
+              const mRate = parseFloat(activeV.price_per_min || 1.5)
+              const bDist = isRoundTrip ? routeDistanceKm * 2 : routeDistanceKm
+              const bMins = isRoundTrip ? routeDurationMins * 2 : routeDurationMins
+              let calc = fareEstimates[activeV.id] || Math.round(bFare + (bDist * kRate) + (bMins * mRate))
+              if (isSharedTrip) calc *= 0.5
+              const waitHourlyRate = parseFloat(activeV.waiting_charge_per_hour || (activeV.waiting_charge_per_min ? activeV.waiting_charge_per_min * 60 : (activeV.waiting_charge ? activeV.waiting_charge * 60 : 100)))
+              const waitingCharge = waitingHours > 0 ? Math.round(waitingHours * waitHourlyRate) : 0
+              const petCharge = hasPets ? adminPetCharge : 0
+              const rooftopCharge = (isSUVSelected && rooftopCarrier) ? adminRooftopCharge : 0
+              const disc = appliedCoupon?.discount_amount || 0
+              const curTotalFare = Math.max(30, Math.round(calc + waitingCharge + petCharge + rooftopCharge - disc))
+              const { category, label, commType, commVal, advance, cashPending } = getTripCategoryAndAdvance(curTotalFare)
 
-              <TouchableOpacity
-                style={reviewStyles.confirmBookingBtn}
-                onPress={handleBookRide}
-                disabled={bookingLoading}
-                activeOpacity={0.88}
-              >
-                {bookingLoading ? (
-                  <ActivityIndicator color="#0F172A" size="small" />
-                ) : (
-                  <>
-                    <Text style={reviewStyles.confirmBtnText}>Confirm Booking</Text>
-                    <Ionicons name="chevron-forward" size={16} color="#0F172A" />
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
+              return (
+                <>
+                  <View style={{ marginBottom: 10, padding: 10, backgroundColor: advance > 0 ? '#EFF6FF' : '#F0FDF4', borderRadius: 12, borderWidth: 1, borderColor: advance > 0 ? '#BFDBFE' : '#BBF7D0' }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: '#64748B' }}>
+                        Category: <Text style={{ color: '#0F172A', fontWeight: '800' }}>{label}</Text>
+                      </Text>
+                      <View style={{ paddingHorizontal: 6, paddingVertical: 1.5, backgroundColor: advance > 0 ? '#DBEAFE' : '#DCFCE7', borderRadius: 4, borderWidth: 1, borderColor: advance > 0 ? '#93C5FD' : '#86EFAC' }}>
+                        <Text style={{ fontSize: 10, fontWeight: '800', color: advance > 0 ? '#1D4ED8' : '#166534' }}>
+                          {advance > 0 ? (commType === 'percentage' ? `${commVal}% Advance` : `₹${commVal} Fixed`) : 'Zero Advance'}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 2 }}>
+                      {advance > 0 ? (
+                        <>
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: '#1D4ED8' }}>
+                            📱 UPI QR Advance: ₹{advance}
+                          </Text>
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: '#059669' }}>
+                            💵 Cash to Driver: ₹{cashPending}
+                          </Text>
+                        </>
+                      ) : (
+                        <Text style={{ fontSize: 12, fontWeight: '800', color: '#166534' }}>
+                          💵 Total Fare: ₹{curTotalFare} (Pay to Driver on Ride)
+                        </Text>
+                      )}
+                    </View>
+                  </View>
 
-            <View style={reviewStyles.zeroAdvanceRow}>
-              <Ionicons name="checkmark-circle" size={14} color="#16A34A" />
-              <Text style={reviewStyles.zeroAdvanceText}>
-                Zero Advance &bull; Pay after ride &bull; Tollgate &amp; parking extra as per actuals
-              </Text>
-            </View>
+                  <View style={reviewStyles.bottomActionRow}>
+                    <TouchableOpacity
+                      onPress={() => setShowFareDetailModal(true)}
+                      style={{ flex: 1 }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={reviewStyles.totalFareLabel}>Total Fare</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+                        <Text style={reviewStyles.totalFareAmount}>₹{curTotalFare}</Text>
+                        <Ionicons name="chevron-down" size={16} color="#0F172A" />
+                      </View>
+                      <Text style={{ fontSize: 10, color: '#D97706', fontWeight: '800', marginTop: 2 }}>
+                        * Tollgate &amp; parking extra
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[reviewStyles.confirmBookingBtn, advance === 0 && { backgroundColor: '#10B981' }]}
+                      onPress={handleBookRide}
+                      disabled={bookingLoading}
+                      activeOpacity={0.88}
+                    >
+                      {bookingLoading ? (
+                        <ActivityIndicator color={advance === 0 ? '#FFFFFF' : '#0F172A'} size="small" />
+                      ) : (
+                        <>
+                          <Text style={[reviewStyles.confirmBtnText, advance === 0 && { color: '#FFFFFF' }]}>
+                            {advance > 0 ? `Pay Advance ₹${advance} Confirm` : `Confirm Ride (Pay ₹${curTotalFare})`}
+                          </Text>
+                          <Ionicons name="chevron-forward" size={16} color={advance === 0 ? '#FFFFFF' : '#0F172A'} />
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={reviewStyles.zeroAdvanceRow}>
+                    <Ionicons name={advance > 0 ? "qr-code-outline" : "shield-checkmark"} size={14} color={advance > 0 ? "#2563EB" : "#16A34A"} />
+                    <Text style={reviewStyles.zeroAdvanceText}>
+                      {advance > 0
+                        ? `UPI QR Advance Required (₹${advance}) • Driver collects ₹${cashPending} at drop`
+                        : `Zero Advance Required • Driver collects total ₹${curTotalFare} at drop`}
+                    </Text>
+                  </View>
+                </>
+              )
+            })()}
           </View>
         </SafeAreaView>
       </Modal>
+
+      {/* ── UPI QR Online Advance Checkout Modal ── */}
+      <AdvancePaymentQRModal
+        visible={showAdvanceQRModal}
+        onClose={handleAdvanceQRDismiss}
+        onSuccess={handleAdvanceQRSuccess}
+        paymentData={advancePaymentData}
+      />
+
+      {/* ── Razorpay Online Advance Checkout Modal (Fallback) ── */}
+      <RazorpayCheckoutModal
+        visible={showRazorpayModal}
+        onClose={handleRazorpayDismiss}
+        onSuccess={handleRazorpaySuccess}
+        onFailure={handleRazorpayFailure}
+        paymentData={razorpayOrderData}
+      />
 
       {/* ── Edit Passenger Details Modal ── */}
       <Modal visible={showEditPassengerModal} transparent animationType="fade">

@@ -22,12 +22,13 @@ import {
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect, useIsFocused } from '@react-navigation/native'
-import { Ionicons } from '@expo/vector-icons'
+import { Ionicons, FontAwesome5 } from '@expo/vector-icons'
 import * as Location from 'expo-location'
 import * as ImagePicker from 'expo-image-picker'
 import * as SecureStore from 'expo-secure-store'
 import { driverAPI, adsAPI, longTripAPI, notifAPI, uploadAPI, settingsAPI, reviewsAPI, createUploadFormData, resolveAssetUrl } from '../../api/api'
 import { useAuth } from '../../context/AuthContext'
+import { startDriverForegroundService, stopDriverForegroundService } from '../../services/DriverForegroundService'
 
 // Module-level persistent cache of dismissed cancelled trip IDs (guarantees alert shows exactly ONCE across screens/tabs)
 const acknowledgedCancelledTripIds = new Set()
@@ -142,8 +143,8 @@ const parseAddressDetails = (addr, type = 'pickup') => {
     districtCandidate = effectiveParts[effectiveParts.length - 2]
   }
 
-  const mainCandidate = effectiveParts.length >= 2 
-    ? effectiveParts[effectiveParts.length - 2] 
+  const mainCandidate = effectiveParts.length >= 2
+    ? effectiveParts[effectiveParts.length - 2]
     : effectiveParts[0]
 
   return {
@@ -165,7 +166,7 @@ const formatTripScheduleDate = (dateStr, timeStr) => {
     const month = dt.toLocaleString('en-US', { month: 'short' })
     const nth = (d % 10 === 1 && d !== 11) ? 'st'
       : (d % 10 === 2 && d !== 12) ? 'nd'
-      : (d % 10 === 3 && d !== 13) ? 'rd' : 'th'
+        : (d % 10 === 3 && d !== 13) ? 'rd' : 'th'
     const formattedDate = `${month} ${d}${nth} ${y}`
     const timeFormatted = timeStr ? formatTime12Hr(timeStr) : ''
     return timeFormatted && timeFormatted !== '—' ? `${formattedDate}, ${timeFormatted.toLowerCase()}` : formattedDate
@@ -212,6 +213,138 @@ const getDeduplicatedNotes = (rawNotes, isLocked = false) => {
   }
 
   return Array.from(categoryMap.values())
+}
+
+// ── Exact Passenger Information Extractor & Component (Adults, Children, Luggage, Pet, Rooftop Carrier) ──
+const extractPassengerInfo = (trip) => {
+  if (!trip) return { adults: 1, children: 0, luggage: 0, pet: 'No', rooftop: 'No', hasPet: false, hasRooftop: false }
+
+  let luggage = Number(trip.luggage_count ?? trip.bags_count ?? trip.bags ?? 0)
+
+  let hasPet = Boolean(
+    trip.has_pets === 1 || trip.has_pets === '1' || trip.has_pets === true ||
+    trip.pets === 1 || trip.pets === '1' || trip.pets === true ||
+    trip.traveling_with_pets === 1 || trip.traveling_with_pets === '1' || trip.traveling_with_pets === true
+  )
+
+  let hasRooftop = Boolean(
+    trip.rooftop_carrier === 1 || trip.rooftop_carrier === '1' || trip.rooftop_carrier === true ||
+    trip.roof_carrier === 1 || trip.roof_carrier === '1' || trip.roof_carrier === true ||
+    trip.rooftop === 1 || trip.rooftop === '1' || trip.rooftop === true
+  )
+
+  let adults = Number(trip.adults_count ?? trip.adults ?? trip.passenger_count ?? trip.passengers_count ?? trip.passengers ?? 1)
+  let children = Number(trip.children_count ?? trip.children ?? trip.kids ?? 0)
+
+  // Also parse from notes string if present
+  const notes = (trip.notes || trip.driver_instructions || '').toString()
+  if (notes) {
+    const adultMatch = notes.match(/(\d+)\s*Adults?/i)
+    if (adultMatch && adultMatch[1]) {
+      adults = Number(adultMatch[1])
+    } else {
+      const paxMatch = notes.match(/Passengers?:\s*(\d+)/i)
+      if (paxMatch && paxMatch[1]) adults = Number(paxMatch[1])
+    }
+
+    const childMatch = notes.match(/Child(?:ren)?:\s*(\d+)/i) || notes.match(/(\d+)\s*Child(?:ren)?/i)
+    if (childMatch && childMatch[1]) children = Number(childMatch[1])
+
+    const luggMatch = notes.match(/Luggage:\s*(\d+)/i) || notes.match(/(\d+)\s*Bags?/i)
+    if (luggMatch && luggMatch[1]) luggage = Number(luggMatch[1])
+
+    if (notes.match(/pet/i) && (notes.match(/pet.*yes/i) || notes.match(/with pet/i) || notes.match(/traveling with pet/i))) {
+      hasPet = true
+    }
+    if (notes.match(/rooftop.*yes/i) || notes.match(/roof.*carrier/i) || notes.match(/rooftop carrier/i)) {
+      hasRooftop = true
+    }
+  }
+
+  return {
+    adults: Math.max(1, adults),
+    children: Math.max(0, children),
+    luggage: Math.max(0, luggage),
+    pet: hasPet ? 'Yes' : 'No',
+    rooftop: hasRooftop ? 'Yes' : 'No',
+    hasPet,
+    hasRooftop,
+  }
+}
+
+const PassengerInfoCard = ({ trip, style, isDark = false }) => {
+  if (!trip) return null
+  const info = extractPassengerInfo(trip)
+
+  return (
+    <View style={[
+      styles.paxInfoCard,
+      isDark && { backgroundColor: '#1E293B', borderColor: '#334155' },
+      style
+    ]}>
+      <Text style={[styles.paxInfoTitle, isDark && { color: '#F1F5F9' }]}>Passenger Information</Text>
+
+      <View style={styles.paxInfoRow}>
+        {/* 1. Adult */}
+        <View style={styles.paxInfoCol}>
+          <Ionicons name="person" size={24} color="#D97706" />
+          <Text style={[styles.paxInfoVal, isDark && { color: '#F8FAFC' }]}>{info.adults}</Text>
+        </View>
+
+        {/* 2. Child */}
+        <View style={styles.paxInfoCol}>
+          <FontAwesome5 name="child" size={22} color="#D97706" />
+          <Text style={[styles.paxInfoVal, isDark && { color: '#F8FAFC' }]}>{info.children}</Text>
+        </View>
+
+        {/* 3. Luggage */}
+        <View style={styles.paxInfoCol}>
+          <Ionicons name="briefcase" size={24} color="#D97706" />
+          <Text style={[styles.paxInfoVal, isDark && { color: '#F8FAFC' }]}>{info.luggage}</Text>
+        </View>
+
+        {/* 4. Pet */}
+        <View style={styles.paxInfoCol}>
+          <Ionicons name="paw" size={24} color="#D97706" />
+          <Text style={[
+            styles.paxInfoVal,
+            info.hasPet ? { color: '#10B981', fontWeight: '800' } : (isDark && { color: '#F8FAFC' })
+          ]}>
+            {info.pet}
+          </Text>
+        </View>
+
+        {/* 5. Rooftop Carrier */}
+        <View style={styles.paxInfoCol}>
+          <Ionicons name="car" size={24} color={info.hasRooftop ? "#D97706" : (isDark ? "#64748B" : "#CBD5E1")} />
+          <Text style={[
+            styles.paxInfoVal,
+            info.hasRooftop ? { color: '#B45309', fontWeight: '800' } : (isDark && { color: '#94A3B8' })
+          ]}>
+            {info.rooftop}
+          </Text>
+        </View>
+      </View>
+
+      {/* Prominent Callout Badges if Rooftop or Pets are requested */}
+      {(info.hasRooftop || info.hasPet) && (
+        <View style={styles.paxSpecialBadgeRow}>
+          {info.hasRooftop && (
+            <View style={styles.paxRooftopPill}>
+              <Ionicons name="car" size={13} color="#92400E" />
+              <Text style={styles.paxRooftopText}>Rooftop Luggage Carrier Requested</Text>
+            </View>
+          )}
+          {info.hasPet && (
+            <View style={styles.paxPetPill}>
+              <Ionicons name="paw" size={13} color="#065F46" />
+              <Text style={styles.paxPetText}>Traveling with Pets</Text>
+            </View>
+          )}
+        </View>
+      )}
+    </View>
+  )
 }
 
 const DriverWaitingTimerCard = ({ arrivedAt, freeWaitingMins = 5, waitingRate = 2, categoryName = 'Taxi' }) => {
@@ -343,7 +476,7 @@ const AnimatedBrandWatermark = () => {
   const pulseAnim = useRef(new Animated.Value(1)).current
   const radarAnim = useRef(new Animated.Value(0)).current
   const floatAnim = useRef(new Animated.Value(0)).current
-  const glowAnim  = useRef(new Animated.Value(0.7)).current
+  const glowAnim = useRef(new Animated.Value(0.7)).current
 
   useEffect(() => {
     // 1. Subtle breathing / pulse animation on the logo emblem
@@ -501,6 +634,31 @@ const DriverHomeScreen = ({ navigation }) => {
   const [collapsedNotes, setCollapsedNotes] = useState({})
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
 
+  // Keep driver app running in background when Online via Android Foreground Service
+  useEffect(() => {
+    if (isOnline) {
+      startDriverForegroundService().then((res) => {
+        if (res && res.isBgGranted === false && Platform.OS === 'android') {
+          Alert.alert(
+            'Background Alerts Permission 🔔',
+            'YouTube அல்லது வேறு App பயன்படுத்தும்போது Booking சத்தம் (Alert Sound) கேட்க, Settings-ல் Location Permission-ஐ "Allow all the time" (எப்பொழுதும் அனுமதி) என்று மாற்றவும்.',
+            [
+              { text: 'Later', style: 'cancel' },
+              {
+                text: 'Open Settings',
+                onPress: () => {
+                  try { Linking.openSettings() } catch { }
+                }
+              }
+            ]
+          )
+        }
+      }).catch(() => { })
+    } else {
+      stopDriverForegroundService().catch(() => { })
+    }
+  }, [isOnline])
+
   // New Telemetry, Performance & Dashboard States
   const [currentCity, setCurrentCity] = useState('')
   const [currentArea, setCurrentArea] = useState('')
@@ -556,6 +714,7 @@ const DriverHomeScreen = ({ navigation }) => {
   const timerRef = useRef(null)
   const incomingIdRef = useRef(null)
   const alertedAssignedTripIdRef = useRef(null)
+  const dismissedAlertTripIdRef = useRef(null)
   const alertedPendingTripIdRef = useRef(null)
   const prevUnreadNotifCountRef = useRef(null)
   const prevActiveRideRef = useRef(null)
@@ -608,7 +767,7 @@ const DriverHomeScreen = ({ navigation }) => {
         if (val === '1') {
           setStartedHeadingRides(prev => new Set(prev).add(activeRide.id))
         }
-      }).catch(() => {})
+      }).catch(() => { })
       const isTripMoving = ['trip_started', 'in_progress', 'return_started', 'return_in_progress'].includes(activeRide.status)
       if (isTripMoving) {
         const rideKey = `gps_odometer_${activeRide.id}`
@@ -622,7 +781,7 @@ const DriverHomeScreen = ({ navigation }) => {
               }
             }
           })
-          .catch(() => {})
+          .catch(() => { })
       }
     }
   }, [activeRide])
@@ -650,7 +809,7 @@ const DriverHomeScreen = ({ navigation }) => {
             setTripGpsTrackedDistanceKm(storedVal)
           }
         }
-      } catch {}
+      } catch { }
     }
 
     if (lastTripGpsCoordRef.current) {
@@ -667,7 +826,7 @@ const DriverHomeScreen = ({ navigation }) => {
         setTripGpsTrackedDistanceKm(rounded)
         try {
           await SecureStore.setItemAsync(rideKey, String(rounded))
-        } catch {}
+        } catch { }
       }
     }
     lastTripGpsCoordRef.current = { lat, lng }
@@ -705,7 +864,7 @@ const DriverHomeScreen = ({ navigation }) => {
         setLastUpdatedTime(timeStr)
         return { area, city, address }
       }
-    } catch (e) {}
+    } catch (e) { }
     return { area: '', city: '', address: '' }
   }, [])
 
@@ -725,7 +884,7 @@ const DriverHomeScreen = ({ navigation }) => {
         latitude: lastGeoRef.current.lat || undefined,
         longitude: lastGeoRef.current.lng || undefined,
       }
-      const [dashRes, schedRes, activeRes, pendingRes, adRes, notifRes, tripsRes, earnRes, sysSettingsRes, revRes] = await Promise.allSettled([
+      const [dashRes, schedRes, activeRes, pendingRes, adRes, notifRes, tripsRes, earnRes, sysSettingsRes, revRes, profRes] = await Promise.allSettled([
         driverAPI.dashboard(),
         longTripAPI.assignedScheduledTrips(),
         driverAPI.activeBooking(),
@@ -736,7 +895,13 @@ const DriverHomeScreen = ({ navigation }) => {
         driverAPI.earnings('week'),
         settingsAPI.list(),
         user?.id ? reviewsAPI.listForUser(user.id, 'driver') : Promise.resolve({ data: { reviews: [] } }),
+        driverAPI.profile(),
       ])
+
+      // Extract profile driver info (contains full service_types, wallet_balance, etc.)
+      const profDriver = (profRes?.status === 'fulfilled' && (profRes.value.data?.driver || profRes.value.data?.data))
+        ? (profRes.value.data.driver || profRes.value.data.data)
+        : {}
 
       // 1. Dashboard payload & Admin System Settings Target
       let adminTarget = null
@@ -757,12 +922,31 @@ const DriverHomeScreen = ({ navigation }) => {
       if (dashRes.status === 'fulfilled' && dashRes.value.data?.status === 'success') {
         const dData = dashRes.value.data
         if (dData.driver) {
-          const mergedDriver = { ...(user || {}), ...dData.driver }
+          const mergedDriver = { ...(user || {}), ...profDriver, ...dData.driver }
+          if (profDriver.service_types) mergedDriver.service_types = profDriver.service_types
+          if (profDriver.wallet_balance !== undefined) mergedDriver.wallet_balance = profDriver.wallet_balance
+          try {
+            const storedBal = await SecureStore.getItemAsync('driver_wallet_balance')
+            if (storedBal !== null && !isNaN(Number(storedBal))) mergedDriver.wallet_balance = Number(storedBal)
+          } catch {}
+          if (profDriver.local_trip_enabled !== undefined) mergedDriver.local_trip_enabled = profDriver.local_trip_enabled
+          const sSettings = sysSettingsRes.status === 'fulfilled' ? (sysSettingsRes.value?.data?.settings || {}) : {}
+          const resolvedMinWallet = Number(
+            sSettings.min_wallet_for_outstation
+            ?? sSettings.driver_min_wallet_balance
+            ?? dData.min_wallet_required
+            ?? dData.driver?.min_wallet_required
+            ?? profDriver.min_wallet_required
+            ?? 500
+          )
+          mergedDriver.min_wallet_required = resolvedMinWallet
+          mergedDriver.outstation_wallet_eligible = Number(mergedDriver.wallet_balance || 0) >= resolvedMinWallet
           setDriver(mergedDriver)
-          const isKycApproved = (mergedDriver.approval_status || '').toLowerCase() === 'approved' ||
-                                (mergedDriver.verification_status || '').toLowerCase() === 'approved' ||
-                                (mergedDriver.verification_status || '').toLowerCase() === 'verified' ||
-                                (mergedDriver.kyc_status || '').toLowerCase() === 'approved'
+          const isKycApproved = (
+            (mergedDriver.verification_status || '').toLowerCase() === 'approved' ||
+            (mergedDriver.verification_status || '').toLowerCase() === 'verified' ||
+            (mergedDriver.kyc_status || '').toLowerCase() === 'approved'
+          )
           setIsOnline(isKycApproved ? Boolean(mergedDriver.is_online) : false)
         }
 
@@ -789,13 +973,18 @@ const DriverHomeScreen = ({ navigation }) => {
           daily_target_trips: resolvedTrips,
           target_bonus: resolvedBonus,
         })
-      } else if (adminTarget) {
-        setStats(prev => ({
-          ...(prev || {}),
-          daily_target: adminTarget,
-          daily_target_trips: adminTargetTrips || 10,
-          target_bonus: adminBonus || 200,
-        }))
+      } else {
+        if (profDriver && Object.keys(profDriver).length > 0) {
+          setDriver(prev => ({ ...(user || {}), ...prev, ...profDriver }))
+        }
+        if (adminTarget) {
+          setStats(prev => ({
+            ...(prev || {}),
+            daily_target: adminTarget,
+            daily_target_trips: adminTargetTrips || 10,
+            target_bonus: adminBonus || 200,
+          }))
+        }
       }
 
       // Purge any stale or invalid entries from decline sets
@@ -820,7 +1009,7 @@ const DriverHomeScreen = ({ navigation }) => {
           const tIds = [getCleanId(t.id), getCleanId(t.long_trip_id), getCleanId(t.booking_id)].filter(Boolean)
           const declTimes = tIds.map(id => declinedAtTimestampsRef.current[id]).filter(Boolean)
           const recentDecline = declTimes.length > 0 && declTimes.some(tm => Date.now() - tm < 3500)
-          
+
           if (!recentDecline) {
             // Fresh or deliberate Re-assignment from Admin! Unblock all clean IDs immediately
             tIds.forEach(id => unblockDeclinedId(id))
@@ -849,14 +1038,10 @@ const DriverHomeScreen = ({ navigation }) => {
           const firstNew = newAssignments[0]
           const newId = getCleanId(firstNew.long_trip_id) || getCleanId(firstNew.id) || getCleanId(firstNew.booking_id)
           const targetAlertId = getCleanId(firstNew.booking_id) || getCleanId(firstNew.id) || newId
-          if (newId) {
+          if (targetAlertId && alertedAssignedTripIdRef.current !== targetAlertId && dismissedAlertTripIdRef.current !== targetAlertId) {
+            alertedAssignedTripIdRef.current = targetAlertId
             unblockDeclinedId(newId)
-            alertedAssignedTripIdRef.current = null
-            resetPlayedDriverBookingAlert(newId)
-            resetPlayedDriverBookingAlert(targetAlertId)
-            playDriverBookingReceived(newId).catch(() => {})
-          }
-          if (!assignedAlertTrip || getCleanId(assignedAlertTrip.id) !== targetAlertId) {
+            playDriverBookingReceived(targetAlertId).catch(() => { })
             setAssignedAlertTrip({
               ...firstNew,
               id: targetAlertId,
@@ -907,8 +1092,8 @@ const DriverHomeScreen = ({ navigation }) => {
 
       // Helper: check if a trip status represents a genuinely accepted trip by this driver
       const isAcceptedTripStatus = (status) => [
-        'driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way', 
-        'driver_arrived', 'in_progress', 'trip_started', 'return_pickup', 
+        'driver_accepted', 'accepted', 'waiting_pickup', 'on_the_way',
+        'driver_arrived', 'in_progress', 'trip_started', 'return_pickup',
         'return_started', 'return_in_progress'
       ].includes(status)
 
@@ -917,7 +1102,7 @@ const DriverHomeScreen = ({ navigation }) => {
       const previousActiveTrip = prevActiveRideRef.current
       const prevWasAccepted = Boolean(
         previousActiveTrip && (
-          isAcceptedTripStatus(previousActiveTrip.status) || 
+          isAcceptedTripStatus(previousActiveTrip.status) ||
           Boolean(previousActiveTrip.accepted_at) ||
           locallyAcceptedTripIdsRef.current.has(previousActiveTrip.id)
         )
@@ -930,16 +1115,16 @@ const DriverHomeScreen = ({ navigation }) => {
 
       // ONLY show cancellation notice if the trip was genuinely accepted by this driver AND not declined
       if (
-        serverCancId && 
-        !acknowledgedCancelledTripIds.has(serverCancId) && 
+        serverCancId &&
+        !acknowledgedCancelledTripIds.has(serverCancId) &&
         !completedTripIdsRef.current.has(serverCancId) &&
         !declinedTripIdsRef.current.has(serverCancId) &&
         (Boolean(serverCancelledTrip.accepted_at) || prevWasAccepted)
       ) {
         acknowledgedCancelledTripIds.add(serverCancId)
         try {
-          SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
-        } catch {}
+          SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => { })
+        } catch { }
         prevActiveRideRef.current = null
         setActiveRide(null)
         setOtpModalVisible(false)
@@ -947,7 +1132,7 @@ const DriverHomeScreen = ({ navigation }) => {
         setDetailModalTrip(null)
         try {
           Vibration.vibrate([0, 400, 200, 400])
-        } catch {}
+        } catch { }
         setCancelledNotice({
           id: serverCancId,
           customerName: serverCancelledTrip.customer_name || previousActiveTrip?.customer_name || 'Passenger',
@@ -957,20 +1142,20 @@ const DriverHomeScreen = ({ navigation }) => {
           reason: serverCancelledTrip.cancellation_reason || 'Customer cancelled this booking.',
         })
       } else if (
-        !act?.id && 
+        !act?.id &&
         serverCancelledTrip?.id &&
-        previousActiveTrip?.id && 
+        previousActiveTrip?.id &&
         prevWasAccepted &&
         !declinedTripIdsRef.current.has(Number(previousActiveTrip.id)) &&
-        !completedTripIdsRef.current.has(Number(previousActiveTrip.id)) && 
+        !completedTripIdsRef.current.has(Number(previousActiveTrip.id)) &&
         !acknowledgedCancelledTripIds.has(Number(previousActiveTrip.id))
       ) {
         // Confirmed server cancellation: Genuinely accepted active ride was cancelled by customer on server
         const prevId = Number(previousActiveTrip.id)
         acknowledgedCancelledTripIds.add(prevId)
         try {
-          SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
-        } catch {}
+          SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => { })
+        } catch { }
         prevActiveRideRef.current = null
         setActiveRide(null)
         setOtpModalVisible(false)
@@ -978,7 +1163,7 @@ const DriverHomeScreen = ({ navigation }) => {
         setDetailModalTrip(null)
         try {
           Vibration.vibrate([0, 400, 200, 400])
-        } catch {}
+        } catch { }
         setCancelledNotice({
           id: prevId,
           customerName: serverCancelledTrip.customer_name || previousActiveTrip.customer_name || 'Passenger',
@@ -1005,20 +1190,16 @@ const DriverHomeScreen = ({ navigation }) => {
         // Immediate Audio/Haptic Alert and Popup Modal when driver is assigned to a ride!
         if (act.status === 'driver_assigned') {
           const actCleanId = getCleanId(act.id) || getCleanId(act.booking_id) || getCleanId(act.long_trip_id)
-          if (actCleanId) {
+          if (actCleanId && alertedAssignedTripIdRef.current !== actCleanId && dismissedAlertTripIdRef.current !== actCleanId) {
+            alertedAssignedTripIdRef.current = actCleanId
             unblockDeclinedId(actCleanId)
-            if (alertedAssignedTripIdRef.current !== actCleanId) {
-              alertedAssignedTripIdRef.current = actCleanId
-              resetPlayedDriverBookingAlert(actCleanId)
-              playDriverBookingReceived(actCleanId).catch(() => {})
-            }
-          }
-          if (!assignedAlertTrip || getCleanId(assignedAlertTrip.id) !== actCleanId) {
+            playDriverBookingReceived(actCleanId).catch(() => { })
             setAssignedAlertTrip(act)
           }
         } else if (act.status !== 'driver_assigned') {
           setAssignedAlertTrip(null)
           alertedAssignedTripIdRef.current = null
+          dismissedAlertTripIdRef.current = null
         }
 
         if (act.trip_type === 'shared' || act.is_shared == 1 || act.is_shared === '1') {
@@ -1037,7 +1218,7 @@ const DriverHomeScreen = ({ navigation }) => {
           const inId = firstIncoming.id
           if (inId && alertedPendingTripIdRef.current !== inId) {
             alertedPendingTripIdRef.current = inId
-            playDriverBookingReceived(inId).catch(() => {})
+            playDriverBookingReceived(inId).catch(() => { })
           }
         }
       }
@@ -1109,9 +1290,9 @@ const DriverHomeScreen = ({ navigation }) => {
           if (Array.isArray(arr)) {
             arr.forEach(id => acknowledgedCancelledTripIds.add(Number(id)))
           }
-        } catch {}
+        } catch { }
       }
-    }).catch(() => {})
+    }).catch(() => { })
   }, [])
 
   // High Frequency Polling for Real-Time Dispatch & Location updates
@@ -1134,9 +1315,9 @@ const DriverHomeScreen = ({ navigation }) => {
           speed: loc.coords.speed || 0,
           area: geo.area || undefined,
           address: geo.address || undefined,
-        }).catch(() => {})
+        }).catch(() => { })
       })
-      .catch(() => {})
+      .catch(() => { })
 
     const intervalMs = isOnline ? 3500 : 15000
     pollRef.current = setInterval(() => {
@@ -1158,9 +1339,9 @@ const DriverHomeScreen = ({ navigation }) => {
               speed: loc.coords.speed || 0,
               area: geo.area || undefined,
               address: geo.address || undefined,
-            }).catch(() => {})
+            }).catch(() => { })
           })
-          .catch(() => {})
+          .catch(() => { })
       }
     }, intervalMs)
     return () => clearInterval(pollRef.current)
@@ -1182,8 +1363,8 @@ const DriverHomeScreen = ({ navigation }) => {
         incomingIdRef.current = currentId
         try {
           Vibration.vibrate([0, 500, 200, 500])
-        } catch {}
-        playDriverBookingReceived(currentId).catch(() => {})
+        } catch { }
+        playDriverBookingReceived(currentId).catch(() => { })
         setCountdown(30)
         if (timerRef.current) clearInterval(timerRef.current)
         timerRef.current = setInterval(() => {
@@ -1202,13 +1383,13 @@ const DriverHomeScreen = ({ navigation }) => {
       if (timerRef.current) clearInterval(timerRef.current)
     }
 
-    return () => {}
+    return () => { }
   }, [pendingRides])
 
   // Immediate Sound Alert whenever Assigned Ride Alert Modal opens (Strictly 1 time)
   useEffect(() => {
     if (assignedAlertTrip?.id) {
-      playDriverAlertSound(assignedAlertTrip.id).catch(() => {})
+      playDriverAlertSound(assignedAlertTrip.id).catch(() => { })
     }
   }, [assignedAlertTrip?.id])
 
@@ -1218,11 +1399,14 @@ const DriverHomeScreen = ({ navigation }) => {
 
     if (targetOnline) {
       const isAccountApproved = (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
-                                (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'verified' ||
-                                (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved' ||
-                                (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'verified'
+        (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'verified'
       const verifStatus = (driver?.verification_status || user?.verification_status || 'unsubmitted').toLowerCase()
-      const isKycApproved = isAccountApproved || verifStatus === 'approved' || verifStatus === 'verified'
+      const isKycApproved = isAccountApproved && (
+        verifStatus === 'approved' ||
+        verifStatus === 'verified' ||
+        (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved' ||
+        (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'verified'
+      )
 
       if (!isKycApproved) {
         setIsOnline(false)
@@ -1272,24 +1456,112 @@ const DriverHomeScreen = ({ navigation }) => {
         }
         return
       }
+
+      // Check Subscription & Outstation Wallet Requirements
+      const serviceTypes = (driver?.service_types || user?.service_types || '').toLowerCase()
+      let walletBalance = Number(driver?.wallet_balance ?? user?.wallet_balance ?? 0)
+      try {
+        const storedBal = await SecureStore.getItemAsync('driver_wallet_balance')
+        if (storedBal !== null && !isNaN(Number(storedBal))) walletBalance = Number(storedBal)
+      } catch {}
+      const minWallet = Number(driver?.min_wallet_required || user?.min_wallet_required || 500)
+      const isWalletSufficient = walletBalance >= minWallet
+      const hasOutstationAssigned = serviceTypes.includes('outstation') || serviceTypes.includes('oneway') || serviceTypes.includes('round')
+      // Driver is ONLY considered an outstation driver if they actually have outstation assigned AND sufficient wallet balance
+      const isOutstationDriver = hasOutstationAssigned && isWalletSufficient
+
+      // Local trip is active if:
+      // - serviceTypes includes 'local' or 'hourly'
+      // - or driver is explicitly marked available for local by backend dashboard/driver object
+      // - or local_trip_enabled is 1 / true
+      const hasLocalAssigned = serviceTypes.includes('local') || 
+                               serviceTypes.includes('hourly') || 
+                               driver?.is_available_for_local === true ||
+                               driver?.local_trip_enabled === 1 || 
+                               driver?.local_trip_enabled === '1' || 
+                               driver?.local_trip_enabled === true
+
+      // Local trip is explicitly disabled ONLY when Admin explicitly marked it disabled:
+      const isLocalFlaggedOff = driver?.local_trip_enabled === 0 || 
+                                driver?.local_trip_enabled === '0' || 
+                                driver?.local_trip_enabled === false || 
+                                Boolean(driver?.local_trip_alert) || 
+                                serviceTypes.includes('local_disabled')
+
+      const isLocalMissingFromServices = serviceTypes.trim() !== '' && !hasLocalAssigned
+      const isLocalExplicitlyDisabled = isLocalFlaggedOff || isLocalMissingFromServices
+
+      // Rule 1: Local Trip turned OFF by Admin (and driver does not have active Outstation)
+      if (!isOutstationDriver && isLocalExplicitlyDisabled) {
+        setIsOnline(false)
+        Alert.alert(
+          'Local Trip OFF (Monthly Pay Due) ⚠️',
+          'Local trip எடுக்கணும்னா monthly pay பண்ணுங்க, இல்லனா உங்க panel-அ off பண்ணிக்கோங்க.\n\nAdmin has disabled local trip dispatch for your account.',
+          [{ text: 'OK', style: 'cancel' }]
+        )
+        return
+      }
+
+      // Rule 2: Outstation driver with insufficient wallet balance:
+      // Case A: Local is OFF/Due AND Wallet < minWallet => Driver has NO active categories to drive!
+      if (isOutstationDriver && isLocalExplicitlyDisabled && !isWalletSufficient) {
+        setIsOnline(false)
+        Alert.alert(
+          'Minimum Wallet Required for Outstation ⚠️',
+          `Local trip Admin-ஆல் pause செய்யப்பட்டுள்ளது (Monthly fee due).\n\nOutstation trip இயக்க குறைந்தபட்சம் ₹${minWallet} wallet balance தேவை.\n\nஉங்க Current Balance: ₹${walletBalance.toFixed(0)} (Short by ₹${Math.max(0, minWallet - walletBalance).toFixed(0)}).\n\nதயவுசெய்து Razorpay மூலம் Wallet Recharge செய்துவிட்டு Online வரவும்.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Recharge Now',
+              onPress: () => navigation.navigate('Earnings')
+            }
+          ]
+        )
+        return
+      }
+
+      // Case B: Driver only has Outstation (no local at all) AND Wallet < minWallet
+      if (isOutstationDriver && !hasLocalAssigned && !isWalletSufficient) {
+        setIsOnline(false)
+        Alert.alert(
+          'Outstation Minimum Wallet Required ⚠️',
+          `Outstation trips இயக்க குறைந்தபட்சம் ₹${minWallet} wallet balance பராமரிக்க வேண்டும்.\n\nஉங்க Current Balance: ₹${walletBalance.toFixed(0)} (Short by ₹${Math.max(0, minWallet - walletBalance).toFixed(0)}).\n\nதயவுசெய்து Razorpay மூலம் Wallet Recharge செய்யவும்.`,
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Recharge Now',
+              onPress: () => navigation.navigate('Earnings')
+            }
+          ]
+        )
+        return
+      }
     }
 
     if (!targetOnline) {
-      // Switching Offline
+      // Switching Offline - Instant toggle without waiting on slow GPS
       setToggling(true)
       try {
         let locData = { lat: 12.9716, lng: 77.5946 }
         try {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-          if (loc?.coords) {
-            locData = { lat: loc.coords.latitude, lng: loc.coords.longitude }
+          const lastLoc = await Location.getLastKnownPositionAsync()
+          if (lastLoc?.coords) {
+            locData = { lat: lastLoc.coords.latitude, lng: lastLoc.coords.longitude }
+          } else {
+            const loc = await Promise.race([
+              Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500))
+            ])
+            if (loc?.coords) {
+              locData = { lat: loc.coords.latitude, lng: loc.coords.longitude }
+            }
           }
-        } catch {}
+        } catch { }
 
         const res = await driverAPI.toggleOnline({ is_online: 0, status: 'offline', ...locData })
         if (res.data?.status === 'success') {
           setIsOnline(false)
-          Alert.alert('You are Offline 🔴', 'You will not receive new dispatch requests.')
+          Alert.alert('You are Offline', 'You will not receive new dispatch requests.')
           loadDashboardData(true)
         } else {
           Alert.alert('Status Error', res.data?.message || 'Could not update status.')
@@ -1368,7 +1640,7 @@ const DriverHomeScreen = ({ navigation }) => {
           if (geo.area) locData.area = geo.area
           if (geo.address) locData.address = geo.address
         }
-      } catch {}
+      } catch { }
 
       const res = await driverAPI.toggleOnline({
         is_online: 1,
@@ -1380,17 +1652,22 @@ const DriverHomeScreen = ({ navigation }) => {
       if (res.data?.status === 'success') {
         setIsOnline(true)
         loadDashboardData()
-        Alert.alert(
-          'You are Online 🟢',
-          'Selfie verified successfully! Broadcasting live GPS coordinates. Ready to accept ride requests.'
-        )
+        if (res.data?.local_trip_alert) {
+          Alert.alert('Local Trip OFF (Monthly Due) ⚠️', res.data.local_trip_alert)
+        } else {
+          Alert.alert(
+            'You are Online 🟢',
+            'Selfie verified successfully! Broadcasting live GPS coordinates. Ready to accept ride requests.'
+          )
+        }
       } else {
         setIsOnline(false)
         Alert.alert('Verification Required', res.data?.message || 'Could not update online status.')
       }
-    } catch {
+    } catch (err) {
       setIsOnline(false)
-      Alert.alert('Error', 'Unable to capture selfie and toggle online status.')
+      const errData = err?.response?.data
+      Alert.alert('Error', errData?.message || err?.message || 'Unable to capture selfie and toggle online status.')
     } finally {
       setToggling(false)
     }
@@ -1430,9 +1707,9 @@ const DriverHomeScreen = ({ navigation }) => {
       alertedAssignedTripIdRef.current = null
       setAssignedAlertTrip(null)
       setRejectModalTrip(null)
-      setAdminAssignedTrips(prev => prev.filter(t => 
-        (getCleanId(t.long_trip_id) || getCleanId(t.id)) !== longTripId && 
-        getCleanId(t.booking_id) !== bookingId && 
+      setAdminAssignedTrips(prev => prev.filter(t =>
+        (getCleanId(t.long_trip_id) || getCleanId(t.id)) !== longTripId &&
+        getCleanId(t.booking_id) !== bookingId &&
         getCleanId(t.id) !== getCleanId(trip?.id)
       ))
       if (activeRide && (getCleanId(activeRide.id) === getCleanId(trip?.id) || getCleanId(activeRide.id) === bookingId)) {
@@ -1446,10 +1723,10 @@ const DriverHomeScreen = ({ navigation }) => {
         try {
           const res = await longTripAPI.respondScheduledTrip(longTripId, 'reject', reason)
           if (res.data?.status === 'success') responded = true
-        } catch {}
+        } catch { }
       }
       if (!responded && bookingId) {
-        await driverAPI.respondBooking(bookingId, { action: 'reject', reason: reason || selectedReason }).catch(() => {})
+        await driverAPI.respondBooking(bookingId, { action: 'reject', reason: reason || selectedReason }).catch(() => { })
       }
 
       Alert.alert('Assignment Declined', `Trip #${trip?.booking_ref || trip?.id || bookingId} rejected. It has been routed to the next nearby driver.`)
@@ -1514,7 +1791,7 @@ const DriverHomeScreen = ({ navigation }) => {
           next.delete(cleanId)
           return next
         })
-        SecureStore.deleteItemAsync(`heading_started_${cleanId}`).catch(() => {})
+        SecureStore.deleteItemAsync(`heading_started_${cleanId}`).catch(() => { })
       }
 
       // Call primary endpoint first, then fallback to prevent conflicting database race condition
@@ -1523,9 +1800,9 @@ const DriverHomeScreen = ({ navigation }) => {
         try {
           const res = await driverAPI.respondBooking(cleanId, { action: 'reject', reason: reason || selectedReason })
           if (res.data?.status === 'success') responded = true
-        } catch {}
+        } catch { }
         if (!responded) {
-          await longTripAPI.respondScheduledTrip(cleanId, 'reject', reason || selectedReason).catch(() => {})
+          await longTripAPI.respondScheduledTrip(cleanId, 'reject', reason || selectedReason).catch(() => { })
         }
       }
 
@@ -1546,7 +1823,7 @@ const DriverHomeScreen = ({ navigation }) => {
     try {
       const rideId = activeRide.id
       setStartedHeadingRides(prev => new Set(prev).add(rideId))
-      SecureStore.setItemAsync(`heading_started_${rideId}`, '1').catch(() => {})
+      SecureStore.setItemAsync(`heading_started_${rideId}`, '1').catch(() => { })
       await handleUpdateRideStatus('on_the_way', { heading_started: true })
       Alert.alert('Heading to Pickup 🚀', 'Heading started! Passenger contact is now available. Follow GPS to pickup location.')
     } catch {
@@ -1582,7 +1859,7 @@ const DriverHomeScreen = ({ navigation }) => {
           if (res?.data?.status === 'success') {
             isSuccess = true
           }
-        } catch {}
+        } catch { }
 
         // 2. Fallback to respondBooking with accept
         if (!isSuccess) {
@@ -1591,7 +1868,7 @@ const DriverHomeScreen = ({ navigation }) => {
             if (resp?.data?.status === 'success') {
               isSuccess = true
             }
-          } catch {}
+          } catch { }
         }
 
         // Always unlock locally for the driver so customer details & navigation reveal immediately
@@ -1654,7 +1931,7 @@ const DriverHomeScreen = ({ navigation }) => {
         setCompleteTripModalVisible(false)
         try {
           await SecureStore.deleteItemAsync(`gps_odometer_${activeRide.id}`)
-        } catch {}
+        } catch { }
         tripGpsAccumulatedKmRef.current = 0
         lastTripGpsCoordRef.current = null
         setTripGpsTrackedDistanceKm(0)
@@ -1817,10 +2094,10 @@ const DriverHomeScreen = ({ navigation }) => {
       const id = Number(cancelledNotice.id)
       acknowledgedCancelledTripIds.add(id)
       try {
-        SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => {})
-      } catch {}
+        SecureStore.setItemAsync('@ack_cancelled_trip_ids', JSON.stringify(Array.from(acknowledgedCancelledTripIds))).catch(() => { })
+      } catch { }
       // Notify backend so it clears from active query and frees the driver for new trips
-      driverAPI.dismissCancelledTrip?.(id)?.catch(() => {})
+      driverAPI.dismissCancelledTrip?.(id)?.catch(() => { })
     }
     setCancelledNotice(null)
     setActiveRide(null)
@@ -2016,38 +2293,36 @@ const DriverHomeScreen = ({ navigation }) => {
       >
         {/* 1.5 Driver KYC Verification Alert Banner */}
         {(() => {
-          const isApproved =
-            (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
-            (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'verified' ||
+          const isKycApproved =
             (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
             (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
             (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved' ||
             (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'verified'
 
-          if (isApproved) return null
+          if (isKycApproved) return null
 
           const isRej = (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'rejected' ||
-                        (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'rejected'
+            (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'rejected'
           const hasSubmitted = Boolean(driver?.has_kyc_submitted || driver?.license_front_image || driver?.profile_selfie)
-          
+
           const bannerBg = isRej ? '#FEF2F2' : hasSubmitted ? '#FFFBEB' : '#FFF8E7'
           const borderColor = isRej ? '#FECACA' : hasSubmitted ? '#FDE68A' : '#FDE68A'
           const iconName = isRej ? 'alert-circle' : hasSubmitted ? 'time' : 'shield-half'
           const iconColor = isRej ? '#DC2626' : hasSubmitted ? '#D97706' : '#D97706'
           const titleColor = isRej ? '#991B1B' : hasSubmitted ? '#92400E' : '#0F172A'
           const subColor = isRej ? '#B91C1C' : hasSubmitted ? '#B45309' : '#B45309'
-          
+
           const title = isRej
             ? 'KYC Verification Rejected'
             : hasSubmitted
-            ? 'KYC Under Admin Review'
-            : 'KYC Pending — Submission Required'
-            
+              ? 'KYC Under Admin Review'
+              : 'KYC Pending — Submission Required'
+
           const subtitle = isRej
             ? (driver?.rejection_reason || 'Tap to review reason and re-submit clear documents')
             : hasSubmitted
-            ? 'Your KYC documents & selfie are under review by Admin CRM. Taxi rides will unlock once approved.'
-            : 'Upload your License, Aadhaar, RC Book, Insurance & Selfie to get approved for taxi rides.'
+              ? 'Your KYC documents & selfie are under review by Admin CRM. Taxi rides will unlock once approved.'
+              : 'Upload your License, Aadhaar, RC Book, Insurance & Selfie to get approved for taxi rides.'
 
           const actionLabel = isRej ? 'Re-upload' : hasSubmitted ? 'View Status' : 'Upload Now'
 
@@ -2100,11 +2375,15 @@ const DriverHomeScreen = ({ navigation }) => {
 
         {/* 2. STANDALONE BIG PROFESSIONAL DUTY TOGGLE BUTTON */}
         {(() => {
-          const isKycApproved =
-            (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
-            (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'approved' ||
-            (driver?.verification_status || user?.verification_status || '').toLowerCase() === 'verified' ||
-            (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved'
+          const isAccountApproved = (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'approved' ||
+            (driver?.approval_status || user?.approval_status || '').toLowerCase() === 'verified'
+          const verifStatus = (driver?.verification_status || user?.verification_status || 'unsubmitted').toLowerCase()
+          const isKycApproved = isAccountApproved && (
+            verifStatus === 'approved' ||
+            verifStatus === 'verified' ||
+            (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'approved' ||
+            (driver?.kyc_status || user?.kyc_status || '').toLowerCase() === 'verified'
+          )
 
           return (
             <TouchableOpacity
@@ -2127,6 +2406,24 @@ const DriverHomeScreen = ({ navigation }) => {
                   shadowOffset: { width: 0, height: 4 },
                   shadowOpacity: 0.25,
                   shadowRadius: 8,
+                } : !isKycApproved ? {
+                  backgroundColor: '#334155',
+                  borderRadius: 20,
+                  borderWidth: 1.5,
+                  borderColor: '#475569',
+                  paddingVertical: 18,
+                  paddingHorizontal: 20,
+                  marginHorizontal: 16,
+                  marginTop: 12,
+                  marginBottom: 8,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  elevation: 4,
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.2,
+                  shadowRadius: 6,
                 } : {
                   backgroundColor: '#16A34A',
                   borderRadius: 20,
@@ -2144,10 +2441,10 @@ const DriverHomeScreen = ({ navigation }) => {
                   shadowOpacity: 0.35,
                   shadowRadius: 10,
                 },
-                (!isKycApproved || toggling) && { opacity: 0.7 }
+                toggling && { opacity: 0.7 }
               ]}
               onPress={() => handleToggleOnline(!isOnline)}
-              disabled={!isKycApproved || toggling}
+              disabled={toggling}
               activeOpacity={0.85}
             >
               {toggling ? (
@@ -2177,23 +2474,46 @@ const DriverHomeScreen = ({ navigation }) => {
                         YOU ARE ONLINE
                       </Text>
                       <Text style={{ fontSize: 12, fontWeight: '600', color: '#16A34A', marginTop: 2 }}>
-                        ● Ready for incoming bookings
+                        ● Ready for bookings • Tap to go Offline
                       </Text>
                     </View>
                   </View>
+                  {/* Big Enable/Disable Toggle Switch Button (Online: ON) */}
                   <View style={{
-                    backgroundColor: '#FEE2E2',
-                    borderWidth: 1.5,
-                    borderColor: '#FCA5A5',
+                    width: 76,
+                    height: 40,
+                    borderRadius: 20,
+                    backgroundColor: '#10B981',
+                    borderWidth: 2,
+                    borderColor: '#059669',
+                    paddingHorizontal: 4,
                     flexDirection: 'row',
                     alignItems: 'center',
-                    gap: 5,
-                    paddingHorizontal: 14,
-                    paddingVertical: 9,
-                    borderRadius: 14,
+                    justifyContent: 'space-between',
+                    elevation: 4,
+                    shadowColor: '#10B981',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.35,
+                    shadowRadius: 4,
                   }}>
-                    <Ionicons name="power" size={15} color="#DC2626" />
-                    <Text style={{ fontSize: 13, fontWeight: '900', color: '#DC2626' }}>Go Offline</Text>
+                    <Text style={{ fontSize: 12, fontWeight: '900', color: '#FFFFFF', marginLeft: 8, letterSpacing: 0.5 }}>
+                      ON
+                    </Text>
+                    <View style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 16,
+                      backgroundColor: '#FFFFFF',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      elevation: 3,
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.2,
+                      shadowRadius: 2,
+                    }}>
+                      <Ionicons name="power" size={17} color="#10B981" />
+                    </View>
                   </View>
                 </View>
               ) : (
@@ -2203,46 +2523,286 @@ const DriverHomeScreen = ({ navigation }) => {
                       width: 48,
                       height: 48,
                       borderRadius: 24,
-                      backgroundColor: 'rgba(255, 255, 255, 0.22)',
+                      backgroundColor: !isKycApproved ? 'rgba(239, 68, 68, 0.2)' : 'rgba(255, 255, 255, 0.22)',
+                      borderWidth: !isKycApproved ? 1.5 : 0,
+                      borderColor: !isKycApproved ? '#EF4444' : 'transparent',
                       alignItems: 'center',
                       justifyContent: 'center',
                     }}>
-                      <Ionicons name="power" size={24} color="#FFFFFF" />
+                      <Ionicons name={!isKycApproved ? "lock-closed" : "power"} size={24} color={!isKycApproved ? "#F87171" : "#FFFFFF"} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={{ fontSize: 18, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.6 }}>
-                        {isKycApproved ? 'GO ONLINE' : 'KYC REQUIRED'}
+                        {!isKycApproved ? (verifStatus === 'pending' ? 'KYC UNDER REVIEW' : (verifStatus === 'rejected' ? 'KYC REJECTED' : 'KYC REQUIRED')) : 'GO ONLINE'}
                       </Text>
-                      <Text style={{ fontSize: 12, fontWeight: '600', color: '#D1FAE5', marginTop: 2 }}>
-                        {isKycApproved ? 'Tap to start duty' : 'Account awaiting verification'}
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: !isKycApproved ? '#CBD5E1' : '#D1FAE5', marginTop: 2 }}>
+                        {!isKycApproved
+                          ? (verifStatus === 'pending' ? 'Admin verifying documents' : (verifStatus === 'rejected' ? 'Tap to re-upload documents' : 'Upload KYC to unlock duty'))
+                          : 'Tap switch to go online'}
                       </Text>
                     </View>
                   </View>
-                  {isKycApproved ? (
+                  {/* Big Enable/Disable Toggle Switch Button (Offline / Locked) */}
+                  <View style={{
+                    width: 76,
+                    height: 40,
+                    borderRadius: 20,
+                    backgroundColor: !isKycApproved ? 'rgba(0, 0, 0, 0.45)' : 'rgba(0, 0, 0, 0.28)',
+                    borderWidth: 2,
+                    borderColor: !isKycApproved ? '#EF4444' : 'rgba(255, 255, 255, 0.4)',
+                    paddingHorizontal: 4,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    elevation: 3,
+                  }}>
                     <View style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 16,
                       backgroundColor: '#FFFFFF',
-                      flexDirection: 'row',
                       alignItems: 'center',
-                      gap: 4,
-                      paddingHorizontal: 14,
-                      paddingVertical: 9,
-                      borderRadius: 14,
-                      elevation: 2,
+                      justifyContent: 'center',
+                      elevation: 3,
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.2,
+                      shadowRadius: 2,
                     }}>
-                      <Text style={{ fontSize: 13, fontWeight: '900', color: '#15803D', letterSpacing: 0.3 }}>START</Text>
-                      <Ionicons name="chevron-forward" size={15} color="#15803D" />
+                      <Ionicons name={isKycApproved ? "power" : "lock-closed"} size={17} color={isKycApproved ? "#64748B" : "#DC2626"} />
                     </View>
-                  ) : (
-                    <Ionicons name="lock-closed" size={20} color="#FFFFFF" />
-                  )}
+                    <Text style={{ fontSize: 12, fontWeight: '900', color: !isKycApproved ? '#FCA5A5' : '#FFFFFF', marginRight: 8, letterSpacing: 0.5 }}>
+                      {isKycApproved ? 'OFF' : 'LOCK'}
+                    </Text>
+                  </View>
                 </View>
               )}
             </TouchableOpacity>
           )
         })()}
 
-        
-{/* 5. Admin Assigned Trips */}
+
+        {/* Local Trip Disabled / Monthly Subscription Pending Banner (ONLY when Online) */}
+        {isOnline && (driver?.local_trip_enabled === 0 || driver?.local_trip_enabled === false) && (
+          <View style={{
+            backgroundColor: '#FEF2F2',
+            borderWidth: 1.5,
+            borderColor: '#F87171',
+            borderRadius: 16,
+            padding: 16,
+            marginHorizontal: 16,
+            marginTop: 8,
+            marginBottom: 8,
+            shadowColor: '#DC2626',
+            shadowOffset: { width: 0, height: 3 },
+            shadowOpacity: 0.15,
+            shadowRadius: 6,
+            elevation: 4,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+              <View style={{
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                backgroundColor: '#FEE2E2',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}>
+                <Ionicons name="warning" size={22} color="#DC2626" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '900', color: '#991B1B', letterSpacing: 0.3 }}>
+                  Local Trip OFF (Monthly Pay Due) ⚠️
+                </Text>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: '#B91C1C', marginTop: 4, lineHeight: 18 }}>
+                  Local trip எடுக்கணும்னா monthly pay பண்ணுங்க, இல்லனா உங்க panel-அ off பண்ணிக்கோங்க.
+                </Text>
+                <Text style={{ fontSize: 11, fontWeight: '500', color: '#7F1D1D', marginTop: 4, lineHeight: 15 }}>
+                  Admin local trips-ah disable pannirukaanga. Monthly subscription fee pay panna mattum dhaan local rides assign aagum.
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={{
+                backgroundColor: '#DC2626',
+                borderRadius: 12,
+                paddingVertical: 12,
+                paddingHorizontal: 16,
+                marginTop: 12,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.2,
+                shadowRadius: 4,
+                elevation: 3,
+              }}
+              onPress={() => handleToggleOnline(false)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="power" size={16} color="#FFFFFF" />
+              <Text style={{ fontSize: 13, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.4 }}>
+                Panel OFF (Go Offline)
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Outstation Low Wallet Warning Banner */}
+        {(() => {
+          const serviceTypes = (driver?.service_types || user?.service_types || '').toLowerCase()
+          const isOutstationDriver = serviceTypes.includes('outstation')
+          const walletBalance = Number(driver?.wallet_balance ?? user?.wallet_balance ?? 0)
+          const minWallet = Number(driver?.min_wallet_required || 500)
+          const isEligible = driver?.outstation_wallet_eligible !== undefined ? Boolean(driver.outstation_wallet_eligible) : (walletBalance >= minWallet)
+
+          if (isOnline && isOutstationDriver && !isEligible) {
+            return (
+              <View style={{
+                backgroundColor: '#FFFBEB',
+                borderWidth: 1.5,
+                borderColor: '#F59E0B',
+                borderRadius: 16,
+                padding: 16,
+                marginHorizontal: 16,
+                marginTop: 8,
+                marginBottom: 8,
+                shadowColor: '#D97706',
+                shadowOffset: { width: 0, height: 3 },
+                shadowOpacity: 0.12,
+                shadowRadius: 6,
+                elevation: 4,
+              }}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                  <View style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 19,
+                    backgroundColor: '#FEF3C7',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    <Ionicons name="wallet" size={22} color="#D97706" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '900', color: '#92400E', letterSpacing: 0.3 }}>
+                      Outstation Rides Inactive (Low Wallet) ⚠️
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: '700', color: '#B45309', marginTop: 4, lineHeight: 18 }}>
+                      Outstation trip assign aaganum na minimum ₹{minWallet} wallet-la maintain pannanum.
+                    </Text>
+                    <Text style={{ fontSize: 11, fontWeight: '600', color: '#78350F', marginTop: 3 }}>
+                      Current Wallet Balance: ₹{walletBalance.toFixed(0)} (Short by ₹{Math.max(0, minWallet - walletBalance).toFixed(0)})
+                    </Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: '#D97706',
+                    borderRadius: 12,
+                    paddingVertical: 12,
+                    paddingHorizontal: 16,
+                    marginTop: 12,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.18,
+                    shadowRadius: 4,
+                    elevation: 3,
+                  }}
+                  onPress={() => navigation.navigate('Earnings')}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="add-circle" size={17} color="#FFFFFF" />
+                  <Text style={{ fontSize: 13, fontWeight: '900', color: '#FFFFFF', letterSpacing: 0.4 }}>
+                    Recharge Now (Razorpay)
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )
+          }
+          return null
+        })()}
+
+        {/* Local Trips Paused by Admin Banner */}
+        {(() => {
+          const serviceTypes = (driver?.service_types || user?.service_types || '').toLowerCase()
+          const walletBalance = Number(driver?.wallet_balance ?? user?.wallet_balance ?? 0)
+          const minWallet = Number(driver?.min_wallet_required || 500)
+          const hasOutstationWallet = walletBalance >= minWallet
+          const hasOutstationAssigned = serviceTypes.includes('outstation') || serviceTypes.includes('oneway') || serviceTypes.includes('round')
+          const isOutstationDriver = hasOutstationAssigned && hasOutstationWallet
+          const hasLocalAssigned = serviceTypes.includes('local') || 
+                                   serviceTypes.includes('hourly') || 
+                                   driver?.is_available_for_local === true ||
+                                   driver?.local_trip_enabled === 1 || 
+                                   driver?.local_trip_enabled === '1' || 
+                                   driver?.local_trip_enabled === true
+
+          const isLocalFlaggedOff = driver?.local_trip_enabled === 0 || 
+                                    driver?.local_trip_enabled === '0' || 
+                                    driver?.local_trip_enabled === false || 
+                                    Boolean(driver?.local_trip_alert) || 
+                                    serviceTypes.includes('local_disabled')
+
+          const isLocalDisabled = isLocalFlaggedOff || (serviceTypes.trim() !== '' && !hasLocalAssigned)
+
+          if (isOnline && isLocalDisabled && isOutstationDriver) {
+            return (
+              <View style={{
+                backgroundColor: '#FEF2F2',
+                borderWidth: 1.5,
+                borderColor: '#F87171',
+                borderRadius: 16,
+                padding: 16,
+                marginHorizontal: 16,
+                marginTop: 6,
+                marginBottom: 8,
+                shadowColor: '#DC2626',
+                shadowOffset: { width: 0, height: 3 },
+                shadowOpacity: 0.1,
+                shadowRadius: 5,
+                elevation: 3,
+              }}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                  <View style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 19,
+                    backgroundColor: '#FEE2E2',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    <Ionicons name="lock-closed" size={20} color="#DC2626" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '900', color: '#991B1B', letterSpacing: 0.3 }}>
+                      Local Trips Paused (Monthly Due) 🔒
+                    </Text>
+                    <Text style={{ fontSize: 12.5, fontWeight: '700', color: '#B91C1C', marginTop: 3, lineHeight: 18 }}>
+                      Admin has paused Local Rides for your account. Outstation dispatch is currently active.
+                    </Text>
+                    <Text style={{ fontSize: 11, fontWeight: '600', color: '#7F1D1D', marginTop: 3 }}>
+                      To activate Local Rides, please pay your monthly subscription fee via GPay to Admin.
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )
+          }
+          return null
+        })()}
+
         {adminAssignedTrips.length > 0 && (
           <View style={{ marginTop: 14 }}>
             <View style={styles.sectionHeader}>
@@ -2396,24 +2956,6 @@ const DriverHomeScreen = ({ navigation }) => {
                     </View>
                   </View>
 
-                  {/* Recharge Alert Banner (Conditional) */}
-                  {rechargeNeeded > 0 && (
-                    <View style={styles.gogoRechargeBanner}>
-                      <View style={styles.gogoRechargeLeft}>
-                        <Ionicons name="wallet" size={20} color="#D97706" />
-                        <Text style={styles.gogoRechargeText}>
-                          Recharge ₹{rechargeNeeded} to take this ride
-                        </Text>
-                      </View>
-                      <TouchableOpacity
-                        style={styles.gogoAddMoneyBtn}
-                        onPress={() => navigation.navigate('Earnings')}
-                      >
-                        <Ionicons name="add-circle" size={15} color="#FFFFFF" />
-                        <Text style={styles.gogoAddMoneyBtnText}>Add ₹{rechargeNeeded}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
 
                   {/* Route Preview on Google Maps */}
                   <TouchableOpacity
@@ -2500,8 +3042,8 @@ const DriverHomeScreen = ({ navigation }) => {
           </View>
         )}
 
-        
-{/* 6. Active Trip Execution Lifecycle Card (Normal & Shared) */}
+
+        {/* 6. Active Trip Execution Lifecycle Card (Normal & Shared) */}
         {activeRide && (() => {
           let rawStops = []
           try {
@@ -2606,27 +3148,27 @@ const DriverHomeScreen = ({ navigation }) => {
 
           const mapOrigin = isReturnStarted
             ? {
-                latitude: safeCoordLat(activeRide.dest_lat, 13.0425),
-                longitude: safeCoordLng(activeRide.dest_lng, 80.2400),
-                address: activeRide.dest_address,
-              }
+              latitude: safeCoordLat(activeRide.dest_lat, 13.0425),
+              longitude: safeCoordLng(activeRide.dest_lng, 80.2400),
+              address: activeRide.dest_address,
+            }
             : {
-                latitude: safeCoordLat(activeRide.pickup_lat, 13.0827),
-                longitude: safeCoordLng(activeRide.pickup_lng, 80.2707),
-                address: activeRide.pickup_address,
-              }
+              latitude: safeCoordLat(activeRide.pickup_lat, 13.0827),
+              longitude: safeCoordLng(activeRide.pickup_lng, 80.2707),
+              address: activeRide.pickup_address,
+            }
 
           const mapDestination = isReturnStarted
             ? {
-                latitude: safeCoordLat(activeRide.pickup_lat, 13.0827),
-                longitude: safeCoordLng(activeRide.pickup_lng, 80.2707),
-                address: activeRide.pickup_address,
-              }
+              latitude: safeCoordLat(activeRide.pickup_lat, 13.0827),
+              longitude: safeCoordLng(activeRide.pickup_lng, 80.2707),
+              address: activeRide.pickup_address,
+            }
             : {
-                latitude: safeCoordLat(activeRide.dest_lat, 13.0067),
-                longitude: safeCoordLng(activeRide.dest_lng, 80.2025),
-                address: activeRide.dest_address,
-              }
+              latitude: safeCoordLat(activeRide.dest_lat, 13.0067),
+              longitude: safeCoordLng(activeRide.dest_lng, 80.2025),
+              address: activeRide.dest_address,
+            }
 
           return (
             <View style={styles.activeCard}>
@@ -2789,6 +3331,9 @@ const DriverHomeScreen = ({ navigation }) => {
                         <Text style={styles.gogoScheduleValue}>{tEnd}</Text>
                       </View>
                     </View>
+
+                    {/* Passenger Information Card */}
+                    <PassengerInfoCard trip={activeRide} />
 
                     {/* Customer Contact & Swipe-to-Start or Live Navigation */}
                     {!isHeadingStarted ? (
@@ -3239,7 +3784,7 @@ const DriverHomeScreen = ({ navigation }) => {
                                   Alert.alert('Stop Completed ✓', `Stop ${currIdx + 1} completed! Navigating to next target.`)
                                   loadDashboardData()
                                 }
-                              } catch {}
+                              } catch { }
                             }}
                           />
                         )
@@ -3430,11 +3975,11 @@ const DriverHomeScreen = ({ navigation }) => {
                   </>
                 )}
               </View>
-        </View>
-      )
-    })()}
+            </View>
+          )
+        })()}
 
-        
+
         {/* Standby Card when no active ride is underway */}
         {!activeRide && (
           <View style={styles.idleStandbyCard}>
@@ -3500,7 +4045,7 @@ const DriverHomeScreen = ({ navigation }) => {
                                 Alert.alert('Trip Activated!', 'Scheduled trip is now active on your dashboard.')
                                 loadDashboardData()
                               }
-                            } catch {}
+                            } catch { }
                           }}
                         >
                           <Text style={styles.schedStartBtnText}>Start Trip →</Text>
@@ -3702,6 +4247,9 @@ const DriverHomeScreen = ({ navigation }) => {
                         </View>
                       </View>
 
+                      {/* Passenger Information Card */}
+                      <PassengerInfoCard trip={detailModalTrip} />
+
                       {/* Notes Accordion */}
                       <View style={styles.gogoNotesWrapper}>
                         <View style={styles.gogoNotesHeader}>
@@ -3847,6 +4395,9 @@ const DriverHomeScreen = ({ navigation }) => {
               </View>
             </View>
 
+            {/* Passenger Information Card */}
+            <PassengerInfoCard trip={activeIncoming} />
+
             {/* Strict Swipe to Accept & Decline Actions */}
             <View style={{ marginTop: 14, width: '100%' }}>
               <SwipeToActionButton
@@ -3878,7 +4429,7 @@ const DriverHomeScreen = ({ navigation }) => {
         visible={Boolean(assignedAlertTrip)}
         animationType="slide"
         transparent={true}
-        onRequestClose={() => {}}
+        onRequestClose={() => { }}
       >
         <View style={{ flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.75)', justifyContent: 'flex-end' }}>
           <View style={[styles.incomingSheet, { paddingBottom: Platform.OS === 'ios' ? 36 : 24 }]}>
@@ -4066,6 +4617,9 @@ const DriverHomeScreen = ({ navigation }) => {
               </View>
             </View>
 
+            {/* Passenger Information Card */}
+            <PassengerInfoCard trip={assignedAlertTrip} />
+
             {/* Rejection Notice Banner */}
             <View style={{
               flexDirection: 'row',
@@ -4104,6 +4658,9 @@ const DriverHomeScreen = ({ navigation }) => {
                   const tripObj = assignedAlertTrip
                   const tripId = getCleanId(tripObj?.id) || getCleanId(tripObj?.booking_id) || getCleanId(tripObj?.long_trip_id)
                   const isLt = Boolean(tripObj?.is_long_trip || tripObj?.long_trip_id)
+                  if (tripId) {
+                    dismissedAlertTripIdRef.current = tripId
+                  }
                   setAssignedAlertTrip(null)
                   if (isLt) {
                     handleRejectAdminAssignedTrip(tripObj, 'Driver declined from assigned modal')
@@ -7580,6 +8137,88 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: COLORS.primary,
+  },
+  // Passenger Information Card Styles (Exact Match)
+  paxInfoCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    marginVertical: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  paxInfoTitle: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    color: '#0F172A',
+    textAlign: 'center',
+    marginBottom: 10,
+    letterSpacing: 0.2,
+  },
+  paxInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+  },
+  paxInfoCol: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+  },
+  paxInfoVal: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginTop: 5,
+    textAlign: 'center',
+  },
+  paxSpecialBadgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    justifyContent: 'center',
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  paxRooftopPill: {
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  paxRooftopText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  paxPetPill: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#10B981',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  paxPetText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#065F46',
   },
 })
 
