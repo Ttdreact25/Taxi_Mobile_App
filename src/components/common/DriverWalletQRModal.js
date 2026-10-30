@@ -38,6 +38,7 @@ export default function DriverWalletQRModal({
   const [utrRef, setUtrRef] = useState('')
   const [screenshotUri, setScreenshotUri] = useState(null)
   const [screenshotAsset, setScreenshotAsset] = useState(null)
+  const [screenshotBase64, setScreenshotBase64] = useState(null)
   const [uploadProgress, setUploadProgress] = useState(false)
 
   // Official UPI Details matching attached QR & Axis Bank account
@@ -191,7 +192,8 @@ export default function DriverWalletQRModal({
       const options = {
         mediaTypes: ['images'],
         allowsEditing: false,
-        quality: 0.85,
+        quality: 0.7,
+        base64: true,
       }
 
       const result = useCamera
@@ -201,6 +203,9 @@ export default function DriverWalletQRModal({
       if (!result.canceled && result.assets && result.assets[0]?.uri) {
         setScreenshotUri(result.assets[0].uri)
         setScreenshotAsset(result.assets[0])
+        if (result.assets[0].base64) {
+          setScreenshotBase64(result.assets[0].base64)
+        }
       }
     } catch (err) {
       Alert.alert('Error', 'Could not open image picker: ' + err.message)
@@ -239,24 +244,28 @@ export default function DriverWalletQRModal({
         const formData = createUploadFormData(screenshotUri, {
           prefix: `driver_wallet_${Date.now()}`,
           type: 'payment',
-          asset: screenshotAsset,
+          asset: { ...screenshotAsset, base64: screenshotBase64 || screenshotAsset?.base64 },
         })
         const uploadRes = await uploadAPI.upload(formData, 'payment_proof')
         if (uploadRes.data?.status === 'success' && (uploadRes.data?.url || uploadRes.data?.path)) {
           uploadedScreenshotPath = uploadRes.data?.url || uploadRes.data?.path
         }
       } catch (uploadErr) {
-        console.warn('Screenshot upload warning, sending local URI fallback:', uploadErr)
+        console.warn('Screenshot upload warning, sending base64 fallback:', uploadErr)
       }
 
       setUploadProgress(false)
+
+      const b64 = screenshotBase64 || screenshotAsset?.base64
+      const finalScreenshotPayload = uploadedScreenshotPath
+        || (b64 ? `data:image/jpeg;base64,${b64}` : undefined)
 
       // Step B: Call backend wallet confirm_qr endpoint
       const res = await walletAPI.confirmQRPayment({
         amount: numAmount,
         amount_rupees: numAmount,
-        screenshot: uploadedScreenshotPath || screenshotUri,
-        payment_screenshot: uploadedScreenshotPath || screenshotUri,
+        screenshot: finalScreenshotPayload,
+        payment_screenshot: finalScreenshotPayload,
         utr: utrRef.trim() || undefined,
         utr_ref: utrRef.trim() || undefined,
         payment_method: 'qr',

@@ -34,6 +34,7 @@ export default function AdvancePaymentQRModal({
   const [utrRef, setUtrRef] = useState('')
   const [screenshotUri, setScreenshotUri] = useState(null)
   const [screenshotAsset, setScreenshotAsset] = useState(null)
+  const [screenshotBase64, setScreenshotBase64] = useState(null)
   const [uploadProgress, setUploadProgress] = useState(false)
 
   const amount = paymentData?.amount_rupees || Math.round((paymentData?.amount || 0) / 100) || 0
@@ -191,7 +192,8 @@ export default function AdvancePaymentQRModal({
       const options = {
         mediaTypes: ['images'],
         allowsEditing: false,
-        quality: 0.85,
+        quality: 0.7,
+        base64: true,
       }
 
       const result = useCamera
@@ -201,6 +203,9 @@ export default function AdvancePaymentQRModal({
       if (!result.canceled && result.assets && result.assets[0]?.uri) {
         setScreenshotUri(result.assets[0].uri)
         setScreenshotAsset(result.assets[0])
+        if (result.assets[0].base64) {
+          setScreenshotBase64(result.assets[0].base64)
+        }
       }
     } catch (err) {
       Alert.alert('Error', 'Could not open image picker: ' + err.message)
@@ -234,23 +239,26 @@ export default function AdvancePaymentQRModal({
 
     try {
       // Step A: Upload the screenshot image
-      
       let uploadedScreenshotPath = ''
       try {
         const formData = createUploadFormData(screenshotUri, {
           prefix: `payment_proof_${Date.now()}`,
           type: 'payment',
-          asset: screenshotAsset,
+          asset: { ...screenshotAsset, base64: screenshotBase64 || screenshotAsset?.base64 },
         })
         const uploadRes = await uploadAPI.upload(formData, 'payment_proof')
         if (uploadRes.data?.status === 'success' && (uploadRes.data?.url || uploadRes.data?.path)) {
           uploadedScreenshotPath = uploadRes.data?.url || uploadRes.data?.path
         }
       } catch (uploadErr) {
-        console.warn('Screenshot upload warning, sending local URI fallback:', uploadErr)
+        console.warn('Screenshot upload warning, sending base64 fallback:', uploadErr)
       }
 
       setUploadProgress(false)
+
+      const b64 = screenshotBase64 || screenshotAsset?.base64
+      const finalScreenshotPayload = uploadedScreenshotPath
+        || (b64 ? `data:image/jpeg;base64,${b64}` : undefined)
 
       let currentBookingId = bookingId
       let currentBookingRef = bookingRef
@@ -265,8 +273,8 @@ export default function AdvancePaymentQRModal({
           advance_online_payment: amount,
           remaining_amount_to_driver: Math.max(0, (paymentData.payload.fare || 0) - amount),
           cash_pending: Math.max(0, (paymentData.payload.fare || 0) - amount),
-          payment_screenshot: uploadedScreenshotPath || screenshotUri,
-          screenshot: uploadedScreenshotPath || screenshotUri,
+          payment_screenshot: finalScreenshotPayload,
+          screenshot: finalScreenshotPayload,
           payment_utr: utrRef.trim() || undefined,
           utr: utrRef.trim() || undefined,
           require_advance_payment: 0,
@@ -286,8 +294,8 @@ export default function AdvancePaymentQRModal({
         try {
           await paymentAPI.confirmAdvanceQR({
             booking_id: currentBookingId,
-            screenshot: uploadedScreenshotPath || screenshotUri,
-            payment_screenshot: uploadedScreenshotPath || screenshotUri,
+            screenshot: finalScreenshotPayload,
+            payment_screenshot: finalScreenshotPayload,
             utr: utrRef.trim() || undefined,
             utr_ref: utrRef.trim() || undefined,
             amount: amount,
